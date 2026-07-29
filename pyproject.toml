@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dongjiang-credit-contract-agent"
+version = "0.1.0"
+description = "东江集团一体化客户信审与合同评审 Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "langgraph>=1.1,<2",
+  "langgraph-checkpoint-sqlite>=3,<4"
+]
+
+[project.optional-dependencies]
+documents = ["pypdf>=5,<6", "openpyxl>=3.1,<4", "pillow>=11,<12", "pytesseract>=0.3.13,<1"]
+
+[project.scripts]
+dongjiang-agent = "dongjiang_agent.cli:main"
+dongjiang-web = "dongjiang_agent.web.server:main"
+
+[tool.setuptools.packages.find]
+include = ["dongjiang_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

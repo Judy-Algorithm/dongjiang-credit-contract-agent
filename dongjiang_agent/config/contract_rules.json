@@ -1,0 +1,50 @@
+{
+  "version": "hackathon-contract-rules-v1",
+  "required_clauses": {
+    "has_parties": "合同主体",
+    "has_subject": "合同标的/技术要求",
+    "has_payment": "金额与付款",
+    "has_breach": "违约责任",
+    "has_ip": "知识产权",
+    "has_confidentiality": "保密",
+    "has_termination": "解除与终止",
+    "has_dispute_resolution": "法律适用与争议解决"
+  },
+  "legal_patterns": [
+    {
+      "rule_id": "LEGAL-UNLIMITED-LIABILITY",
+      "title": "责任范围可能无限",
+      "pattern": "无限责任|承担一切损失|所有损失均由.*承担",
+      "level": "high",
+      "suggestion": "限定责任范围、间接损失及累计赔偿上限，并提交法务确认。"
+    },
+    {
+      "rule_id": "LEGAL-UNILATERAL-TERMINATION",
+      "title": "对方单方解除权",
+      "pattern": "有权随时(?:解除|终止)|无需理由(?:解除|终止)|单方(?:解除|终止)",
+      "level": "high",
+      "suggestion": "增加合理通知期、解除事由和已发生费用结算机制。"
+    },
+    {
+      "rule_id": "LEGAL-IP-TRANSFER",
+      "title": "知识产权整体转让风险",
+      "pattern": "全部知识产权归.*所有|无偿转让.*知识产权|永久、不可撤销",
+      "level": "high",
+      "suggestion": "区分背景知识产权与项目成果，明确授权范围、地域、期限和费用。"
+    },
+    {
+      "rule_id": "LEGAL-FOREIGN-JURISDICTION",
+      "title": "境外法律或管辖",
+      "pattern": "适用.*(?:美国|英国|新加坡|日本|越南).*法律|提交.*(?:境外|国际).*仲裁",
+      "level": "medium",
+      "suggestion": "由法务评估境外法律成本，优先约定中国法及可执行的争议解决机构。"
+    },
+    {
+      "rule_id": "LEGAL-HIGH-PENALTY",
+      "title": "高额违约金",
+      "pattern": "违约金[^。；\\n]{0,30}(?:30|40|50|100)\\s*%",
+      "level": "high",
+      "suggestion": "核实违约金计算基数并设置合理上限。"
+    }
+  ]
+}
