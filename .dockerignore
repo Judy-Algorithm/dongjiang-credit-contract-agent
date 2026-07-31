@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+.env
+deploy/.env.production
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.idea
+.vscode
+data
+output
+tests
+docs
+*.log

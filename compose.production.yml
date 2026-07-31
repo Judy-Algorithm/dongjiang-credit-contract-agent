@@ -1,0 +1,66 @@
+name: dongjiang-credit-agent
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    init: true
+    restart: unless-stopped
+    environment:
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://test-new-api.hkchat.app/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      DONGJIANG_AI_ASSISTANCE_ENABLED: ${DONGJIANG_AI_ASSISTANCE_ENABLED:-false}
+      HKGAI_SPEECH_BASE_URL: ${HKGAI_SPEECH_BASE_URL:-https://openspeech.hkgai.net}
+      HKGAI_SPEECH_API_KEY: ${HKGAI_SPEECH_API_KEY:-}
+      HKGAI_TOOLHUB_BASE_URL: ${HKGAI_TOOLHUB_BASE_URL:-https://toolhub.prod.hkchat.app}
+      HKGAI_AGENTHUB_BASE_URL: ${HKGAI_AGENTHUB_BASE_URL:-https://search-agent.prod.hkchat.app/v1}
+      HKGAI_APP_NAME: ${HKGAI_APP_NAME:-}
+      HKGAI_APP_KEY: ${HKGAI_APP_KEY:-}
+      DONGJIANG_COOKIE_SECURE: ${DONGJIANG_COOKIE_SECURE:-true}
+      DONGJIANG_OA_BASE_URL: ${DONGJIANG_OA_BASE_URL:-}
+      DONGJIANG_OA_TOKEN: ${DONGJIANG_OA_TOKEN:-}
+      DONGJIANG_OA_CALLBACK_TOKEN: ${DONGJIANG_OA_CALLBACK_TOKEN:-}
+      DONGJIANG_OA_HEADERS_JSON: ${DONGJIANG_OA_HEADERS_JSON:-{}}
+      DONGJIANG_CRM_BASE_URL: ${DONGJIANG_CRM_BASE_URL:-}
+      DONGJIANG_CRM_TOKEN: ${DONGJIANG_CRM_TOKEN:-}
+      DONGJIANG_CRM_HEADERS_JSON: ${DONGJIANG_CRM_HEADERS_JSON:-{}}
+      DONGJIANG_SAP_BASE_URL: ${DONGJIANG_SAP_BASE_URL:-}
+      DONGJIANG_SAP_TOKEN: ${DONGJIANG_SAP_TOKEN:-}
+      DONGJIANG_SAP_HEADERS_JSON: ${DONGJIANG_SAP_HEADERS_JSON:-{}}
+    expose:
+      - "8765"
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    networks:
+      - private
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    init: true
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in deploy/.env.production}
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - private
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  private:
+    internal: true
+  edge:

@@ -162,6 +162,10 @@ python3 -m pip install -e '.[documents]'
 
 `data/cases`、`data/vault`、`data/auth` 和 `output` 已加入 `.gitignore`，不得提交真实企业数据或身份数据。
 
+## 公网部署
+
+项目提供基于 Docker Compose 与 Cloudflare Tunnel 的部署配置，推荐使用 `credit.1832104.xyz`，不需要向公网开放应用端口。完整的 Tunnel、Cloudflare Access、启动、备份和故障排查步骤见 [Cloudflare 公网部署说明](docs/deployment-cloudflare.md)。
+
 ## 架构与交付状态
 
 - [业务操作说明书](docs/user-manual.md)
