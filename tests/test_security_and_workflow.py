@@ -1,8 +1,11 @@
 import tempfile
 import unittest
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
-from dongjiang_agent.domain.models import CreditProfile, ExternalRating
+from dongjiang_agent.credit import CreditScoringEngine
+from dongjiang_agent.domain.models import AuditCase, CreditProfile, ExternalRating
 from dongjiang_agent.persistence import CaseRepository
 from dongjiang_agent.security import RedactionVault
 from dongjiang_agent.workflow import ActorContext, DongjiangWorkflowHarness
@@ -16,6 +19,64 @@ COMPLETE_CONTRACT = (
 
 
 class SecurityAndWorkflowTests(unittest.TestCase):
+    def test_repository_inactivates_latest_effective_credit_after_one_year(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = CaseRepository(Path(tmp))
+            profile = CreditProfile(
+                customer_name="失活客户",
+                unified_social_credit_code="91440300INACTIVE001",
+                customer_type="existing",
+                customer_status="Active",
+                business_type="TKP",
+                monthly_order_amount=1_000_000,
+                last_order_date="2024-01-01",
+                outstanding_receivables_amount=0,
+                open_order_amount=0,
+                external_rating="AA",
+                asset_liability_ratio=0.45,
+                current_ratio=1.5,
+            )
+            assessment = CreditScoringEngine().assess(profile)
+            case = AuditCase(
+                customer=profile,
+                contracts=[],
+                credit_assessment=assessment,
+                credit_status="effective",
+                status="awaiting_contract",
+            )
+            repository.save(case)
+            changed = repository.apply_inactivity_policy(
+                as_of=datetime(2026, 7, 31, tzinfo=timezone.utc)
+            )
+            stored = repository.get_case(case.case_id)
+            self.assertEqual(changed, [case.case_id])
+            self.assertEqual(stored["status"], "inactive")
+            self.assertEqual(stored["customer"]["customer_status"], "Inactive")
+            self.assertEqual(stored["credit_assessment"]["approved_credit_limit"], 0)
+            self.assertIsNone(repository.find_valid_credit(profile))
+
+    def test_credit_cache_honors_custom_approval_expiry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = CaseRepository(Path(tmp))
+            profile = CreditProfile(
+                customer_name="过期授信客户",
+                unified_social_credit_code="91440300EXPIRED0001",
+                customer_type="existing",
+                monthly_order_amount=1_000_000,
+                external_rating="AA",
+                asset_liability_ratio=0.45,
+                current_ratio=1.5,
+            )
+            assessment = CreditScoringEngine().assess(profile)
+            repository.save(AuditCase(
+                customer=profile,
+                contracts=[],
+                credit_assessment=assessment,
+                credit_status="effective",
+                credit_approval={"expires_at": "2020-01-01T00:00:00+00:00"},
+            ))
+            self.assertIsNone(repository.find_valid_credit(profile))
+
     def test_redaction_is_reversible_and_masks_money_party_phone(self):
         raw = "乙方：深圳示例科技有限公司，电话13800138000，合同金额：人民币1,200,000元。"
         vault = RedactionVault("CASE-1")
@@ -24,6 +85,49 @@ class SecurityAndWorkflowTests(unittest.TestCase):
         self.assertNotIn("13800138000", safe)
         self.assertNotIn("1,200,000", safe)
         self.assertEqual(vault.restore(safe), raw)
+
+    def test_redaction_vault_merges_existing_case_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = RedactionVault("CASE-2", root)
+            first.redact("电话13800138000")
+            first.persist_local()
+            second = RedactionVault("CASE-2", root)
+            second.redact("邮箱test@example.com")
+            second.persist_local()
+            payload = json.loads(
+                (root / "CASE-2.vault.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(payload["mapping"]), 2)
+
+    def test_credit_cache_does_not_cross_same_name_different_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = CaseRepository(Path(tmp))
+            original = CreditProfile(
+                customer_name="同名企业",
+                unified_social_credit_code="91440300ORIGINAL001",
+                customer_type="new",
+                monthly_order_amount=1_000_000,
+                external_rating="AA",
+                asset_liability_ratio=0.45,
+                current_ratio=1.5,
+            )
+            assessment = CreditScoringEngine().assess(original)
+            repository.save(AuditCase(
+                customer=original,
+                contracts=[],
+                credit_assessment=assessment,
+                credit_status="effective",
+            ))
+            other = CreditProfile(
+                customer_name="同名企业",
+                unified_social_credit_code="91440300DIFFERENT02",
+            )
+            self.assertIsNone(repository.find_valid_credit(other))
+            self.assertIsNone(repository.find_valid_credit(CreditProfile(
+                customer_name="同名企业",
+            )))
+            self.assertIsNotNone(repository.find_valid_credit(original))
 
     def test_workflow_runs_complete_trace(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -41,6 +145,8 @@ class SecurityAndWorkflowTests(unittest.TestCase):
                         customer_type="new",
                         monthly_order_amount=500_000,
                         external_rating="A",
+                        asset_liability_ratio=0.5,
+                        current_ratio=1.4,
                     ),
                     use_cached_credit=False,
                     actor=ActorContext("test", ("system",), "test"),
@@ -54,7 +160,7 @@ class SecurityAndWorkflowTests(unittest.TestCase):
                     run.case_id,
                     {
                         "action": "submit_contract",
-                        "contract_texts": [COMPLETE_CONTRACT.replace("60天", "120天")],
+                        "contract_texts": [COMPLETE_CONTRACT + "买方可取消订单且不承担任何责任。"],
                     },
                     actor=ActorContext("test", ("system",), "test"),
                 )

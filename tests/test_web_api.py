@@ -43,6 +43,13 @@ class WebApiTests(unittest.TestCase):
         data = json.loads(response.read().decode("utf-8"))
         return response.status, data
 
+    def request_with_headers(self, method, path, payload, headers):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        merged = {"Content-Type": "application/json", **headers}
+        self.connection.request(method, path, body=body, headers=merged)
+        response = self.connection.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+
     def test_business_api_accepts_real_file_and_exposes_no_workflow_state(self):
         report = (
             "中诚信国际主体评级报告\n"
@@ -87,6 +94,8 @@ class WebApiTests(unittest.TestCase):
 
         status, detail = self.request("GET", f"/api/cases/{case_id}")
         self.assertEqual(status, 200)
+        self.assertIn("data_coverage_ratio", detail["case"]["credit"])
+        self.assertIn("supplement_reasons", detail["case"]["credit"])
         self.assertEqual(detail["case"]["customer"]["customer_name"], "文件上传测试客户")
 
     def test_contract_submission_uses_business_route(self):
@@ -139,6 +148,59 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(submitted["case"]["status_label"], "已通过")
         self.assertIsNone(submitted["case"]["next_action"])
 
+    def test_overdue_lock_requires_archived_special_release_evidence(self):
+        _, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "Web特别放行客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                    "current_overdue_days": 31,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        case_id = created["case"]["case_id"]
+        status, locked = self.request(
+            "POST",
+            f"/api/cases/{case_id}/credit-actions",
+            {"action": "approve", "comment": "信审通过"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(locked["case"]["status"], "credit_control_locked")
+        self.assertEqual(locked["case"]["next_action"]["type"], "special_release")
+        self.assertFalse(locked["case"]["permissions"]["can_upload_contract"])
+
+        status, denied = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contract-actions",
+            {"action": "approve", "comment": "同意放行"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("必须上传审批证据", denied["error"])
+
+        evidence = base64.b64encode("市场总监同意特别放行".encode("utf-8")).decode("ascii")
+        status, released = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contract-actions",
+            {
+                "action": "approve",
+                "comment": "仅放行本次订单",
+                "files": [{"name": "特别放行批准.txt", "data_base64": evidence}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(released["case"]["permissions"]["can_upload_contract"])
+        self.assertEqual(len(released["case"]["approval_evidence"]), 1)
+        self.assertEqual(released["case"]["approval_evidence"][0]["name"], "特别放行批准.txt")
+        self.assertNotIn("archived_path", released["case"]["approval_evidence"][0])
+
     def test_no_demo_endpoint_and_frontend_routes_support_refresh(self):
         status, missing = self.request("POST", "/api/demo", {})
         self.assertEqual(status, 404)
@@ -151,6 +213,61 @@ class WebApiTests(unittest.TestCase):
         self.assertIn('id="app"', html)
         self.assertNotIn("运行风险演示案例", html)
         self.assertNotIn("华南精密制造示例有限公司", html)
+
+    def test_oa_callback_requires_token_and_complete_approval_chain(self):
+        _, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "OA回调测试客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "project_name": "OA项目",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        case_id = created["case"]["case_id"]
+        status, _ = self.request(
+            "POST", f"/api/integrations/oa/callback/{case_id}", {"action": "approve"}
+        )
+        self.assertEqual(status, 403)
+        previous = os.environ.get("DONGJIANG_OA_CALLBACK_TOKEN")
+        os.environ["DONGJIANG_OA_CALLBACK_TOKEN"] = "callback-secret"
+        try:
+            chain = [
+                {"stage": stage, "status": "approved"}
+                for stage in (
+                    "marketing_director",
+                    "credit_control",
+                    "senior_finance_manager",
+                    "group_finance_director",
+                )
+            ]
+            status, approved = self.request_with_headers(
+                "POST",
+                f"/api/integrations/oa/callback/{case_id}",
+                {
+                    "action": "approve",
+                    "approval_scope": "客户级TKP信用",
+                    "validity_days": 180,
+                    "oa_evidence_id": "OA-CALLBACK-1",
+                    "approval_chain": chain,
+                },
+                {"X-OA-Callback-Token": "callback-secret"},
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("DONGJIANG_OA_CALLBACK_TOKEN", None)
+            else:
+                os.environ["DONGJIANG_OA_CALLBACK_TOKEN"] = previous
+        self.assertEqual(status, 200)
+        self.assertTrue(approved["case"]["credit"]["effective"])
 
 
 if __name__ == "__main__":

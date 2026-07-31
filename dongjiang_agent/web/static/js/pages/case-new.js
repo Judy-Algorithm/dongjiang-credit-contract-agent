@@ -29,6 +29,9 @@ export async function renderNewCasePage(root) {
           <label>业务类型 *
             <select id="businessType" required><option value="">请选择</option><option value="TKP">TKP</option><option value="TKM">TKM</option></select>
           </label>
+          <label>TKM业务子类型
+            <select id="tkmBusinessSubtype"><option value="">非TKM无需填写</option><option value="automotive_standard">汽车及标准业务</option><option value="precision">精密模具业务</option></select>
+          </label>
           <label>项目或产品名称 *<input id="projectName" required></label>
           <label>预计月度订单额（元）<input id="monthlyOrder" type="number" min="0" placeholder="未知可留空"></label>
           <label>本次订单或预计合同金额（元）<input id="contractAmount" type="number" min="0" placeholder="未知可留空"></label>
@@ -36,6 +39,7 @@ export async function renderNewCasePage(root) {
           <label>客户申请账期（天）<input id="requestedTermDays" type="number" min="1" placeholder="未知可留空"></label>
           <label>结算币种<select id="currency"><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option><option value="EUR">欧元 EUR</option><option value="HKD">港币 HKD</option></select></label>
           <label class="full">申请说明<textarea id="applicationReason" rows="4" placeholder="填写合作背景、特殊条件或额度账期申请原因"></textarea></label>
+          <label class="full checkbox-row"><input id="purchaseExemptionRequested" type="checkbox">申请TKM首期采购款豁免</label>
         </div>
       </section>
 
@@ -52,6 +56,10 @@ export async function renderNewCasePage(root) {
           <label>近12个月逾期次数<input id="overdueCount" type="number" min="0" placeholder="未知可留空"></label>
           <label>近12个月最长逾期天数<input id="maxOverdueDays" type="number" min="0" placeholder="未知可留空"></label>
           <label>按时付款率（%）<input id="onTimeRate" type="number" min="0" max="100" step="0.01" placeholder="未知可留空"></label>
+          <label>当前未收款金额（元）<input id="outstandingReceivables" type="number" min="0" placeholder="TKM尾款或TKP已出货未收款"></label>
+          <label>在手已入单金额（元）<input id="openOrderAmount" type="number" min="0" placeholder="尚未结算的在手订单"></label>
+          <label>当前未收款最长逾期（天）<input id="currentOverdueDays" type="number" min="0" placeholder="超过30天将触发锁定"></label>
+          <label>最近一次订单日期<input id="lastOrderDate" type="date"></label>
         </div>
         <div class="form-section">
           <div class="form-section-title"><h3>第三方主体评级</h3><span>没有评级时可以不填写</span></div>
@@ -161,12 +169,14 @@ function collectForm(root) {
     crm_customer_id:value(root, "crmCustomerId"),
     customer_type:value(root, "customerType"),
     business_type:value(root, "businessType"),
+    tkm_business_subtype:value(root, "tkmBusinessSubtype"),
     project_name:value(root, "projectName"),
     contract_amount:optionalNumber(root, "contractAmount"),
     requested_credit_limit:optionalNumber(root, "requestedCreditLimit"),
     requested_term_days:optionalNumber(root, "requestedTermDays"),
     currency:value(root, "currency"),
     application_reason:value(root, "applicationReason"),
+    purchase_exemption_requested:root.querySelector("#purchaseExemptionRequested").checked,
     monthly_order_amount:optionalNumber(root, "monthlyOrder"),
     registered_capital:optionalNumber(root, "registeredCapital"),
     years_in_business:optionalNumber(root, "yearsInBusiness"),
@@ -178,6 +188,10 @@ function collectForm(root) {
     overdue_count_12m:optionalNumber(root, "overdueCount"),
     max_overdue_days_12m:optionalNumber(root, "maxOverdueDays"),
     on_time_payment_rate:optionalNumber(root, "onTimeRate", true),
+    outstanding_receivables_amount:optionalNumber(root, "outstandingReceivables"),
+    open_order_amount:optionalNumber(root, "openOrderAmount"),
+    current_overdue_days:optionalNumber(root, "currentOverdueDays"),
+    last_order_date:value(root, "lastOrderDate"),
     external_ratings:ratings,
   }
 }
@@ -199,6 +213,7 @@ function restoreDraft(root, draft) {
   const mapping = {
     customerName:"customer_name",unifiedCreditCode:"unified_social_credit_code",
     crmCustomerId:"crm_customer_id",customerType:"customer_type",businessType:"business_type",
+    tkmBusinessSubtype:"tkm_business_subtype",
     projectName:"project_name",contractAmount:"contract_amount",
     requestedCreditLimit:"requested_credit_limit",requestedTermDays:"requested_term_days",
     currency:"currency",applicationReason:"application_reason",
@@ -207,7 +222,11 @@ function restoreDraft(root, draft) {
     netMargin:"net_margin",currentRatio:"current_ratio",revenueGrowth:"revenue_growth",
     cooperationYears:"cooperation_years",overdueCount:"overdue_count_12m",
     maxOverdueDays:"max_overdue_days_12m",onTimeRate:"on_time_payment_rate",
+    outstandingReceivables:"outstanding_receivables_amount",openOrderAmount:"open_order_amount",
+    currentOverdueDays:"current_overdue_days",
+    lastOrderDate:"last_order_date",
   }
+  root.querySelector("#purchaseExemptionRequested").checked = Boolean(draft.purchase_exemption_requested)
   for (const [id, key] of Object.entries(mapping)) {
     let item = draft[key]
     if (["assetLiabilityRatio","netMargin","revenueGrowth","onTimeRate"].includes(id) && item != null) item *= 100
@@ -231,6 +250,8 @@ function renderReview(root, customer) {
     ["项目或产品", customer.project_name || "未填写"],
     ["月度订单额", customer.monthly_order_amount == null ? "未填写" : `¥${Number(customer.monthly_order_amount).toLocaleString("zh-CN")}`],
     ["第三方评级", customer.external_ratings.length ? `${customer.external_ratings.length} 条` : "未填写"],
+    ["当前授信占用", `¥${Number((customer.outstanding_receivables_amount || 0) + (customer.open_order_amount || 0)).toLocaleString("zh-CN")}`],
+    ["当前逾期", customer.current_overdue_days == null ? "未填写" : `${customer.current_overdue_days} 天`],
     ["上传资料", `${root.querySelector("#creditFiles").files.length} 个文件`],
   ]
   root.querySelector("#caseReview").innerHTML = labels.map(([label, item]) => `<div class="review-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(item)}</b></div>`).join("")

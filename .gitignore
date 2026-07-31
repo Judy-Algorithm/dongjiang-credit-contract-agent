@@ -8,4 +8,7 @@ __pycache__/
 data/cases/
 data/vault/
 data/workflow/
+data/evidence/
+data/archive/
+data/integrations/
 output/

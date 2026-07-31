@@ -10,17 +10,46 @@ from .nodes import WorkflowNodes
 from .state import WorkflowState
 
 
-def _credit_route(state: WorkflowState) -> Literal["credit_workflow", "contract_gate"]:
-    return (
-        "contract_gate"
-        if state.get("credit_status") == "effective"
+def _credit_route(
+    state: WorkflowState,
+) -> Literal["credit_workflow", "contract_gate", "await_special_release"]:
+    if (
+        state.get("credit_status") == "effective"
         and state.get("effective_credit_assessment")
-        else "credit_workflow"
-    )
+    ):
+        assessment = state.get("effective_credit_assessment") or {}
+        return (
+            "await_special_release"
+            if assessment.get("credit_locked") and not state.get("special_release")
+            else "contract_gate"
+        )
+    return "credit_workflow"
 
 
 def _contract_route(state: WorkflowState) -> Literal["contract_workflow", "await_contract"]:
     return "contract_workflow" if state.get("contract_facts") else "await_contract"
+
+
+def _credit_assessment_route(
+    state: WorkflowState,
+) -> Literal["prepare_credit_approval", "await_credit_supplement"]:
+    assessment = state.get("credit_assessment") or {}
+    return (
+        "await_credit_supplement"
+        if assessment.get("requires_supplement")
+        else "prepare_credit_approval"
+    )
+
+
+def _credit_control_route(
+    state: WorkflowState,
+) -> Literal["await_special_release", "contract_gate"]:
+    assessment = state.get("effective_credit_assessment") or {}
+    return (
+        "await_special_release"
+        if assessment.get("credit_locked") and not state.get("special_release")
+        else "contract_gate"
+    )
 
 
 def _decision_route(
@@ -75,6 +104,7 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
                 "effective_credit_assessment"
             ),
             "credit_status": result.get("credit_status"),
+            "waiting_for": result.get("waiting_for"),
             "trace": list(result.get("trace") or [])[trace_offset:],
             "errors": list(result.get("errors") or [])[error_offset:],
         }
@@ -100,6 +130,7 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
     builder.add_node("await_credit_approval", nodes.await_credit_approval)
     builder.add_node("await_credit_supplement", nodes.await_credit_supplement)
     builder.add_node("activate_credit", nodes.activate_credit)
+    builder.add_node("await_special_release", nodes.await_special_release)
     builder.add_node("contract_gate", nodes.contract_gate)
     builder.add_node("await_contract", nodes.await_contract)
     builder.add_node("contract_workflow", call_contract_subgraph)
@@ -113,9 +144,9 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
     builder.add_edge("create_case", "ingest_credit_documents")
     builder.add_edge("ingest_credit_documents", "check_credit_cache")
     builder.add_conditional_edges("check_credit_cache", _credit_route)
-    builder.add_edge("credit_workflow", "prepare_credit_approval")
+    builder.add_conditional_edges("credit_workflow", _credit_assessment_route)
     builder.add_edge("prepare_credit_approval", "await_credit_approval")
-    builder.add_edge("activate_credit", "contract_gate")
+    builder.add_conditional_edges("activate_credit", _credit_control_route)
     builder.add_conditional_edges("contract_gate", _contract_route)
     builder.add_edge("ingest_contract_documents", "contract_workflow")
     builder.add_edge("contract_workflow", "decide")

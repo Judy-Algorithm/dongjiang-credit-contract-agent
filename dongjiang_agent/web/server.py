@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import mimetypes
+import os
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -134,6 +136,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/cases":
                 self._create_case(payload)
                 return
+            if path.startswith("/api/integrations/oa/callback/"):
+                self._oa_callback(path.rsplit("/", 1)[-1], payload)
+                return
 
             parts = [item for item in path.split("/") if item]
             if len(parts) == 4 and parts[:2] == ["api", "cases"]:
@@ -156,6 +161,40 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 400,
                 {"ok": False, "error": str(exc), "error_type": type(exc).__name__},
             )
+
+    def _oa_callback(self, case_id: str, payload: dict[str, Any]) -> None:
+        from ..workflow import ActorContext, DongjiangWorkflowHarness
+
+        expected = os.getenv("DONGJIANG_OA_CALLBACK_TOKEN", "").strip()
+        supplied = self.headers.get("X-OA-Callback-Token", "")
+        if not expected or not hmac.compare_digest(expected, supplied):
+            raise PermissionError("OA回调鉴权失败。")
+        if not isinstance(payload.get("approval_chain"), list):
+            raise ValueError("OA回调必须包含完整 approval_chain。")
+        decision = {
+            "action": payload.get("action"),
+            "approved_credit_limit": payload.get("approved_credit_limit"),
+            "approved_term_days": payload.get("approved_term_days"),
+            "purchase_exemption_approved": payload.get(
+                "purchase_exemption_approved"
+            ),
+            "approval_scope": payload.get("approval_scope"),
+            "validity_days": payload.get("validity_days"),
+            "oa_evidence_id": payload.get("oa_evidence_id"),
+            "approval_chain": payload.get("approval_chain"),
+            "comment": payload.get("comment"),
+        }
+        with DongjiangWorkflowHarness() as harness:
+            run = harness.resume(
+                case_id,
+                decision,
+                actor=ActorContext(
+                    str(payload.get("actor_id") or "oa-callback"),
+                    ("finance",),
+                    "oa",
+                ),
+            )
+        self._json(200, {"ok": True, "case": self._workflow_view(run)})
 
     def _create_case(self, payload: dict[str, Any]) -> None:
         from ..workflow import ActorContext, DongjiangWorkflowHarness
@@ -239,6 +278,13 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     "comment": str(payload.get("comment") or ""),
                     "approved_credit_limit": payload.get("approved_credit_limit"),
                     "approved_term_days": payload.get("approved_term_days"),
+                    "purchase_exemption_approved": payload.get(
+                        "purchase_exemption_approved"
+                    ),
+                    "approval_scope": payload.get("approval_scope"),
+                    "validity_days": payload.get("validity_days"),
+                    "oa_evidence_id": payload.get("oa_evidence_id"),
+                    "approval_chain": payload.get("approval_chain") or [],
                     "file_paths": paths,
                     "contract_texts": payload.get("contract_texts") or [],
                 }
@@ -257,6 +303,10 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             "contract_upload": {"close_case": ("close_case", "sales")},
             "sales_revision": {"close_case": ("close_case", "sales")},
             "manager_approval": {
+                "approve": ("approve", "director"),
+                "reject": ("reject", "director"),
+            },
+            "special_release": {
                 "approve": ("approve", "director"),
                 "reject": ("reject", "director"),
             },

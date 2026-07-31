@@ -1,5 +1,6 @@
 {
-  "version": "hackathon-contract-rules-v1",
+  "version": "dongjiang-material-baseline-v2",
+  "source": "销售合同底限条款.xlsx；东江客户信用管理制度（节选）.docx",
   "required_clauses": {
     "has_parties": "合同主体",
     "has_subject": "合同标的/技术要求",
@@ -17,6 +18,74 @@
       "pattern": "无限责任|承担一切损失|所有损失均由.*承担",
       "level": "high",
       "suggestion": "限定责任范围、间接损失及累计赔偿上限，并提交法务确认。"
+    },
+    {
+      "rule_id": "DJ-JOINT-LIABILITY",
+      "title": "合同包含连带责任",
+      "pattern": "连带责任|joint(?:ly)?\\s+and\\s+several(?:ly)?\\s+liab",
+      "level": "high",
+      "suggestion": "未经CEO批准不得接受连带责任；删除条款或上传CEO批准材料。"
+    },
+    {
+      "rule_id": "DJ-EXCLUSIVITY",
+      "title": "合同包含排他或独家约束",
+      "pattern": "排[他它]性|独家(?:供应|采购|合作|制造)|不得.{0,20}(?:向|与).{0,20}(?:第三方|其他客户|其他供应商)|exclusive(?:ly)?\\s+(?:supplier|supply|purchase|provider|source|manufacturer|manufacturing)",
+      "level": "high",
+      "suggestion": "未经CEO批准不得接受排他约束；缩小范围、期限和产品边界或上传CEO批准材料。"
+    },
+    {
+      "rule_id": "DJ-CANCEL-WITHOUT-LIABILITY",
+      "title": "客户可无责任取消订单或预测",
+      "pattern": "(?:甲方|买方|客户).{0,40}(?:取消|解除).{0,40}(?:不承担|无须承担|无需承担|不负).{0,20}(?:责任|费用|赔偿)|purchaser.{0,80}cancel.{0,80}(?:no|without).{0,20}liability",
+      "level": "blocker",
+      "route": "block",
+      "suggestion": "约定取消通知期、已采购物料和在制品补偿及合理减损机制后重新提交。"
+    },
+    {
+      "rule_id": "DJ-AFFILIATE-SCOPE-SPILLOVER",
+      "title": "合同责任范围外溢至关联主体",
+      "pattern": "(?:我方|乙方|卖方|供应商).{0,50}(?:关系企业|关联公司|子公司|继受人|受让人).{0,50}(?:承担|赔偿|保证|负责)|supplier.{0,60}(?:affiliates?|subsidiar).{0,60}(?:liable|indemnif|responsib)",
+      "level": "blocker",
+      "route": "block",
+      "suggestion": "将义务和责任限定在实际业务承接及签约主体内。"
+    },
+    {
+      "rule_id": "DJ-BANK-ACCEPTANCE",
+      "title": "付款方式包含银行承兑汇票",
+      "pattern": "银行承兑汇票|bank acceptance|banker's acceptance",
+      "level": "high",
+      "suggestion": "付款方式为银行承兑汇票时须上传CEO签批材料。"
+    },
+    {
+      "rule_id": "DJ-VMI-JIT-DELIVERY",
+      "title": "合同包含VMI或JIT交货模式",
+      "pattern": "\\bVMI\\b|Vendor Managed Inventory|供应商管理库存|\\bJIT\\b|Just in Time|准时生产",
+      "level": "high",
+      "business_types": ["TKP"],
+      "suggestion": "模塑一体业务采用VMI/JIT前须核验市场总监批准，并明确库存、交付、风险转移和结算责任。"
+    },
+    {
+      "rule_id": "DJ-INDIRECT-LOSS",
+      "title": "合同要求承担间接损失",
+      "pattern": "承担.{0,30}间接损失|赔偿.{0,30}间接损失|利润损失|商誉损失|市场份额损失|indirect (?:loss|damages)|consequential (?:loss|damages)|loss of profit",
+      "level": "blocker",
+      "route": "block",
+      "suggestion": "删除间接损失责任，并设置直接损失及累计赔偿责任上限。"
+    },
+    {
+      "rule_id": "DJ-WARRANTY-DUAL-LIMIT",
+      "title": "模具质保条款需核验啤数和期限双限",
+      "pattern": "质保期|质量保证期|warranty period",
+      "level": "medium",
+      "suggestion": "人工确认质保条款同时约定啤数和期限，并以先到者为准。"
+    },
+    {
+      "rule_id": "DJ-PRICE-FREEZE-CONTINUED-SUPPLY",
+      "title": "不可提价或持续供货义务",
+      "pattern": "不得提价|不可提价|价格不得调整|持续供货|continue.{0,30}supply|price.{0,20}(?:shall not|may not).{0,20}(?:increase|adjust)",
+      "level": "medium",
+      "business_types": ["TKP"],
+      "suggestion": "人工核验调价机制及协商不成后的持续供货期限，原则上不超过3个月。"
     },
     {
       "rule_id": "LEGAL-UNILATERAL-TERMINATION",

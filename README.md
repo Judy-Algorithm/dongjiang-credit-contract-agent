@@ -66,6 +66,8 @@ python3 scripts/check_hkgai_config.py
 2. `pending_approval`：等待信用或财务人员审批；
 3. `effective`：审批后的额度和账期正式生效，合同入口才会开放。
 
+历史有效授信只会按统一社会信用代码或CRM客户编号自动复用；仅有企业名称时重新评估，避免同名主体串用额度。
+
 前端只调用业务接口，内部工作流状态不会暴露给页面：
 
 - `GET /api/cases`
@@ -88,10 +90,14 @@ python3 scripts/check_hkgai_config.py
 - 财务或企业基础字段缺失时，只在实际取得的指标内重新归一权重，不把未知值当成0。
 - 多机构主体评级分别保存机构、等级、展望、日期和来源；冲突时默认取保守值，重大冲突转人工复核。
 - 最大授信额度：`月度订单额 × 风险等级月份系数`。
-- TKP：低/中/高风险建议账期 90/60/30 天；90 天为硬死线。
-- TKM：低风险最多 40% 尾款、180 天；中高风险进一步收紧。
-- 超批准额度或超建议账期：特别审批。
-- 突破 TKP/TKM 硬底线：原则阻断、退回业务修改。
+- 当前未收款与在手已入单金额共同占用批准额度，合同按剩余可用额度校验。
+- 当前未收款逾期超过30天或占用超过批准额度时锁定；须由授权人员上传批准附件后特别放行。
+- TKP：低/中/高风险建议账期 90/60/30 天；超过 Net 90 天需核验终端项目统一账期或市场总监特别批准。
+- TKM：低风险常规条件为最多 40% 尾款、180 天；中高风险进一步收紧，超出常规条件需市场总监特别信用申请。
+- TKM区分汽车及标准业务、精密模具业务；首期采购款豁免、尾期条件和客户总信用额分别记录并批核。
+- 超过一年无新订单且无欠款、无在手订单时清零授信并转 `Inactive`；再次申请按新客户并补充历史交易付款记录。
+- 超批准额度、超建议账期或超 TKP/TKM 常规条件：进入特批，不把可授权例外误判为绝对阻断。
+- 无责取消、关联主体责任外溢、间接损失等不可直接接受的合同底线：原则阻断、退回业务修改。
 - 缺关键合同条款：财务/法务人工复核。
 
 所有参数在以下文件中调整，不需要改代码：
@@ -123,6 +129,9 @@ python3 -m pip install -e '.[documents]'
 
 - `data/cases/DJ-*.json`：可审计案件状态和 Agent Trace。
 - `data/vault/DJ-*.vault.json`：仅本地保存的可逆脱敏映射。
+- `data/evidence/DJ-*/*`：例外审批和特别放行附件，按SHA-256归档。
+- `data/archive/DJ-*/credit|contract/*`：案件级原始信用资料和合同，按SHA-256归档。
+- `data/integrations/DJ-*/*.json`：OA、CRM、SAP每次调用的成功、失败或未配置记录。
 - `output/DJ-*/audit-result.json`：机器可读结果。
 - `output/DJ-*/audit-report.html`：人工审阅报告。
 - `output/evaluation-report.json`：量化回归结果。
@@ -131,12 +140,15 @@ python3 -m pip install -e '.[documents]'
 
 ## 架构与交付状态
 
+- [业务操作说明书](docs/user-manual.md)
+- [典型案例集](docs/demo-cases.md)
 - [系统架构](docs/architecture.md)
 - [LangGraph与Harness落地设计](docs/langgraph-harness-design.md)
 - [命题要求实现矩阵](docs/requirements-matrix.md)
 - [信用模型设计](docs/scoring-model.md)
 - [仓库清理记录](docs/cleanup-record.md)
 - [比赛前下一步](docs/next-steps.md)
+- [比赛材料差距分析](docs/competition-material-gap-analysis.md)
 
 ## 安全边界
 

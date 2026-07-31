@@ -79,6 +79,8 @@ function creditTab(item) {
   const model = credit.model_result || {}
   const approved = credit.approved_result
   const selected = credit.rating_resolution?.selected
+  const coverage = credit.data_coverage_ratio == null ? "—" : `${Math.round(Number(credit.data_coverage_ratio) * 100)}%`
+  const control = Object.keys(item.credit_control || {}).length ? item.credit_control : (approved || model)
   return `
     <div class="form-section-title"><h3>模型建议</h3><span>${approved ? "审批时的模型基准" : "尚需人工审批后生效"}</span></div>
     <div class="info-grid">
@@ -87,8 +89,25 @@ function creditTab(item) {
       ${info("建议授信额度", money(model.credit_limit))}
       ${info("建议账期", model.term_days == null ? "—" : `${model.term_days} 天`)}
       ${info("最长账期", model.hard_term_limit_days == null ? "—" : `${model.hard_term_limit_days} 天`)}
+      ${info("资料覆盖率", coverage)}
       ${info("采用评级", selected ? `${selected.agency || ""} ${selected.rating || ""}`.trim() : "未取得有效评级")}
+      ${item.customer?.business_type === "TKM" ? info("TKM业务子类型", item.customer.tkm_business_subtype === "automotive_standard" ? "汽车及标准业务" : "精密模具业务") : ""}
+      ${item.customer?.business_type === "TKM" ? info("首期采购款豁免", model.purchase_exemption_approved ? "已批准" : "未批准") : ""}
     </div>
+    <div class="form-section">
+      <div class="form-section-title"><h3>信用控制</h3><span>${control.credit_locked ? "已锁定，需特别放行" : "未锁定"}</span></div>
+      <div class="info-grid">
+        ${info("总批准额度", money(approved?.credit_limit ?? model.credit_limit))}
+        ${info("当前已占用", money(control.occupied_credit_amount))}
+        ${info("当前可用额度", money(control.available_credit_amount))}
+      </div>
+      ${control.credit_lock_reasons?.length ? `<div class="supplement-notice"><strong>锁定原因</strong><ul>${control.credit_lock_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
+    </div>
+    ${credit.requires_supplement ? `
+      <div class="supplement-notice">
+        <strong>需要补充信用资料</strong>
+        <ul>${(credit.supplement_reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+      </div>` : ""}
     <div class="form-section">
       <div class="form-section-title"><h3>正式授信</h3><span>${approved ? "已生效" : "尚未生效"}</span></div>
       ${approved ? `<div class="info-grid">
@@ -104,6 +123,8 @@ function creditTab(item) {
         : `<p>关键信用资料完整。</p>`}
     </div>
     ${credit.reasons?.length ? `<div class="form-section"><div class="form-section-title"><h3>评估说明</h3></div><ul>${credit.reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
+    ${item.approval_evidence?.length ? `<div class="form-section"><div class="form-section-title"><h3>审批证据</h3><span>${item.approval_evidence.length} 个已归档附件</span></div><div class="review-list">${item.approval_evidence.map((evidence) => `<div class="review-row"><b>${escapeHtml(evidence.name)}</b><span>SHA-256 ${escapeHtml(String(evidence.sha256 || "").slice(0,12))}</span></div>`).join("")}</div></div>` : ""}
+    ${item.approval_chain?.length ? `<div class="form-section"><div class="form-section-title"><h3>OA审批链</h3></div><div class="review-list">${item.approval_chain.map((step) => `<div class="review-row"><b>${escapeHtml(approvalStage(step.stage))}</b><span>${escapeHtml(step.status || "pending")}</span></div>`).join("")}</div></div>` : ""}
   `
 }
 
@@ -138,9 +159,14 @@ function recordsTab(item) {
 }
 
 function documentsTab(item) {
-  return item.documents?.length
-    ? `<div class="review-list">${item.documents.map((name) => `<div class="review-row"><b>${escapeHtml(name)}</b><span>已读取</span></div>`).join("")}</div>`
+  const docs = item.source_documents || []
+  return docs.length
+    ? `<div class="review-list">${docs.map((doc) => `<div class="review-row"><b>${escapeHtml(doc.name)}</b><span>${doc.document_kind === "contract" ? "合同" : "信用资料"} · SHA-256 ${escapeHtml(String(doc.sha256 || "").slice(0,12))}</span></div>`).join("")}</div>`
     : `<div class="empty-state"><p>当前案件没有上传文件。</p></div>`
+}
+
+function approvalStage(stage) {
+  return ({applicant:"申请人",marketing_director:"所属市场总监",credit_control:"信用管理",senior_finance_manager:"高级财务经理",group_finance_director:"集团财务总监"})[stage] || stage || "审批节点"
 }
 
 function info(label, value) {

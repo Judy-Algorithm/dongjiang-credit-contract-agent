@@ -60,11 +60,14 @@ class CreditProfile:
     unified_social_credit_code: str = ""
     crm_customer_id: str = ""
     customer_type: str = "new"
+    customer_status: str = "Active"
     business_type: str = "TKP"
+    tkm_business_subtype: str = ""
     project_name: str = ""
     contract_amount: float | None = None
     requested_credit_limit: float | None = None
     requested_term_days: int | None = None
+    purchase_exemption_requested: bool = False
     currency: str = "CNY"
     application_reason: str = ""
     registered_capital: float | None = None
@@ -81,6 +84,10 @@ class CreditProfile:
     overdue_count_12m: int | None = None
     max_overdue_days_12m: int | None = None
     on_time_payment_rate: float | None = None
+    outstanding_receivables_amount: float | None = None
+    open_order_amount: float | None = None
+    current_overdue_days: int | None = None
+    last_order_date: str = ""
     major_litigation: bool = False
     tax_or_enforcement_alert: bool = False
     evidence: list[Evidence] = field(default_factory=list)
@@ -99,6 +106,18 @@ class CreditAssessment:
     missing_fields: list[str]
     reasons: list[str]
     policy_version: str
+    total_credit_limit: float | None = None
+    tkm_business_subtype: str = ""
+    purchase_exemption_requested: bool = False
+    purchase_exemption_approved: bool = False
+    data_coverage_ratio: float = 0.0
+    available_dimensions: list[str] = field(default_factory=list)
+    requires_supplement: bool = False
+    supplement_reasons: list[str] = field(default_factory=list)
+    occupied_credit_amount: float = 0.0
+    available_credit_amount: float | None = None
+    credit_locked: bool = False
+    credit_lock_reasons: list[str] = field(default_factory=list)
     rating_resolution: dict[str, Any] = field(default_factory=dict)
     assessed_at: str = field(default_factory=utc_now)
 
@@ -113,6 +132,9 @@ class ContractFacts:
     payment_term_days: int | None = None
     tail_payment_ratio: float | None = None
     tail_payment_term_days: int | None = None
+    uses_purchase_exemption: bool = False
+    contract_term_years: float | None = None
+    max_penalty_ratio: float | None = None
     currency: str = "CNY"
     language: str = "zh"
     has_parties: bool = False
@@ -156,10 +178,17 @@ class AuditCase:
     contracts: list[ContractFacts]
     case_id: str = field(default_factory=lambda: f"DJ-{uuid4().hex[:10].upper()}")
     source_files: list[str] = field(default_factory=list)
+    source_documents: list[dict[str, Any]] = field(default_factory=list)
     credit_assessment: CreditAssessment | None = None
     model_credit_assessment: CreditAssessment | None = None
     credit_status: str = "draft"
     credit_approval: dict[str, Any] = field(default_factory=dict)
+    approval_evidence: list[dict[str, Any]] = field(default_factory=list)
+    approval_chain: list[dict[str, Any]] = field(default_factory=list)
+    credit_control: dict[str, Any] = field(default_factory=dict)
+    special_release: dict[str, Any] = field(default_factory=dict)
+    exception_approval: dict[str, Any] = field(default_factory=dict)
+    writeback: dict[str, Any] = field(default_factory=dict)
     contract_reviews: list[ContractReview] = field(default_factory=list)
     status: str = "created"
     trace: list[dict[str, Any]] = field(default_factory=list)

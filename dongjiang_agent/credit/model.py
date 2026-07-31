@@ -108,6 +108,81 @@ class CreditScoringEngine:
             reasons.append(f"成立 {years} 年")
         return round(weighted / available_weight, 2), reasons
 
+    def _data_coverage(
+        self,
+        profile: CreditProfile,
+        enabled: dict[str, float],
+        available_dimensions: list[str],
+    ) -> float:
+        covered_weight = 0.0
+        financial = self.policy["dimensions"]["financial"]
+        if "financial" in enabled:
+            metrics = financial["metrics"]
+            metric_total = sum(float(item["weight"]) for item in metrics.values())
+            metric_covered = sum(
+                float(item["weight"])
+                for name, item in metrics.items()
+                if getattr(profile, name, None) is not None
+            )
+            if metric_total:
+                covered_weight += enabled["financial"] * metric_covered / metric_total
+        if "external_rating" in enabled and "external_rating" in available_dimensions:
+            covered_weight += enabled["external_rating"]
+        if "cooperation" in enabled:
+            cooperation_fields = (
+                profile.cooperation_years,
+                profile.overdue_count_12m,
+                profile.max_overdue_days_12m,
+                profile.on_time_payment_rate,
+            )
+            covered_weight += enabled["cooperation"] * (
+                sum(value is not None for value in cooperation_fields) / len(cooperation_fields)
+            )
+        if "enterprise" in enabled:
+            enterprise_coverage = 0.0
+            if profile.registered_capital is not None:
+                enterprise_coverage += 0.55
+            if profile.years_in_business is not None:
+                enterprise_coverage += 0.45
+            covered_weight += enabled["enterprise"] * enterprise_coverage
+        total_weight = sum(enabled.values())
+        return round(covered_weight / total_weight, 4) if total_weight else 0.0
+
+    def credit_control(
+        self,
+        profile: CreditProfile,
+        approved_credit_limit: float,
+    ) -> dict[str, Any]:
+        receivables = max(0.0, float(profile.outstanding_receivables_amount or 0))
+        open_orders = max(0.0, float(profile.open_order_amount or 0))
+        occupied = round(receivables + open_orders, 2)
+        limit = max(0.0, float(approved_credit_limit))
+        overdue_days = max(0, int(profile.current_overdue_days or 0))
+        max_overdue_days = int(
+            (self.policy.get("credit_control") or {}).get(
+                "max_current_overdue_days", 30
+            )
+        )
+        lock_reasons: list[str] = []
+        if occupied > limit:
+            lock_reasons.append(
+                f"当前授信占用 {occupied:,.2f} 元，超过批准额度 {limit:,.2f} 元"
+            )
+        if overdue_days > max_overdue_days:
+            lock_reasons.append(
+                f"当前未收款已逾期 {overdue_days} 天，超过 {max_overdue_days} 天锁定阈值"
+            )
+        return {
+            "outstanding_receivables_amount": receivables,
+            "open_order_amount": open_orders,
+            "occupied_credit_amount": occupied,
+            "available_credit_amount": round(max(0.0, limit - occupied), 2),
+            "current_overdue_days": overdue_days,
+            "max_current_overdue_days": max_overdue_days,
+            "credit_locked": bool(lock_reasons),
+            "credit_lock_reasons": lock_reasons,
+        }
+
     def assess(self, profile: CreditProfile) -> CreditAssessment:
         missing: list[str] = []
         reasons: list[str] = []
@@ -123,6 +198,7 @@ class CreditScoringEngine:
         reasons.extend(detail)
 
         is_new = profile.customer_type.strip().lower() in {"new", "新客户", "new_customer"}
+        is_inactive = profile.customer_status.strip().lower() == "inactive"
         enabled: dict[str, float] = {}
         for dimension, cfg in self.policy["dimensions"].items():
             if bool(cfg.get("enabled", True)):
@@ -131,6 +207,7 @@ class CreditScoringEngine:
             enabled.pop("cooperation", None)
 
         available = {key: value for key, value in dimension_values.items() if key in enabled and value is not None}
+        available_dimensions = sorted(available)
         weight_sum = sum(enabled[key] for key in available)
         score = (
             sum(float(value) * enabled[key] for key, value in available.items()) / weight_sum
@@ -154,13 +231,72 @@ class CreditScoringEngine:
         risk_level = RiskLevel.LOW if score >= low else RiskLevel.MEDIUM if score >= medium else RiskLevel.HIGH
 
         business_type = profile.business_type.strip().upper() or "TKP"
-        business_cfg = self.policy["business_rules"].get(business_type, self.policy["business_rules"]["TKP"])
+        business_cfg = self.policy["business_rules"].get(
+            business_type, self.policy["business_rules"]["TKP"]
+        )
+        tkm_subtype = ""
+        if business_type == "TKM":
+            subtypes = business_cfg.get("subtypes") or {}
+            tkm_subtype = (
+                profile.tkm_business_subtype.strip().lower()
+                or str(business_cfg.get("default_subtype") or "precision")
+            )
+            if tkm_subtype not in subtypes:
+                missing.append("tkm_business_subtype")
+                tkm_subtype = str(business_cfg.get("default_subtype") or "precision")
+                reasons.append("未识别TKM业务子类型，按精密模具业务的保守条件评估")
+            business_cfg = subtypes.get(tkm_subtype) or business_cfg
         grade_cfg = business_cfg["grades"][risk_level.value]
         monthly_amount = max(0.0, float(profile.monthly_order_amount or 0))
         credit_limit = monthly_amount * float(grade_cfg["credit_months"])
         if monthly_amount <= 0:
             missing.append("monthly_order_amount")
             reasons.append("缺少月度订单额，暂不能形成可用授信额度")
+
+        sufficiency = self.policy.get("data_sufficiency") or {}
+        coverage = self._data_coverage(profile, enabled, available_dimensions)
+        supplement_reasons: list[str] = []
+        minimum_coverage = float(sufficiency.get("minimum_coverage_ratio", 0))
+        minimum_dimensions = int(sufficiency.get("minimum_dimension_count", 1))
+        if coverage < minimum_coverage:
+            supplement_reasons.append(
+                f"资料覆盖率 {coverage:.0%}，低于最低要求 {minimum_coverage:.0%}"
+            )
+        if len(available_dimensions) < minimum_dimensions:
+            supplement_reasons.append(
+                f"仅有 {len(available_dimensions)} 个有效评分维度，至少需要 {minimum_dimensions} 个"
+            )
+        if bool(sufficiency.get("require_monthly_order_amount")) and monthly_amount <= 0:
+            supplement_reasons.append("缺少月度订单额，无法形成可执行的授信额度")
+        if (
+            (is_new or is_inactive)
+            and bool(self.policy.get("new_customer", {}).get("manual_review_if_missing_financial_and_rating"))
+            and dimension_values["financial"] is None
+            and dimension_values["external_rating"] is None
+        ):
+            supplement_reasons.append("新客户同时缺少财务数据和外部信用资料")
+        if is_inactive and dimension_values["cooperation"] is None:
+            supplement_reasons.append("Inactive客户重新申请时必须补充历史交易与付款记录")
+        if supplement_reasons:
+            reasons.append("资料不足：" + "；".join(supplement_reasons))
+
+        credit_control = self.credit_control(profile, credit_limit)
+        if business_type == "TKM":
+            subtype_label = str(business_cfg.get("label") or tkm_subtype)
+            reasons.append(
+                f"TKM业务子类型：{subtype_label}；"
+                f'{business_cfg.get("payment_baseline") or "按批核条件执行"}'
+            )
+            if profile.purchase_exemption_requested:
+                reasons.append("已申请首期采购款豁免，须随正式信用条件单独批核")
+        if credit_control["occupied_credit_amount"]:
+            reasons.append(
+                "授信占用：未收款及在手订单合计 "
+                f'{credit_control["occupied_credit_amount"]:,.2f} 元，'
+                f'当前可用 {credit_control["available_credit_amount"]:,.2f} 元'
+            )
+        if credit_control["credit_lock_reasons"]:
+            reasons.append("信用控制锁定：" + "；".join(credit_control["credit_lock_reasons"]))
 
         dimension_scores = {
             key: round(float(value), 2)
@@ -179,9 +315,25 @@ class CreditScoringEngine:
             max_tail_term_days=(
                 int(grade_cfg["max_tail_term_days"]) if business_type == "TKM" else None
             ),
+            tkm_business_subtype=tkm_subtype,
+            purchase_exemption_requested=(
+                bool(profile.purchase_exemption_requested)
+                if business_type == "TKM"
+                else False
+            ),
+            purchase_exemption_approved=False,
             dimension_scores=dimension_scores,
             missing_fields=sorted(set(missing)),
             reasons=reasons,
             policy_version=str(self.policy["version"]),
+            total_credit_limit=round(credit_limit, 2),
+            data_coverage_ratio=coverage,
+            available_dimensions=available_dimensions,
+            requires_supplement=bool(supplement_reasons),
+            supplement_reasons=supplement_reasons,
+            occupied_credit_amount=credit_control["occupied_credit_amount"],
+            available_credit_amount=credit_control["available_credit_amount"],
+            credit_locked=credit_control["credit_locked"],
+            credit_lock_reasons=credit_control["credit_lock_reasons"],
             rating_resolution=rating_resolution,
         )

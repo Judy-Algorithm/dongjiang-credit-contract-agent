@@ -24,6 +24,7 @@ def case_from_state(state: dict[str, Any]) -> AuditCase:
             for item in state.get("contract_facts") or []
         ],
         source_files=list(state.get("source_files") or []),
+        source_documents=list(state.get("source_documents") or []),
         credit_assessment=assessment_from_dict(
             state.get("effective_credit_assessment")
             or state.get("credit_assessment")
@@ -31,6 +32,12 @@ def case_from_state(state: dict[str, Any]) -> AuditCase:
         model_credit_assessment=assessment_from_dict(state.get("credit_assessment")),
         credit_status=str(state.get("credit_status") or "draft"),
         credit_approval=dict(state.get("credit_approval") or {}),
+        approval_evidence=list(state.get("approval_evidence") or []),
+        approval_chain=list(state.get("approval_chain") or []),
+        credit_control=dict(state.get("credit_control") or {}),
+        special_release=dict(state.get("special_release") or {}),
+        exception_approval=dict(state.get("exception_approval") or {}),
+        writeback=dict(state.get("writeback") or {}),
         contract_reviews=[
             review_from_dict(item)
             for item in state.get("contract_reviews") or []

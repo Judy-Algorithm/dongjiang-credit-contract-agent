@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from dongjiang_agent.persistence import CaseRepository
+from dongjiang_agent.integrations import IntegrationBundle
 from dongjiang_agent.workflow import ActorContext, DongjiangWorkflowHarness
 
 
@@ -29,6 +30,7 @@ class LangGraphWorkflowTests(unittest.TestCase):
             vault_dir=root / "vault",
             inbox_dir=root / "inbox",
             output_dir=root / "output",
+            evidence_dir=root / "evidence",
         )
 
     def test_blocked_contract_can_be_revised_and_resumed(self):
@@ -41,10 +43,11 @@ class LangGraphWorkflowTests(unittest.TestCase):
                 "monthly_order_amount": 2_000_000,
                 "external_rating": "AA",
                 "asset_liability_ratio": 0.45,
+                "current_ratio": 1.5,
             }
             blocked_contract = COMPLETE_SAFE_CONTRACT.replace(
-                "月结60天",
-                "月结120天",
+                "违约责任：违约方赔偿直接损失，累计不超过合同金额。",
+                "违约责任：买方可取消订单且不承担任何责任。",
             )
             with self.harness(root) as harness:
                 run = harness.start(
@@ -85,7 +88,134 @@ class LangGraphWorkflowTests(unittest.TestCase):
                 self.assertFalse(final.paused)
                 self.assertEqual(final.state["decision"], "pass")
                 self.assertEqual(final.status, "approved")
-                self.assertTrue(Path(final.state["reports"]["json"]).is_file())
+
+    def test_original_documents_are_archived_by_case_with_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "信用资料.txt"
+            source.write_text(
+                "主体评级：AA\n资产负债率：45%\n流动比率：1.5", encoding="utf-8"
+            )
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "归档测试客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "project_name": "归档项目",
+                        "monthly_order_amount": 1_000_000,
+                    },
+                    file_paths=[str(source)],
+                    use_cached_credit=False,
+                )
+            archived = run.state["source_documents"][0]
+            self.assertEqual(archived["document_kind"], "credit")
+            self.assertEqual(len(archived["sha256"]), 64)
+            self.assertTrue(Path(archived["archived_path"]).is_file())
+            self.assertIn(run.case_id, archived["archived_path"])
+
+    def test_credit_approval_persists_scope_validity_and_tkm_exemption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "TKM审批条件客户",
+                        "crm_customer_id": "CRM-TKM-1",
+                        "customer_type": "new",
+                        "business_type": "TKM",
+                        "tkm_business_subtype": "precision",
+                        "purchase_exemption_requested": True,
+                        "project_name": "精密模具项目",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                    },
+                    use_cached_credit=False,
+                )
+                approved = harness.resume(
+                    run.case_id,
+                    {
+                        "action": "approve",
+                        "approval_scope": "仅限精密模具项目A",
+                        "validity_days": 90,
+                        "oa_evidence_id": "OA-2026-001",
+                        "purchase_exemption_approved": True,
+                    },
+                )
+            approval = approved.state["credit_approval"]
+            effective = approved.state["effective_credit_assessment"]
+            self.assertEqual(approval["approval_scope"], "仅限精密模具项目A")
+            self.assertEqual(approval["validity_days"], 90)
+            self.assertEqual(approval["oa_evidence_id"], "OA-2026-001")
+            self.assertTrue(effective["purchase_exemption_approved"])
+
+    def test_finalize_calls_configured_oa_crm_and_sap_ports(self):
+        class Adapter:
+            def __init__(self):
+                self.calls = []
+
+            def submit_review(self, case_id, payload):
+                self.calls.append(("submit_review", case_id))
+                return {"workflow_id": "OA-1"}
+
+            def write_result(self, case_id, payload):
+                self.calls.append(("write_result", case_id))
+                return {"ok": True}
+
+            def write_credit_decision(self, customer_id, payload):
+                self.calls.append(("crm", customer_id))
+                return {"ok": True}
+
+            def write_credit_control(self, customer_id, payload):
+                self.calls.append(("sap", customer_id))
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            adapter = Adapter()
+            integrations = IntegrationBundle(
+                oa=adapter,
+                crm=adapter,
+                sap=adapter,
+                audit_root=root / "integration-audit",
+            )
+            with DongjiangWorkflowHarness(
+                checkpoint_path=root / "workflow.sqlite",
+                repository=CaseRepository(root / "cases"),
+                vault_dir=root / "vault",
+                inbox_dir=root / "inbox",
+                output_dir=root / "output",
+                integrations=integrations,
+            ) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "回写测试客户",
+                        "crm_customer_id": "CRM-100",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                    },
+                    use_cached_credit=False,
+                )
+                run = harness.resume(run.case_id, {"action": "approve"})
+                final = harness.resume(
+                    run.case_id,
+                    {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
+                )
+            activation = final.state["writeback"]["credit_activation"]
+            final_result = final.state["writeback"]["final"]
+            self.assertEqual(activation["crm"]["status"], "succeeded")
+            self.assertEqual(activation["sap"]["status"], "succeeded")
+            self.assertEqual(final_result["oa"]["status"], "succeeded")
+            self.assertIn(("submit_review", final.case_id), adapter.calls)
+            self.assertIn(("crm", "CRM-100"), adapter.calls)
+            self.assertIn(("sap", "CRM-100"), adapter.calls)
+            self.assertTrue(Path(final.state["reports"]["json"]).is_file())
 
     def test_checkpoint_survives_process_boundary_and_roles_are_enforced(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,13 +309,79 @@ class LangGraphWorkflowTests(unittest.TestCase):
                         {"action": "approve"},
                         actor=ActorContext("sales-3", ("sales",), "crm"),
                     )
+                with self.assertRaises(ValueError):
+                    harness.resume(
+                        run.case_id,
+                        {"action": "approve", "comment": "同意本次例外"},
+                        actor=ActorContext("director-1", ("director",), "oa"),
+                    )
+                evidence = root / "市场总监批准.txt"
+                evidence.write_text("批准本次超额信用申请", encoding="utf-8")
                 final = harness.resume(
                     run.case_id,
-                    {"action": "approve", "comment": "同意本次例外"},
+                    {
+                        "action": "approve",
+                        "comment": "同意本次例外",
+                        "file_paths": [str(evidence)],
+                    },
                     actor=ActorContext("director-1", ("director",), "oa"),
                 )
                 self.assertFalse(final.paused)
                 self.assertEqual(final.status, "approved_by_exception")
+                self.assertEqual(
+                    final.state["exception_approval"]["approval_scope"],
+                    f"仅限案件 {run.case_id} 的合同例外",
+                )
+                archived = final.state["approval_evidence"][0]
+                self.assertEqual(archived["actor_id"], "director-1")
+                self.assertTrue(Path(archived["archived_path"]).is_file())
+                self.assertEqual(len(archived["sha256"]), 64)
+
+    def test_current_overdue_requires_evidenced_special_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "逾期锁定客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                        "current_overdue_days": 31,
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-lock", ("sales",), "crm"),
+                )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "同意授信建议"},
+                    actor=ActorContext("credit-lock", ("credit",), "oa"),
+                )
+                self.assertEqual(run.status, "credit_control_locked")
+                self.assertEqual(run.waiting_for, "special_release")
+                self.assertTrue(run.state["effective_credit_assessment"]["credit_locked"])
+                with self.assertRaises(ValueError):
+                    harness.resume(
+                        run.case_id,
+                        {"action": "approve", "comment": "特别放行"},
+                        actor=ActorContext("director-lock", ("director",), "oa"),
+                    )
+                evidence = root / "特别放行OA.txt"
+                evidence.write_text("市场总监同意本次特别放行", encoding="utf-8")
+                released = harness.resume(
+                    run.case_id,
+                    {
+                        "action": "approve",
+                        "comment": "特别放行一次",
+                        "file_paths": [str(evidence)],
+                    },
+                    actor=ActorContext("director-lock", ("director",), "oa"),
+                )
+                self.assertEqual(released.waiting_for, "contract_upload")
+                self.assertEqual(released.state["special_release"]["action"], "approve")
 
     def test_contract_cannot_be_submitted_before_credit_is_effective(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,6 +393,9 @@ class LangGraphWorkflowTests(unittest.TestCase):
                         "customer_type": "new",
                         "business_type": "TKP",
                         "monthly_order_amount": 1_000_000,
+                        "asset_liability_ratio": 0.5,
+                        "current_ratio": 1.3,
+                        "external_rating": "A",
                     },
                     use_cached_credit=False,
                     actor=ActorContext("sales-gate", ("sales",), "crm"),
@@ -224,6 +423,9 @@ class LangGraphWorkflowTests(unittest.TestCase):
                         "customer_type": "new",
                         "business_type": "TKP",
                         "monthly_order_amount": 1_000_000,
+                        "asset_liability_ratio": 0.5,
+                        "current_ratio": 1.3,
+                        "external_rating": "A",
                     },
                     use_cached_credit=False,
                     actor=ActorContext("sales-adjust", ("sales",), "crm"),
@@ -243,6 +445,68 @@ class LangGraphWorkflowTests(unittest.TestCase):
                 self.assertEqual(effective["approved_credit_limit"], 1_500_000)
                 self.assertEqual(effective["recommended_term_days"], 45)
                 self.assertEqual(approved.waiting_for, "contract_upload")
+
+    def test_insufficient_credit_data_requires_supplement_before_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "单一指标客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AAA",
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-data", ("sales",), "crm"),
+                )
+                self.assertEqual(run.status, "credit_supplement_required")
+                self.assertEqual(run.waiting_for, "credit_supplement")
+                self.assertTrue(run.state["credit_assessment"]["requires_supplement"])
+                with self.assertRaises(PermissionError):
+                    harness.resume(
+                        run.case_id,
+                        {"action": "approve"},
+                        actor=ActorContext("credit-data", ("credit",), "oa"),
+                    )
+
+    def test_unreviewable_contract_is_never_auto_approved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            unsupported = root / "contract.bin"
+            unsupported.write_bytes(b"not a supported contract")
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "解析失败客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "A",
+                        "asset_liability_ratio": 0.5,
+                        "current_ratio": 1.3,
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-fail", ("sales",), "crm"),
+                )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "approve"},
+                    actor=ActorContext("credit-fail", ("credit",), "oa"),
+                )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "submit_contract", "file_paths": [str(unsupported)]},
+                    actor=ActorContext("sales-fail", ("sales",), "crm"),
+                )
+                self.assertEqual(run.status, "blocked")
+                self.assertEqual(run.waiting_for, "sales_revision")
+                self.assertEqual(run.state["decision"], "block")
+                self.assertEqual(
+                    run.state["contract_reviews"][0]["findings"][0]["rule_id"],
+                    "DOCUMENT-NO-REVIEWABLE-CONTRACT",
+                )
 
 
 if __name__ == "__main__":

@@ -48,10 +48,34 @@ def assessment_from_dict(payload: dict[str, Any] | None) -> CreditAssessment | N
         hard_term_limit_days=int(payload["hard_term_limit_days"]),
         max_tail_payment_ratio=payload.get("max_tail_payment_ratio"),
         max_tail_term_days=payload.get("max_tail_term_days"),
+        tkm_business_subtype=str(payload.get("tkm_business_subtype") or ""),
+        purchase_exemption_requested=bool(
+            payload.get("purchase_exemption_requested")
+        ),
+        purchase_exemption_approved=bool(
+            payload.get("purchase_exemption_approved")
+        ),
         dimension_scores=dict(payload.get("dimension_scores") or {}),
         missing_fields=list(payload.get("missing_fields") or []),
         reasons=list(payload.get("reasons") or []),
         policy_version=str(payload.get("policy_version") or ""),
+        total_credit_limit=(
+            float(payload["total_credit_limit"])
+            if payload.get("total_credit_limit") is not None
+            else float(payload["approved_credit_limit"])
+        ),
+        data_coverage_ratio=float(payload.get("data_coverage_ratio") or 0),
+        available_dimensions=list(payload.get("available_dimensions") or []),
+        requires_supplement=bool(payload.get("requires_supplement")),
+        supplement_reasons=list(payload.get("supplement_reasons") or []),
+        occupied_credit_amount=float(payload.get("occupied_credit_amount") or 0),
+        available_credit_amount=(
+            float(payload["available_credit_amount"])
+            if payload.get("available_credit_amount") is not None
+            else None
+        ),
+        credit_locked=bool(payload.get("credit_locked")),
+        credit_lock_reasons=list(payload.get("credit_lock_reasons") or []),
         rating_resolution=dict(payload.get("rating_resolution") or {}),
         assessed_at=str(payload.get("assessed_at") or ""),
     )

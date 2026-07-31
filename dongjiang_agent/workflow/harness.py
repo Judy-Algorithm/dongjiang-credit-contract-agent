@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,7 @@ from langgraph.types import Command
 
 from ..domain.codec import profile_from_dict
 from ..domain.models import AuditCase, CreditProfile, utc_now
+from ..integrations import IntegrationBundle
 from ..persistence import CaseRepository
 from .codec import case_from_state, checkpoint_dict
 from .graph import build_workflow
@@ -52,6 +55,7 @@ class DongjiangWorkflowHarness:
     ROLE_REQUIREMENTS = {
         "credit_approval": {"credit", "finance"},
         "credit_supplement": {"sales", "finance"},
+        "special_release": {"director"},
         "contract_upload": {"sales"},
         "sales_revision": {"sales"},
         "manager_approval": {"director", "ceo"},
@@ -66,6 +70,9 @@ class DongjiangWorkflowHarness:
         vault_dir: str | Path = "data/vault",
         inbox_dir: str | Path = "data/workflow/inbox",
         output_dir: str | Path = "output",
+        evidence_dir: str | Path | None = None,
+        archive_dir: str | Path | None = None,
+        integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
     ) -> None:
         self.repository = repository or CaseRepository()
@@ -73,17 +80,32 @@ class DongjiangWorkflowHarness:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.inbox_dir = Path(inbox_dir)
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
+        self.evidence_dir = (
+            Path(evidence_dir)
+            if evidence_dir is not None
+            else self.inbox_dir.parent / "evidence"
+        )
+        self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self._connection = sqlite3.connect(
             self.checkpoint_path,
             check_same_thread=False,
         )
         self.checkpointer = SqliteSaver(self._connection)
         self.checkpointer.setup()
+        integration_bundle = integrations or IntegrationBundle.from_environment(
+            audit_root=self.inbox_dir.parent / "integrations"
+        )
         self.nodes = WorkflowNodes(
             repository=self.repository,
             vault_dir=vault_dir,
             inbox_dir=self.inbox_dir,
             output_dir=output_dir,
+            archive_dir=(
+                Path(archive_dir)
+                if archive_dir is not None
+                else self.inbox_dir.parent / "archive"
+            ),
+            integrations=integration_bundle,
             policy=policy,
         )
         self.graph = build_workflow(self.nodes, checkpointer=self.checkpointer)
@@ -173,6 +195,7 @@ class DongjiangWorkflowHarness:
             "pending_files": pending,
             "pending_document_kind": "credit",
             "source_files": [],
+            "source_documents": [],
             "credit_source_files": [],
             "contract_source_files": [],
             "contract_facts": [],
@@ -181,6 +204,11 @@ class DongjiangWorkflowHarness:
             "credit_status": "collecting",
             "credit_approval": {},
             "credit_approval_request": None,
+            "approval_evidence": [],
+            "approval_chain": [],
+            "credit_control": {},
+            "special_release": None,
+            "exception_approval": None,
             "contract_reviews": [],
             "decision": None,
             "approval_route": None,
@@ -189,6 +217,7 @@ class DongjiangWorkflowHarness:
             "waiting_for": None,
             "reports": {},
             "writeback": {},
+            "oa_submission": {},
             "trace": [],
             "errors": [],
         }
@@ -206,6 +235,47 @@ class DongjiangWorkflowHarness:
             raise PermissionError(
                 f"{waiting_for} 需要角色 {sorted(required)}，当前角色为 {sorted(actor.roles)}。"
             )
+
+    def _archive_approval_evidence(
+        self,
+        case_id: str,
+        paths: list[str],
+        actor: ActorContext,
+        purpose: str,
+    ) -> list[dict[str, Any]]:
+        if not paths:
+            return []
+        target_dir = self.evidence_dir / case_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        records: list[dict[str, Any]] = []
+        for raw_path in paths:
+            source = Path(raw_path).expanduser().resolve()
+            if not source.is_file():
+                raise FileNotFoundError(f"审批证据文件不存在：{source.name}")
+            display_name = (
+                source.name[3:]
+                if len(source.name) > 3
+                and source.name[:2].isdigit()
+                and source.name[2] == "-"
+                else source.name
+            )
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            target = target_dir / f"{digest[:12]}-{display_name}"
+            if not target.exists():
+                shutil.copy2(source, target)
+            records.append(
+                {
+                    "purpose": purpose,
+                    "name": display_name,
+                    "sha256": digest,
+                    "size_bytes": source.stat().st_size,
+                    "archived_path": str(target.resolve()),
+                    "actor_id": actor.actor_id,
+                    "source_system": actor.source_system,
+                    "archived_at": utc_now(),
+                }
+            )
+        return records
 
     def resume(
         self,
@@ -228,7 +298,23 @@ class DongjiangWorkflowHarness:
             for item in payload.get("file_paths") or []
         ]
         files.extend(self._stage_contract_texts(case_id, texts))
-        if files:
+        if (
+            str(payload.get("action") or "") == "approve"
+            and current.waiting_for in {"manager_approval", "special_release"}
+        ):
+            evidence = self._archive_approval_evidence(
+                case_id,
+                files,
+                actor,
+                current.waiting_for,
+            )
+            if not evidence:
+                raise ValueError("批准例外或特别放行时必须上传审批证据附件。")
+            payload["approval_evidence"] = evidence
+            payload.pop("file_paths", None)
+        elif current.waiting_for in {"manager_approval", "special_release"}:
+            payload.pop("file_paths", None)
+        elif files:
             payload["file_paths"] = files
         payload["actor"] = asdict(actor)
         self.graph.invoke(

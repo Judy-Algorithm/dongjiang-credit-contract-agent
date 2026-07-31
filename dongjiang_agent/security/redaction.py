@@ -13,7 +13,14 @@ class RedactionVault:
     _PATTERNS: tuple[tuple[str, Pattern[str]], ...] = (
         ("BANK", re.compile(r"\b[1-9]\d{15,18}\b")),
         ("PHONE", re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")),
-        ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+        (
+            "EMAIL",
+            re.compile(
+                r"(?<![A-Za-z0-9._%+-])"
+                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+                r"(?![A-Za-z0-9.-])"
+            ),
+        ),
         ("ID", re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")),
         ("USCC", re.compile(r"\b[0-9A-HJ-NPQRTUWXY]{18}\b")),
         ("MONEY", re.compile(r"(?:人民币|RMB|CNY|¥|￥)\s*[\d,]+(?:\.\d{1,2})?")),
@@ -32,6 +39,29 @@ class RedactionVault:
         self.case_id = str(case_id)
         self.mapping: dict[str, str] = {}
         self.vault_dir = Path(vault_dir) if vault_dir else None
+        self._load_existing()
+
+    def _target(self) -> Path | None:
+        return (
+            self.vault_dir / f"{self.case_id}.vault.json"
+            if self.vault_dir is not None
+            else None
+        )
+
+    def _load_existing(self) -> None:
+        target = self._target()
+        if target is None or not target.is_file():
+            return
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"脱敏映射文件损坏，拒绝覆盖：{target}") from exc
+        if str(payload.get("case_id") or "") != self.case_id:
+            raise ValueError(f"脱敏映射案件号不匹配：{target}")
+        mapping = payload.get("mapping") or {}
+        if not isinstance(mapping, dict):
+            raise ValueError(f"脱敏映射格式无效：{target}")
+        self.mapping.update({str(key): str(value) for key, value in mapping.items()})
 
     def _token(self, kind: str, value: str) -> str:
         digest = hashlib.sha256(f"{self.case_id}:{kind}:{value}".encode("utf-8")).hexdigest()[:10]
@@ -58,9 +88,13 @@ class RedactionVault:
         if self.vault_dir is None:
             return None
         self.vault_dir.mkdir(parents=True, exist_ok=True)
-        target = self.vault_dir / f"{self.case_id}.vault.json"
-        target.write_text(
+        target = self._target()
+        if target is None:
+            return None
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_text(
             json.dumps({"case_id": self.case_id, "mapping": self.mapping}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        temporary.replace(target)
         return target

@@ -25,6 +25,13 @@ def resolve_case_decision(
         item.value if isinstance(item, AuditDecision) else str(item)
         for item in decisions
     }
+    if not values:
+        return CaseDecision(
+            AuditDecision.BLOCK,
+            ApprovalRoute.RETURN_TO_OWNER,
+            "sales_revision",
+            "blocked",
+        )
     if AuditDecision.BLOCK.value in values:
         return CaseDecision(
             AuditDecision.BLOCK,

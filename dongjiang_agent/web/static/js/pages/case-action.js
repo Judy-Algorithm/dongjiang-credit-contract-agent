@@ -37,6 +37,9 @@ export async function renderCaseActionPage(root, route) {
     const encoded = await encodeFiles(files?.files || [])
     const contractText = root.querySelector("#contractText")?.value.trim() || ""
     let data
+    if (["manager_review","special_release"].includes(type) && action === "approve" && !encoded.length) {
+      throw new Error("批准例外或特别放行时必须上传审批证据附件。")
+    }
     if (["upload_contract","submit_revision"].includes(type) && action !== "close_case") {
       if (!encoded.length && !contractText) throw new Error("请上传合同文件或粘贴合同正文。")
       data = await api.submitContract(item.case_id, {
@@ -53,13 +56,20 @@ export async function renderCaseActionPage(root, route) {
         action,
         approved_credit_limit:optionalNumber(root, "#approvedCreditLimit"),
         approved_term_days:optionalNumber(root, "#approvedTermDays"),
+        purchase_exemption_approved:root.querySelector("#purchaseExemptionApproved")?.checked || false,
+        approval_scope:root.querySelector("#approvalScope")?.value.trim() || "",
+        validity_days:optionalNumber(root, "#validityDays"),
+        oa_evidence_id:root.querySelector("#oaEvidenceId")?.value.trim() || "",
         comment:root.querySelector("#comment")?.value.trim() || "",
       })
     } else {
       data = await api.submitContractAction(item.case_id, {
         action,
         comment:root.querySelector("#comment")?.value.trim() || "",
-        files:encoded,
+        approval_scope:root.querySelector("#approvalScope")?.value.trim() || "",
+        validity_days:optionalNumber(root, "#validityDays"),
+        oa_evidence_id:root.querySelector("#oaEvidenceId")?.value.trim() || "",
+        files:["manager_review","special_release"].includes(type) && action !== "approve" ? [] : encoded,
       })
     }
     window.dispatchEvent(new CustomEvent("app:toast", {detail:"操作已提交"}))
@@ -71,6 +81,7 @@ function context(item) {
   const credit = item.credit || {}
   const model = credit.model_result || {}
   const approved = credit.approved_result
+  const coverage = credit.data_coverage_ratio == null ? "—" : `${Math.round(Number(credit.data_coverage_ratio) * 100)}%`
   return `
     <h2>${escapeHtml(item.status_label)}</h2>
     <p>${message(item.next_action.type)}</p>
@@ -79,7 +90,10 @@ function context(item) {
       <div><span>模型信用分</span><b>${model.score == null ? "—" : Number(model.score).toFixed(1)}</b></div>
       <div><span>${approved ? "正式授信额度" : "建议授信额度"}</span><b>${money(approved?.credit_limit ?? model.credit_limit)}</b></div>
       <div><span>${approved ? "正式账期" : "建议账期"}</span><b>${(approved?.term_days ?? model.term_days) == null ? "—" : `${approved?.term_days ?? model.term_days} 天`}</b></div>
+      <div><span>资料覆盖率</span><b>${coverage}</b></div>
     </div>
+    ${credit.requires_supplement ? `<div class="supplement-notice"><strong>本次补件原因</strong><ul>${(credit.supplement_reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
+    ${item.credit_control?.credit_lock_reasons?.length ? `<div class="supplement-notice"><strong>信用控制锁定原因</strong><ul>${item.credit_control.credit_lock_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
     ${item.findings?.length ? `<div class="form-section"><div class="form-section-title"><h3>需要处理的问题</h3></div>${item.findings.map((finding) => `<article class="finding ${escapeHtml(finding.level || "")}"><h3>${escapeHtml(finding.title)}</h3><p>${escapeHtml(finding.message)}</p><small>${escapeHtml(finding.suggestion)}</small></article>`).join("")}</div>` : ""}
   `
 }
@@ -92,6 +106,7 @@ function message(type) {
     submit_revision:"请修改风险事项后，提交最新版本合同。",
     manager_review:"请确认是否批准本次例外申请。",
     manual_review:"请确认审核结果，补充资料，或要求业务修改合同。",
+    special_release:"客户信用控制已锁定，请核验原因并上传特别放行证据。",
   })[type] || "请处理当前事项。"
 }
 
@@ -136,7 +151,7 @@ function creditSupplementForm() {
 function decisionForm(type, item) {
   const actions = type === "credit_approval"
     ? [["reject","拒绝","danger"],["request_supplement","要求补充资料","secondary"],["adjust_and_approve","调整后批准","secondary"],["approve","批准","primary"]]
-    : type === "manager_review"
+    : ["manager_review","special_release"].includes(type)
     ? [["reject","驳回","danger"],["approve","批准","primary"]]
     : [["request_revision","要求修改合同","secondary"],["supplement","补充资料","secondary"],["approve","确认通过","primary"]]
   const model = item.credit?.model_result || {}
@@ -146,6 +161,10 @@ function decisionForm(type, item) {
         <div class="form-grid two">
           <label>正式授信额度（元）<input id="approvedCreditLimit" type="number" min="0" value="${escapeHtml(model.credit_limit ?? "")}"></label>
           <label>正式账期（天）<input id="approvedTermDays" type="number" min="1" max="${escapeHtml(model.hard_term_limit_days ?? "")}" value="${escapeHtml(model.term_days ?? "")}"></label>
+          <label>批准有效期（天）<input id="validityDays" type="number" min="1" max="3650" value="180"></label>
+          <label>OA证据ID<input id="oaEvidenceId" placeholder="OA流程或附件编号"></label>
+          <label class="full">批准范围<input id="approvalScope" placeholder="客户、业务类型、项目或订单范围"></label>
+          ${item.customer?.business_type === "TKM" ? `<label class="full checkbox-row"><input id="purchaseExemptionApproved" type="checkbox">批准未收回首期款即可采购项目物料</label>` : ""}
         </div>` : ""}
       ${type === "manual_review" ? `
         <div class="form-section">
@@ -154,6 +173,19 @@ function decisionForm(type, item) {
             <b>选择需要补充的资料</b><span>仅“补充资料”操作需要上传文件</span>
           </label>
           <div id="actionFileList" class="file-list"></div>
+        </div>` : ""}
+      ${["manager_review","special_release"].includes(type) ? `
+        <div class="form-section">
+          <label class="upload-zone" for="actionFiles">
+            <input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.eml,.msg">
+            <b>上传审批证据附件 *</b><span>批准邮件、OA截图、终端项目统一账期或特别放行材料</span>
+          </label>
+          <div id="actionFileList" class="file-list"></div>
+          <div class="form-grid two">
+            <label>批准范围 *<input id="approvalScope" placeholder="本案件、项目、订单或例外条件"></label>
+            <label>有效期（天）<input id="validityDays" type="number" min="1" max="3650" value="30"></label>
+            <label class="full">OA证据ID<input id="oaEvidenceId" placeholder="OA流程或附件编号"></label>
+          </div>
         </div>` : ""}
       <label class="full">处理意见<textarea id="comment" rows="4" placeholder="填写审批或复核意见"></textarea></label>
       <div class="form-actions"><span></span><div class="right">

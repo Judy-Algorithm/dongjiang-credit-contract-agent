@@ -83,6 +83,108 @@ class CreditModelTests(unittest.TestCase):
         self.assertIn("net_margin", result.missing_fields)
         self.assertIn("current_ratio", result.missing_fields)
 
+    def test_single_favorable_dimension_requires_supplement(self):
+        for profile in (
+            CreditProfile(
+                customer_name="仅评级客户",
+                customer_type="new",
+                monthly_order_amount=1_000_000,
+                external_rating="AAA",
+            ),
+            CreditProfile(
+                customer_name="仅财务客户",
+                customer_type="new",
+                monthly_order_amount=1_000_000,
+                asset_liability_ratio=0.2,
+            ),
+        ):
+            with self.subTest(customer=profile.customer_name):
+                result = CreditScoringEngine().assess(profile)
+                self.assertTrue(result.requires_supplement)
+                self.assertEqual(len(result.available_dimensions), 1)
+                self.assertLess(result.data_coverage_ratio, 0.45)
+
+    def test_well_supported_assessment_can_enter_approval(self):
+        result = CreditScoringEngine().assess(CreditProfile(
+            customer_name="资料完整客户",
+            customer_type="new",
+            monthly_order_amount=1_000_000,
+            external_rating="AA",
+            asset_liability_ratio=0.45,
+            net_margin=0.1,
+            current_ratio=1.5,
+            revenue_growth=0.1,
+        ))
+        self.assertFalse(result.requires_supplement)
+        self.assertGreaterEqual(result.data_coverage_ratio, 0.45)
+
+    def test_credit_control_calculates_occupied_and_available_credit(self):
+        result = CreditScoringEngine().assess(CreditProfile(
+            customer_name="额度占用客户",
+            customer_type="new",
+            monthly_order_amount=1_000_000,
+            external_rating="AA",
+            asset_liability_ratio=0.45,
+            current_ratio=1.5,
+            outstanding_receivables_amount=1_500_000,
+            open_order_amount=1_000_000,
+        ))
+        self.assertEqual(result.approved_credit_limit, 3_000_000)
+        self.assertEqual(result.occupied_credit_amount, 2_500_000)
+        self.assertEqual(result.available_credit_amount, 500_000)
+        self.assertFalse(result.credit_locked)
+
+    def test_current_overdue_over_30_days_locks_credit_control(self):
+        result = CreditScoringEngine().assess(CreditProfile(
+            customer_name="当前逾期客户",
+            customer_type="new",
+            monthly_order_amount=1_000_000,
+            external_rating="AA",
+            asset_liability_ratio=0.45,
+            current_ratio=1.5,
+            current_overdue_days=31,
+        ))
+        self.assertTrue(result.credit_locked)
+        self.assertIn("逾期 31 天", "；".join(result.credit_lock_reasons))
+
+    def test_tkm_subtypes_apply_distinct_tail_payment_baselines(self):
+        common = {
+            "customer_name": "TKM子类型客户",
+            "customer_type": "new",
+            "business_type": "TKM",
+            "monthly_order_amount": 1_000_000,
+            "external_rating": "AA",
+            "asset_liability_ratio": 0.45,
+            "current_ratio": 1.5,
+        }
+        automotive = CreditScoringEngine().assess(CreditProfile(
+            **common, tkm_business_subtype="automotive_standard"
+        ))
+        precision = CreditScoringEngine().assess(CreditProfile(
+            **common, tkm_business_subtype="precision"
+        ))
+        self.assertEqual(automotive.max_tail_payment_ratio, 0.60)
+        self.assertEqual(automotive.max_tail_term_days, 365)
+        self.assertEqual(precision.max_tail_payment_ratio, 0.40)
+        self.assertEqual(precision.max_tail_term_days, 180)
+
+    def test_inactive_customer_requires_historical_payment_records(self):
+        result = CreditScoringEngine().assess(CreditProfile(
+            customer_name="重新激活客户",
+            customer_type="inactive",
+            customer_status="Inactive",
+            business_type="TKP",
+            monthly_order_amount=1_000_000,
+            external_rating="AA",
+            asset_liability_ratio=0.45,
+            current_ratio=1.5,
+        ))
+        self.assertTrue(result.requires_supplement)
+        self.assertIn(
+            "Inactive客户重新申请时必须补充历史交易与付款记录",
+            result.supplement_reasons,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

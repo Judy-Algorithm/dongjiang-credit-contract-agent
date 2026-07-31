@@ -1,5 +1,5 @@
 {
-  "version": "hackathon-proposal-v1",
+  "version": "competition-material-aligned-v2",
   "status": "PROPOSED_NOT_OFFICIAL",
   "description": "比赛建议模型；东江未提供正式权重，所有维度均支持开关和调整。",
   "risk_thresholds": {
@@ -39,6 +39,33 @@
     "cooperation_dimension_enabled": false,
     "manual_review_if_missing_financial_and_rating": true
   },
+  "data_sufficiency": {
+    "minimum_coverage_ratio": 0.45,
+    "minimum_dimension_count": 2,
+    "require_monthly_order_amount": true,
+    "description": "资料充分度与信用分分开判断；覆盖不足时不得仅凭单一优质指标形成有效授信。"
+  },
+  "credit_control": {
+    "max_current_overdue_days": 30,
+    "special_release_evidence_required": true,
+    "description": "未收款及已入单金额共同占用授信；当前逾期超过30天或占用超过批准额度时锁定，必须取得特别放行。"
+  },
+  "customer_lifecycle": {
+    "inactive_after_days_without_order": 365,
+    "requires_zero_outstanding_receivables": true,
+    "requires_zero_open_orders": true,
+    "description": "超过一年无新订单且无未付款、无在手订单时，授信清零并将客户转为Inactive。"
+  },
+  "credit_approval": {
+    "validity_days": 180,
+    "chain": [
+      "applicant",
+      "marketing_director",
+      "credit_control",
+      "senior_finance_manager",
+      "group_finance_director"
+    ]
+  },
   "business_rules": {
     "TKP": {
       "hard_max_term_days": 90,
@@ -49,12 +76,30 @@
       }
     },
     "TKM": {
-      "hard_max_tail_ratio": 0.40,
-      "hard_max_tail_term_days": 180,
-      "grades": {
-        "low": {"credit_months": 2.0, "recommended_term_days": 90, "max_tail_ratio": 0.40, "max_tail_term_days": 180},
-        "medium": {"credit_months": 1.5, "recommended_term_days": 60, "max_tail_ratio": 0.30, "max_tail_term_days": 120},
-        "high": {"credit_months": 1.0, "recommended_term_days": 30, "max_tail_ratio": 0.20, "max_tail_term_days": 60}
+      "default_subtype": "precision",
+      "subtypes": {
+        "automotive_standard": {
+          "label": "汽车及标准业务",
+          "hard_max_tail_ratio": 0.60,
+          "hard_max_tail_term_days": 365,
+          "payment_baseline": "下PO收10%定金；离厂前累计收40%；离厂后半年内收40%、一年内收20%",
+          "grades": {
+            "low": {"credit_months": 2.0, "recommended_term_days": 90, "max_tail_ratio": 0.60, "max_tail_term_days": 365},
+            "medium": {"credit_months": 1.5, "recommended_term_days": 60, "max_tail_ratio": 0.40, "max_tail_term_days": 180},
+            "high": {"credit_months": 1.0, "recommended_term_days": 30, "max_tail_ratio": 0.20, "max_tail_term_days": 60}
+          }
+        },
+        "precision": {
+          "label": "精密模具业务",
+          "hard_max_tail_ratio": 0.40,
+          "hard_max_tail_term_days": 180,
+          "payment_baseline": "走模前收取60%以上，走模后尾款不超过40%且半年内收回",
+          "grades": {
+            "low": {"credit_months": 2.0, "recommended_term_days": 90, "max_tail_ratio": 0.40, "max_tail_term_days": 180},
+            "medium": {"credit_months": 1.5, "recommended_term_days": 60, "max_tail_ratio": 0.30, "max_tail_term_days": 120},
+            "high": {"credit_months": 1.0, "recommended_term_days": 30, "max_tail_ratio": 0.20, "max_tail_term_days": 60}
+          }
+        }
       }
     }
   },

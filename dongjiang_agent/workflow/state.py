@@ -19,6 +19,7 @@ class WorkflowState(TypedDict, total=False):
     pending_files: list[str]
     pending_document_kind: str | None
     source_files: list[str]
+    source_documents: list[dict[str, Any]]
     credit_source_files: list[str]
     contract_source_files: list[str]
     contract_facts: list[dict[str, Any]]
@@ -29,6 +30,11 @@ class WorkflowState(TypedDict, total=False):
     credit_status: str
     credit_approval: dict[str, Any]
     credit_approval_request: dict[str, Any] | None
+    approval_evidence: list[dict[str, Any]]
+    approval_chain: list[dict[str, Any]]
+    credit_control: dict[str, Any]
+    special_release: dict[str, Any] | None
+    exception_approval: dict[str, Any] | None
     contract_reviews: list[dict[str, Any]]
     decision: str | None
     approval_route: str | None
@@ -38,5 +44,6 @@ class WorkflowState(TypedDict, total=False):
 
     reports: dict[str, str]
     writeback: dict[str, Any]
+    oa_submission: dict[str, Any]
     trace: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[dict[str, Any]], operator.add]

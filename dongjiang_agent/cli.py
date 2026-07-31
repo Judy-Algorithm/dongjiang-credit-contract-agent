@@ -54,6 +54,9 @@ def main() -> int:
     workflow_resume = subparsers.add_parser("workflow-resume", help="使用审批或补充资料恢复工作流")
     workflow_resume.add_argument("--case-id", required=True)
     workflow_resume.add_argument("--decision", required=True, help="恢复指令 JSON 文件")
+    lifecycle = subparsers.add_parser(
+        "lifecycle-sweep", help="执行一年无订单且无欠款客户的授信清零"
+    )
     args = parser.parse_args()
     if args.command in {"audit", "workflow-start"}:
         return _run(_load_case(args.case), args.output, args.no_cache)
@@ -70,6 +73,15 @@ def main() -> int:
         with DongjiangWorkflowHarness() as harness:
             run = harness.resume(args.case_id, payload, actor=_actor(payload))
             print(json.dumps(run.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "lifecycle-sweep":
+        from .integrations import IntegrationBundle
+        from .persistence import CaseRepository
+
+        changed = CaseRepository().apply_inactivity_policy(
+            integrations=IntegrationBundle.from_environment()
+        )
+        print(json.dumps({"inactivated_case_ids": changed}, ensure_ascii=False, indent=2))
         return 0
     return 2
 

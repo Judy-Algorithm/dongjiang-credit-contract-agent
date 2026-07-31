@@ -17,6 +17,8 @@ STATUS_LABELS = {
     "credit_pending_approval": "等待信用审批",
     "credit_supplement_required": "等待补充信用资料",
     "credit_effective": "授信已生效",
+    "credit_control_locked": "信用控制已锁定",
+    "credit_control_rejected": "特别放行已拒绝",
     "credit_rejected": "信用申请已拒绝",
     "awaiting_contract": "等待上传合同",
     "blocked": "等待修改合同",
@@ -28,6 +30,7 @@ STATUS_LABELS = {
     "completed": "已完成",
     "rejected": "已驳回",
     "closed_without_contract": "已关闭",
+    "inactive": "Inactive（授信已清零）",
 }
 
 RISK_LABELS = {
@@ -47,6 +50,7 @@ FIELD_LABELS = {
     "external_rating": "外部主体评级",
     "cooperation_history": "历史合作记录",
     "enterprise_basics": "企业基础信息",
+    "tkm_business_subtype": "TKM业务子类型",
 }
 
 RECORD_LABELS = {
@@ -56,12 +60,16 @@ RECORD_LABELS = {
     "privacy.redacted": "敏感资料已安全处理",
     "credit.cache_hit": "已读取有效信用结果",
     "credit.completed": "信用审核已完成",
+    "credit.insufficient_data": "信用资料不足，等待补充",
     "credit.rating_conflict": "外部评级需要人工确认",
     "credit.approval_requested": "信用评估已提交审批",
     "credit.supplement_requested": "需要补充信用资料",
     "credit.supplemented": "补充信用资料已提交",
     "credit.effective": "正式授信已生效",
+    "credit.special_release_approved": "特别放行已批准",
+    "credit.special_release_rejected": "特别放行已拒绝",
     "credit.rejected": "信用申请已拒绝",
+    "credit.inactivated": "客户已转Inactive并清零授信",
     "workflow.interrupt": "等待上传合同",
     "workflow.resumed": "合同已提交",
     "contract.completed": "合同审核已完成",
@@ -97,6 +105,7 @@ def _waiting_for(case: dict[str, Any], explicit: str | None = None) -> str | Non
     return {
         "credit_pending_approval": "credit_approval",
         "credit_supplement_required": "credit_supplement",
+        "credit_control_locked": "special_release",
         "awaiting_contract": "contract_upload",
         "blocked": "sales_revision",
         "pending_special_approval": "manager_approval",
@@ -122,6 +131,14 @@ def _next_action(waiting_for: str | None) -> dict[str, Any] | None:
             "allowed_actions": [
                 {"type": "submit_supplement", "label": "提交补充资料"},
                 {"type": "close_case", "label": "关闭申请"},
+            ],
+        },
+        "special_release": {
+            "type": "special_release",
+            "label": "处理特别放行",
+            "allowed_actions": [
+                {"type": "approve", "label": "批准并归档证据"},
+                {"type": "reject", "label": "拒绝放行"},
             ],
         },
         "contract_upload": {
@@ -225,6 +242,7 @@ def case_view(
             ),
             "can_approve_credit": resolved_waiting == "credit_approval",
             "can_upload_credit_documents": resolved_waiting == "credit_supplement",
+            "can_approve_special_release": resolved_waiting == "special_release",
         },
         "credit": {
             "status": credit_status,
@@ -237,8 +255,23 @@ def case_view(
                     "待评估",
                 ),
                 "credit_limit": model_credit.get("approved_credit_limit"),
+                "total_credit_limit": model_credit.get("total_credit_limit"),
                 "term_days": model_credit.get("recommended_term_days"),
                 "hard_term_limit_days": model_credit.get("hard_term_limit_days"),
+                "occupied_credit_amount": model_credit.get("occupied_credit_amount"),
+                "available_credit_amount": model_credit.get("available_credit_amount"),
+                "credit_locked": bool(model_credit.get("credit_locked")),
+                "purchase_exemption_requested": bool(
+                    model_credit.get("purchase_exemption_requested")
+                ),
+                "purchase_exemption_approved": bool(
+                    model_credit.get("purchase_exemption_approved")
+                ),
+                "max_tail_payment_ratio": model_credit.get(
+                    "max_tail_payment_ratio"
+                ),
+                "max_tail_term_days": model_credit.get("max_tail_term_days"),
+                "credit_lock_reasons": list(model_credit.get("credit_lock_reasons") or []),
             },
             "approved_result": (
                 {
@@ -249,9 +282,17 @@ def case_view(
                         "待评估",
                     ),
                     "credit_limit": effective_credit.get("approved_credit_limit"),
+                    "total_credit_limit": effective_credit.get("total_credit_limit"),
                     "term_days": effective_credit.get("recommended_term_days"),
                     "effective_at": credit_approval.get("effective_at"),
                     "expires_at": credit_approval.get("expires_at"),
+                    "occupied_credit_amount": effective_credit.get("occupied_credit_amount"),
+                    "available_credit_amount": effective_credit.get("available_credit_amount"),
+                    "credit_locked": bool(effective_credit.get("credit_locked")),
+                    "purchase_exemption_approved": bool(
+                        effective_credit.get("purchase_exemption_approved")
+                    ),
+                    "credit_lock_reasons": list(effective_credit.get("credit_lock_reasons") or []),
                 }
                 if effective_credit
                 else None
@@ -264,9 +305,29 @@ def case_view(
                 }
                 for field in model_credit.get("missing_fields") or []
             ],
+            "data_coverage_ratio": model_credit.get("data_coverage_ratio"),
+            "available_dimensions": list(model_credit.get("available_dimensions") or []),
+            "requires_supplement": bool(model_credit.get("requires_supplement")),
+            "supplement_reasons": list(model_credit.get("supplement_reasons") or []),
             "reasons": list(model_credit.get("reasons") or []),
             "rating_resolution": dict(model_credit.get("rating_resolution") or {}),
         },
+        "credit_control": dict(case.get("credit_control") or {}),
+        "special_release": dict(case.get("special_release") or {}),
+        "exception_approval": dict(case.get("exception_approval") or {}),
+        "approval_evidence": [
+            {
+                "purpose": item.get("purpose"),
+                "name": item.get("name"),
+                "sha256": item.get("sha256"),
+                "size_bytes": item.get("size_bytes"),
+                "actor_id": item.get("actor_id"),
+                "archived_at": item.get("archived_at"),
+            }
+            for item in case.get("approval_evidence") or []
+        ],
+        "approval_chain": list(case.get("approval_chain") or []),
+        "writeback": dict(case.get("writeback") or {}),
         "contracts": [
             {
                 "name": item.get("contract_name"),
@@ -281,6 +342,16 @@ def case_view(
         "findings": findings,
         "records": records,
         "documents": documents,
+        "source_documents": [
+            {
+                "document_kind": item.get("document_kind"),
+                "name": item.get("name"),
+                "sha256": item.get("sha256"),
+                "size_bytes": item.get("size_bytes"),
+                "archived_at": item.get("archived_at"),
+            }
+            for item in case.get("source_documents") or []
+        ],
         "created_at": case.get("created_at"),
         "updated_at": records[-1]["time"] if records else case.get("created_at"),
     }
