@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 
 from langgraph.types import Command, interrupt
@@ -32,11 +33,54 @@ from ..persistence import CaseDocumentArchive, CaseRepository
 from ..reporting import AuditReporter
 from ..security import RedactionVault
 from .codec import case_from_state, checkpoint_dict
+from .dynamic import build_contract_plan, build_credit_plan, plan_task
 from .state import WorkflowState
 
 
 def trace(stage: str, message: str, **data: Any) -> dict[str, Any]:
     return {"ts": utc_now(), "stage": stage, "message": message, "data": data}
+
+
+def agent_run(
+    plan: dict[str, Any],
+    task: dict[str, Any],
+    *,
+    started_at: str,
+    duration_ms: int,
+    input_summary: str,
+    output_summary: str,
+    status: str = "completed",
+    model: str = "deterministic",
+) -> dict[str, Any]:
+    return {
+        "run_id": f"{plan.get('plan_id')}:{task.get('task_id')}",
+        "plan_id": plan.get("plan_id"),
+        "task_id": task.get("task_id"),
+        "task_type": task.get("task_type"),
+        "label": task.get("label"),
+        "agent": task.get("agent"),
+        "phase": task.get("phase"),
+        "status": status,
+        "started_at": started_at,
+        "completed_at": utc_now(),
+        "duration_ms": max(0, int(duration_ms)),
+        "input_summary": input_summary[:240],
+        "output_summary": output_summary[:500],
+        "model": model,
+        "sensitive_input": "redacted_or_structured",
+    }
+
+
+def task_result(
+    plan: dict[str, Any], task: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "plan_id": plan.get("plan_id"),
+        "task_id": task.get("task_id"),
+        "task_type": task.get("task_type"),
+        "input_refs": list(task.get("input_refs") or []),
+        "payload": payload,
+    }
 
 
 def approval_record(
@@ -366,9 +410,178 @@ class WorkflowNodes:
             "trace": [trace("credit.cache_miss", "未找到有效信审结果，进入信审子图。")],
         }
 
+    def plan_credit_workflow(self, state: WorkflowState) -> dict[str, Any]:
+        plan = build_credit_plan(
+            str(state["case_id"]),
+            dict(state.get("customer") or {}),
+            list(state.get("source_documents") or []),
+        )
+        return {
+            "stage": "credit_planned",
+            "active_workflow_plan": plan,
+            "workflow_plans": [plan],
+            "trace": [
+                trace(
+                    "agent.credit.plan_created",
+                    "信用信审子 Agent 已按资料情况生成受控任务计划。",
+                    plan_id=plan["plan_id"],
+                    task_count=len(plan["tasks"]),
+                    task_types=[item["task_type"] for item in plan["tasks"]],
+                )
+            ],
+        }
+
+    def run_credit_analysis(self, state: WorkflowState) -> dict[str, Any]:
+        plan = dict(state.get("active_workflow_plan") or {})
+        task = dict(state.get("active_agent_task") or {})
+        task_type = str(task.get("task_type") or "")
+        profile = profile_from_dict(dict(state["customer"]))
+        started_at = utc_now()
+        started = perf_counter()
+        payload: dict[str, Any]
+        summary: str
+        if task_type == "credit_data_completeness":
+            assessment = self.credit_engine.assess(profile)
+            payload = {
+                "coverage_ratio": assessment.data_coverage_ratio,
+                "available_dimensions": assessment.available_dimensions,
+                "missing_fields": assessment.missing_fields,
+                "requires_supplement": assessment.requires_supplement,
+                "supplement_reasons": assessment.supplement_reasons,
+                "evidence_count": len(profile.evidence),
+            }
+            summary = (
+                f"资料覆盖率{assessment.data_coverage_ratio:.0%}，"
+                f"识别{len(assessment.available_dimensions)}个有效维度"
+            )
+        elif task_type == "credit_financial_analysis":
+            missing: list[str] = []
+            score, reasons = self.credit_engine._financial_score(profile, missing)
+            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
+            summary = f"财务维度评分{score:.1f}" if score is not None else "财务指标不足"
+        elif task_type == "credit_rating_analysis":
+            missing = []
+            score, reasons, resolution = self.credit_engine._rating_score(profile, missing)
+            selected = dict(resolution.get("selected") or {})
+            payload = {
+                "score": score,
+                "agency": selected.get("agency"),
+                "rating": selected.get("rating"),
+                "conflict": bool(resolution.get("conflict")),
+                "requires_manual_review": bool(resolution.get("requires_manual_review")),
+                "warning_count": len(reasons),
+            }
+            summary = (
+                f"采用{selected.get('agency') or '未知机构'} {selected.get('rating') or '未评级'}"
+            )
+        elif task_type == "credit_cooperation_analysis":
+            missing = []
+            score, reasons = self.credit_engine._cooperation_score(profile, missing)
+            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
+            summary = f"历史交易评分{score:.1f}" if score is not None else "历史交易资料不足"
+        elif task_type == "credit_enterprise_analysis":
+            missing = []
+            score, reasons = self.credit_engine._enterprise_score(profile, missing)
+            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
+            summary = f"企业基础评分{score:.1f}" if score is not None else "企业基础资料不足"
+        elif task_type == "credit_control_analysis":
+            limit = max(0.0, float(profile.requested_credit_limit or profile.monthly_order_amount or 0))
+            control = self.credit_engine.credit_control(profile, limit)
+            payload = {
+                "has_occupied_credit": bool(control["occupied_credit_amount"]),
+                "credit_locked": bool(control["credit_locked"]),
+                "overdue_above_threshold": (
+                    int(control["current_overdue_days"])
+                    > int(control["max_current_overdue_days"])
+                ),
+            }
+            summary = (
+                f"额度占用={'存在' if payload['has_occupied_credit'] else '无'}，"
+                f"逾期阈值={'超出' if payload['overdue_above_threshold'] else '未超出'}"
+            )
+        elif task_type == "credit_tkm_analysis":
+            payload = {
+                "business_subtype": profile.tkm_business_subtype or "policy_default",
+                "purchase_exemption_requested": bool(profile.purchase_exemption_requested),
+                "requested_term_days": profile.requested_term_days,
+            }
+            summary = "已核对TKM子类型、账期和首期采购款豁免申请"
+        else:
+            raise ValueError(f"未授权的信用分析任务：{task_type}")
+        duration_ms = round((perf_counter() - started) * 1000)
+        return {
+            "agent_task_results": [task_result(plan, task, payload)],
+            "agent_runs": [
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary=(
+                        f"{len(task.get('input_refs') or [])}个资料引用；敏感内容未写入日志"
+                    ),
+                    output_summary=summary,
+                )
+            ],
+            "trace": [
+                trace(
+                    "agent.credit.task_completed",
+                    f"{task.get('label')}已完成。",
+                    plan_id=plan.get("plan_id"),
+                    task_id=task.get("task_id"),
+                    duration_ms=duration_ms,
+                )
+            ],
+        }
+
+    def synthesize_credit_analysis(self, state: WorkflowState) -> dict[str, Any]:
+        plan = dict(state.get("active_workflow_plan") or {})
+        task = plan_task(plan, "credit_synthesis")
+        results = [
+            item
+            for item in state.get("agent_task_results") or []
+            if item.get("plan_id") == plan.get("plan_id")
+        ]
+        started_at = utc_now()
+        started = perf_counter()
+        analysis = {
+            str(item.get("task_type")): dict(item.get("payload") or {})
+            for item in results
+        }
+        completed = sorted(analysis)
+        duration_ms = round((perf_counter() - started) * 1000)
+        summary = f"已汇总{len(completed)}项动态信用分析"
+        return {
+            "credit_analysis": analysis,
+            "agent_task_results": [task_result(plan, task, {"completed_tasks": completed})],
+            "agent_runs": [
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary=f"{len(results)}项并行分析结果",
+                    output_summary=summary,
+                )
+            ],
+            "trace": [
+                trace(
+                    "agent.credit.synthesized",
+                    "信用信审子 Agent 已汇总并行分析结果。",
+                    plan_id=plan.get("plan_id"),
+                    completed_tasks=completed,
+                )
+            ],
+        }
+
     def score_credit(self, state: WorkflowState) -> dict[str, Any]:
         customer = profile_from_dict(dict(state["customer"]))
+        plan = dict(state.get("active_workflow_plan") or {})
+        task = plan_task(plan, "credit_scoring")
+        started_at = utc_now()
+        started = perf_counter()
         assessment = self.credit_engine.assess(customer)
+        duration_ms = round((perf_counter() - started) * 1000)
         traces = [
             trace(
                 "credit.completed",
@@ -415,7 +628,110 @@ class WorkflowNodes:
             "waiting_for": (
                 "credit_supplement" if assessment.requires_supplement else None
             ),
+            "agent_task_results": [
+                task_result(
+                    plan,
+                    task,
+                    {
+                        "score": assessment.score,
+                        "risk_level": assessment.risk_level.value,
+                        "requires_supplement": assessment.requires_supplement,
+                        "policy_version": assessment.policy_version,
+                    },
+                )
+            ],
+            "agent_runs": [
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary=f"{len(state.get('credit_analysis') or {})}项分析摘要",
+                    output_summary=(
+                        f"评分{assessment.score:.1f}，风险{assessment.risk_level.value}，"
+                        f"资料补充={'是' if assessment.requires_supplement else '否'}"
+                    ),
+                    model="credit-policy-engine",
+                )
+            ],
             "trace": traces,
+        }
+
+    def verify_credit(self, state: WorkflowState) -> dict[str, Any]:
+        plan = dict(state.get("active_workflow_plan") or {})
+        task = plan_task(plan, "credit_verification")
+        assessment = dict(state.get("credit_assessment") or {})
+        analysis = dict(state.get("credit_analysis") or {})
+        started_at = utc_now()
+        started = perf_counter()
+        checks = {
+            "policy_version_present": bool(assessment.get("policy_version")),
+            "score_in_range": 0 <= float(assessment.get("score") or 0) <= 100,
+            "risk_level_valid": assessment.get("risk_level") in {"low", "medium", "high"},
+            "analysis_present": bool(analysis),
+            "supplement_consistent": bool(assessment.get("requires_supplement"))
+            == bool(assessment.get("supplement_reasons")),
+        }
+        verification = {
+            "status": "passed" if all(checks.values()) else "failed",
+            "checks": checks,
+            "verified_at": utc_now(),
+            "verifier": "independent_credit_guard",
+        }
+        duration_ms = round((perf_counter() - started) * 1000)
+        if verification["status"] == "failed":
+            assessment["requires_supplement"] = True
+            reasons = list(assessment.get("supplement_reasons") or [])
+            reasons.append("信用结论一致性核验未通过，必须补充资料或人工排查。")
+            assessment["supplement_reasons"] = list(dict.fromkeys(reasons))
+            assessment["missing_fields"] = list(
+                dict.fromkeys(list(assessment.get("missing_fields") or []) + ["verification"])
+            )
+        plan["status"] = "completed" if verification["status"] == "passed" else "failed"
+        plan["completed_at"] = utc_now()
+        return {
+            "stage": "credit_calculated",
+            "active_workflow_plan": plan,
+            "workflow_plans": [plan],
+            "credit_assessment": assessment,
+            "status": (
+                state.get("status")
+                if verification["status"] == "passed"
+                else "credit_supplement_required"
+            ),
+            "credit_status": (
+                state.get("credit_status")
+                if verification["status"] == "passed"
+                else "supplement_required"
+            ),
+            "waiting_for": (
+                state.get("waiting_for")
+                if verification["status"] == "passed"
+                else "credit_supplement"
+            ),
+            "credit_verification": verification,
+            "agent_task_results": [task_result(plan, task, verification)],
+            "agent_runs": [
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary="信用评分与动态分析摘要",
+                    output_summary=f"独立核验{verification['status']}，{sum(checks.values())}/{len(checks)}项通过",
+                    status="completed" if verification["status"] == "passed" else "failed",
+                    model="independent-credit-guard",
+                )
+            ],
+            "trace": [
+                trace(
+                    "agent.credit.verified",
+                    "信用结论已完成独立一致性核验。",
+                    plan_id=plan.get("plan_id"),
+                    status=verification["status"],
+                    checks=checks,
+                )
+            ],
         }
 
     def prepare_credit_approval(self, state: WorkflowState) -> dict[str, Any]:
@@ -856,27 +1172,112 @@ class WorkflowNodes:
             goto="ingest_contract_documents",
         )
 
-    def review_contracts(self, state: WorkflowState) -> dict[str, Any]:
+    def plan_contract_workflow(self, state: WorkflowState) -> dict[str, Any]:
         if state.get("credit_status") != "effective":
             raise PermissionError("正式授信尚未生效，不能执行合同评审。")
-        assessment = assessment_from_dict(state.get("effective_credit_assessment"))
-        if assessment is None:
-            raise ValueError("合同评审前缺少正式信审结果。")
-        contract_facts = list(state.get("contract_facts") or [])
-        reviews = []
-        traces: list[dict[str, Any]] = []
-        for item in contract_facts:
-            facts = contract_facts_from_dict(item)
+        contracts = list(state.get("contract_facts") or [])
+        plan = build_contract_plan(
+            str(state["case_id"]),
+            contracts,
+            ai_available=bool(
+                self.contract_ai.enabled and self.contract_ai.gateway.available
+            ),
+        )
+        return {
+            "stage": "contract_planned",
+            "active_workflow_plan": plan,
+            "workflow_plans": [plan],
+            "trace": [
+                trace(
+                    "agent.contract.plan_created",
+                    "合同审查子 Agent 已按合同数量和可用工具生成受控任务计划。",
+                    plan_id=plan["plan_id"],
+                    task_count=len(plan["tasks"]),
+                    contract_count=len(contracts),
+                    ai_assistance=any(
+                        item["task_type"] == "contract_ai_review"
+                        for item in plan["tasks"]
+                    ),
+                )
+            ],
+        }
+
+    @staticmethod
+    def _contract_by_ref(
+        state: WorkflowState, document_ref: str
+    ) -> dict[str, Any]:
+        return next(
+            (
+                dict(item)
+                for item in state.get("contract_facts") or []
+                if str(item.get("document_id") or "") == document_ref
+            ),
+            {},
+        )
+
+    @staticmethod
+    def _document_by_ref(
+        state: WorkflowState, document_ref: str
+    ) -> dict[str, Any]:
+        return next(
+            (
+                dict(item)
+                for item in state.get("source_documents") or []
+                if str(item.get("document_id") or "") == document_ref
+            ),
+            {},
+        )
+
+    def run_contract_analysis(self, state: WorkflowState) -> dict[str, Any]:
+        plan = dict(state.get("active_workflow_plan") or {})
+        task = dict(state.get("active_agent_task") or {})
+        task_type = str(task.get("task_type") or "")
+        document_ref = str((task.get("input_refs") or [""])[0])
+        raw_contract = self._contract_by_ref(state, document_ref)
+        if not raw_contract:
+            if document_ref != "unparsed-contract" or task_type != "contract_policy_review":
+                raise ValueError(f"动态合同任务找不到输入引用：{document_ref}")
+            started_at = utc_now()
+            payload = {
+                "document_id": document_ref,
+                "status": "unreviewable",
+                "reason": "no_reviewable_contract_facts",
+            }
+            return {
+                "agent_task_results": [task_result(plan, task, payload)],
+                "agent_runs": [
+                    agent_run(
+                        plan,
+                        task,
+                        started_at=started_at,
+                        duration_ms=0,
+                        input_summary="合同文件未形成可审查结构",
+                        output_summary="触发保守阻断降级，不允许自动放行",
+                        status="failed",
+                        model="contract-policy-guard",
+                    )
+                ],
+                "trace": [
+                    trace(
+                        "agent.contract.task_failed",
+                        "合同未形成可审查结构，动态任务已转入保守阻断。",
+                        plan_id=plan.get("plan_id"),
+                        task_id=task.get("task_id"),
+                        reason="no_reviewable_contract_facts",
+                    )
+                ],
+            }
+        facts = contract_facts_from_dict(raw_contract)
+        document = self._document_by_ref(state, document_ref)
+        fragments = list(document.get("fragments") or [])
+        started_at = utc_now()
+        started = perf_counter()
+        model = "deterministic"
+        if task_type == "contract_policy_review":
+            assessment = assessment_from_dict(state.get("effective_credit_assessment"))
+            if assessment is None:
+                raise ValueError("合同评审前缺少正式信审结果。")
             review = self.contract_engine.review(facts, assessment)
-            source_document = next(
-                (
-                    document
-                    for document in state.get("source_documents") or []
-                    if document.get("document_id") == facts.document_id
-                ),
-                {},
-            )
-            fragments = list(source_document.get("fragments") or [])
             for finding in review.findings:
                 if finding.fragment_id or not finding.clause_excerpt:
                     continue
@@ -888,26 +1289,130 @@ class WorkflowNodes:
                     finding.document_id = facts.document_id
                     finding.fragment_id = str(matched["fragment_id"])
                     finding.location = dict(matched["location"])
+            payload = {"document_id": document_ref, "review": checkpoint_dict(review)}
+            summary = (
+                f"制度结论{review.decision.value}，发现{len(review.findings)}项风险"
+            )
+            model = "contract-policy-engine"
+        elif task_type == "contract_ai_review":
             ai_text = facts.raw_text or ""
             if "⟦" not in ai_text:
                 ai_text = "⟦REDACTED_TEXT⟧\n" + ai_text
-            review.ai_assistance = self.contract_ai.review(
+            assistance = self.contract_ai.review(
                 facts,
                 redacted_text=ai_text,
                 fragments=fragments,
             )
-            ai_result = review.ai_assistance
-            traces.append(
+            payload = {"document_id": document_ref, "ai_assistance": assistance}
+            summary = (
+                f"AI辅助状态{assistance.get('status')}，"
+                f"发现{len(assistance.get('findings') or [])}项"
+            )
+            model = str(assistance.get("model") or "text-model")
+        else:
+            raise ValueError(f"未授权的合同分析任务：{task_type}")
+        duration_ms = round((perf_counter() - started) * 1000)
+        return {
+            "agent_task_results": [task_result(plan, task, payload)],
+            "agent_runs": [
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary=f"合同引用{document_ref}；内容已脱敏",
+                    output_summary=summary,
+                    model=model,
+                    status=(
+                        "degraded"
+                        if task_type == "contract_ai_review"
+                        and payload["ai_assistance"].get("status") == "failed"
+                        else "completed"
+                    ),
+                )
+            ],
+            "trace": [
                 trace(
-                    "contract.ai_assistance",
-                    "合同 AI 辅助审查已完成；该结果不参与制度规则裁决。",
-                    contract_name=facts.contract_name,
-                    status=ai_result.get("status"),
-                    model=ai_result.get("model"),
-                    finding_count=len(ai_result.get("findings") or []),
+                    "agent.contract.task_completed",
+                    f"{task.get('label')}已完成。",
+                    plan_id=plan.get("plan_id"),
+                    task_id=task.get("task_id"),
+                    document_id=document_ref,
+                    duration_ms=duration_ms,
+                )
+            ],
+        }
+
+    def synthesize_contract_reviews(self, state: WorkflowState) -> dict[str, Any]:
+        if state.get("credit_status") != "effective":
+            raise PermissionError("正式授信尚未生效，不能执行合同评审。")
+        assessment = assessment_from_dict(state.get("effective_credit_assessment"))
+        if assessment is None:
+            raise ValueError("合同评审前缺少正式信审结果。")
+        plan = dict(state.get("active_workflow_plan") or {})
+        contract_facts = list(state.get("contract_facts") or [])
+        results = [
+            item
+            for item in state.get("agent_task_results") or []
+            if item.get("plan_id") == plan.get("plan_id")
+        ]
+        by_document: dict[str, dict[str, Any]] = {}
+        for result in results:
+            payload = dict(result.get("payload") or {})
+            document_id = str(payload.get("document_id") or "")
+            if document_id:
+                by_document.setdefault(document_id, {}).update(payload)
+        reviews: list[dict[str, Any]] = []
+        runs: list[dict[str, Any]] = []
+        synthesized_results: list[dict[str, Any]] = []
+        for item in contract_facts:
+            facts = contract_facts_from_dict(item)
+            group = by_document.get(facts.document_id) or {}
+            review = dict(group.get("review") or {})
+            if not review:
+                continue
+            review["ai_assistance"] = dict(
+                group.get("ai_assistance")
+                or {
+                    "status": "not_configured",
+                    "model": self.contract_ai.gateway.model,
+                    "findings": [],
+                    "summary": "当前动态计划未启用文本模型，使用制度规则审查。",
+                }
+            )
+            reviews.append(review)
+            synthesis_task = plan_task(
+                plan, "contract_synthesis", input_ref=facts.document_id
+            )
+            started_at = utc_now()
+            summary = (
+                f"已合并制度风险{len(review.get('findings') or [])}项、"
+                f"AI辅助发现{len(review['ai_assistance'].get('findings') or [])}项"
+            )
+            runs.append(
+                agent_run(
+                    plan,
+                    synthesis_task,
+                    started_at=started_at,
+                    duration_ms=0,
+                    input_summary=f"合同引用{facts.document_id}的分析结果",
+                    output_summary=summary,
                 )
             )
-            reviews.append(checkpoint_dict(review))
+            synthesized_results.append(
+                task_result(
+                    plan,
+                    synthesis_task,
+                    {
+                        "document_id": facts.document_id,
+                        "decision": review.get("decision"),
+                        "rule_finding_count": len(review.get("findings") or []),
+                        "ai_finding_count": len(
+                            review["ai_assistance"].get("findings") or []
+                        ),
+                    },
+                )
+            )
         if not reviews:
             review = ContractReview(
                 decision=AuditDecision.BLOCK,
@@ -936,9 +1441,38 @@ class WorkflowNodes:
                 },
             )
             reviews.append(checkpoint_dict(review))
+            fallback_task = plan_task(
+                plan, "contract_synthesis", input_ref="unparsed-contract"
+            )
+            runs.append(
+                agent_run(
+                    plan,
+                    fallback_task,
+                    started_at=utc_now(),
+                    duration_ms=0,
+                    input_summary="不可解析合同的降级结果",
+                    output_summary="形成保守阻断结论并要求重新提交合同",
+                    status="completed",
+                    model="contract-policy-guard",
+                )
+            )
+            synthesized_results.append(
+                task_result(
+                    plan,
+                    fallback_task,
+                    {
+                        "document_id": "unparsed-contract",
+                        "decision": "block",
+                        "rule_finding_count": 1,
+                        "ai_finding_count": 0,
+                    },
+                )
+            )
         return {
             "stage": "contract_reviewed",
             "contract_reviews": reviews,
+            "agent_runs": runs,
+            "agent_task_results": synthesized_results,
             "trace": [
                 trace(
                     "contract.completed",
@@ -946,7 +1480,114 @@ class WorkflowNodes:
                     contract_count=len(contract_facts),
                     review_count=len(reviews),
                 ),
-                *traces,
+            ],
+        }
+
+    def verify_contract_reviews(self, state: WorkflowState) -> dict[str, Any]:
+        plan = dict(state.get("active_workflow_plan") or {})
+        reviews = list(state.get("contract_reviews") or [])
+        contracts = list(state.get("contract_facts") or [])
+        runs: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
+        verifications: list[dict[str, Any]] = []
+        valid_decisions = {"pass", "manual_review", "special_approval", "block"}
+        for index, review in enumerate(reviews):
+            document_id = str(
+                (contracts[index] if index < len(contracts) else {}).get("document_id")
+                or "unparsed-contract"
+            )
+            task = plan_task(plan, "contract_verification", input_ref=document_id)
+            started_at = utc_now()
+            started = perf_counter()
+            findings = list(review.get("findings") or [])
+            ai_findings = list(
+                (review.get("ai_assistance") or {}).get("findings") or []
+            )
+            checks = {
+                "decision_valid": review.get("decision") in valid_decisions,
+                "summary_present": bool(str(review.get("summary") or "").strip()),
+                "policy_cross_check_present": bool(review.get("credit_cross_check")),
+                "rule_findings_structured": all(
+                    item.get("rule_id") and item.get("title") and item.get("level")
+                    for item in findings
+                ),
+                "ai_findings_advisory": all(
+                    item.get("source") == "text_model" for item in ai_findings
+                ),
+            }
+            verification = {
+                "document_id": document_id,
+                "status": "passed" if all(checks.values()) else "failed",
+                "checks": checks,
+                "evidence_coverage": (
+                    round(
+                        sum(
+                            bool(item.get("document_id") and item.get("fragment_id"))
+                            for item in findings + ai_findings
+                        )
+                        / len(findings + ai_findings),
+                        3,
+                    )
+                    if findings or ai_findings
+                    else 1.0
+                ),
+                "verifier": "independent_contract_guard",
+                "verified_at": utc_now(),
+            }
+            duration_ms = round((perf_counter() - started) * 1000)
+            verifications.append(verification)
+            results.append(task_result(plan, task, verification))
+            runs.append(
+                agent_run(
+                    plan,
+                    task,
+                    started_at=started_at,
+                    duration_ms=duration_ms,
+                    input_summary=f"合同引用{document_id}的制度和AI分析摘要",
+                    output_summary=(
+                        f"独立核验{verification['status']}，证据覆盖率"
+                        f"{verification['evidence_coverage']:.0%}"
+                    ),
+                    status=(
+                        "completed" if verification["status"] == "passed" else "failed"
+                    ),
+                    model="independent-contract-guard",
+                )
+            )
+        plan["status"] = (
+            "completed"
+            if verifications and all(item["status"] == "passed" for item in verifications)
+            else "failed"
+        )
+        plan["completed_at"] = utc_now()
+        verified_reviews = [dict(item) for item in reviews]
+        if plan["status"] == "failed":
+            for review in verified_reviews:
+                decision = str(review.get("decision") or "")
+                if decision not in {"block", "special_approval"}:
+                    review["decision"] = "manual_review"
+                    review["approval_route"] = "finance_legal"
+                    review["risk_level"] = "medium"
+                review["summary"] = (
+                    "独立核验未通过，禁止自动放行；转财务/法务人工复核。"
+                    + str(review.get("summary") or "")
+                )
+        return {
+            "stage": "contract_reviewed",
+            "active_workflow_plan": plan,
+            "workflow_plans": [plan],
+            "contract_reviews": verified_reviews,
+            "contract_verifications": verifications,
+            "agent_runs": runs,
+            "agent_task_results": results,
+            "trace": [
+                trace(
+                    "agent.contract.verified",
+                    "合同结论已完成独立结构与证据核验。",
+                    plan_id=plan.get("plan_id"),
+                    status=plan["status"],
+                    contract_count=len(verifications),
+                )
             ],
         }
 

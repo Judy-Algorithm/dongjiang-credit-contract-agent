@@ -196,6 +196,73 @@ def _records(trace: list[dict[str, Any]]) -> list[dict[str, str]]:
     return records
 
 
+def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
+    runs = list(case.get("agent_runs") or [])
+    run_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for run in runs:
+        key = (str(run.get("plan_id") or ""), str(run.get("task_id") or ""))
+        run_by_key[key] = dict(run)
+    plans: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_plan in reversed(list(case.get("workflow_plans") or [])):
+        plan_id = str(raw_plan.get("plan_id") or "")
+        if not plan_id or plan_id in seen:
+            continue
+        seen.add(plan_id)
+        nodes: list[dict[str, Any]] = []
+        for task in raw_plan.get("tasks") or []:
+            run = run_by_key.get((plan_id, str(task.get("task_id") or "")), {})
+            nodes.append(
+                {
+                    "task_id": task.get("task_id"),
+                    "task_type": task.get("task_type"),
+                    "label": task.get("label"),
+                    "phase": task.get("phase"),
+                    "depends_on": list(task.get("depends_on") or []),
+                    "status": run.get("status") or "pending",
+                    "duration_ms": run.get("duration_ms"),
+                    "started_at": run.get("started_at"),
+                    "completed_at": run.get("completed_at"),
+                    "input_summary": run.get("input_summary") or "等待执行",
+                    "output_summary": run.get("output_summary") or "尚无输出",
+                    "model": run.get("model") or "",
+                    "sensitive_input": run.get("sensitive_input") or "not_logged",
+                }
+            )
+        plan_runs = [run for run in runs if run.get("plan_id") == plan_id]
+        total_duration = sum(int(run.get("duration_ms") or 0) for run in plan_runs)
+        plans.append(
+            {
+                "plan_id": plan_id,
+                "agent": raw_plan.get("agent"),
+                "label": raw_plan.get("label"),
+                "version": raw_plan.get("version"),
+                "planner": raw_plan.get("planner"),
+                "status": raw_plan.get("status") or (
+                    "completed"
+                    if nodes and all(node["status"] == "completed" for node in nodes)
+                    else "running"
+                ),
+                "created_at": raw_plan.get("created_at"),
+                "completed_at": raw_plan.get("completed_at"),
+                "task_count": len(nodes),
+                "completed_count": sum(
+                    node["status"] in {"completed", "degraded"} for node in nodes
+                ),
+                "total_duration_ms": total_duration,
+                "nodes": nodes,
+            }
+        )
+    plans.reverse()
+    return {
+        "mode": "controlled_dynamic_workflow",
+        "parent_label": "信审与合同评审主流程",
+        "plans": plans,
+        "run_count": len(runs),
+        "security_notice": "运行记录仅展示结构化摘要；敏感原文与脱敏映射不会写入执行日志。",
+    }
+
+
 def case_view(
     case: dict[str, Any],
     *,
@@ -428,6 +495,7 @@ def case_view(
         ],
         "findings": findings,
         "ai_assistance": ai_assistance,
+        "agent_execution": _agent_execution(case),
         "records": records,
         "documents": documents,
         "source_documents": [

@@ -47,5 +47,13 @@ class WorkflowState(TypedDict, total=False):
     reports: dict[str, str]
     writeback: dict[str, Any]
     oa_submission: dict[str, Any]
+    workflow_plans: Annotated[list[dict[str, Any]], operator.add]
+    agent_runs: Annotated[list[dict[str, Any]], operator.add]
+    agent_task_results: Annotated[list[dict[str, Any]], operator.add]
+    active_workflow_plan: dict[str, Any] | None
+    active_agent_task: dict[str, Any] | None
+    credit_analysis: dict[str, Any]
+    credit_verification: dict[str, Any]
+    contract_verifications: list[dict[str, Any]]
     trace: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[dict[str, Any]], operator.add]

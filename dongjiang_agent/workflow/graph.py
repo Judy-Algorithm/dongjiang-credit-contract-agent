@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
 
 from .nodes import WorkflowNodes
 from .state import WorkflowState
@@ -72,17 +73,49 @@ def _decision_route(
 
 def build_credit_subgraph(nodes: WorkflowNodes):
     builder = StateGraph(WorkflowState)
+    builder.add_node("plan_credit", nodes.plan_credit_workflow)
+    builder.add_node("run_credit_analysis", nodes.run_credit_analysis)
+    builder.add_node("synthesize_credit", nodes.synthesize_credit_analysis)
     builder.add_node("score_credit", nodes.score_credit)
-    builder.add_edge(START, "score_credit")
-    builder.add_edge("score_credit", END)
+    builder.add_node("verify_credit", nodes.verify_credit)
+    builder.add_edge(START, "plan_credit")
+
+    def dispatch_credit(state: WorkflowState):
+        plan = dict(state.get("active_workflow_plan") or {})
+        return [
+            Send("run_credit_analysis", {**state, "active_agent_task": task})
+            for task in plan.get("tasks") or []
+            if task.get("phase") == "analysis"
+        ]
+
+    builder.add_conditional_edges("plan_credit", dispatch_credit)
+    builder.add_edge("run_credit_analysis", "synthesize_credit")
+    builder.add_edge("synthesize_credit", "score_credit")
+    builder.add_edge("score_credit", "verify_credit")
+    builder.add_edge("verify_credit", END)
     return builder.compile()
 
 
 def build_contract_subgraph(nodes: WorkflowNodes):
     builder = StateGraph(WorkflowState)
-    builder.add_node("review_contracts", nodes.review_contracts)
-    builder.add_edge(START, "review_contracts")
-    builder.add_edge("review_contracts", END)
+    builder.add_node("plan_contract", nodes.plan_contract_workflow)
+    builder.add_node("run_contract_analysis", nodes.run_contract_analysis)
+    builder.add_node("synthesize_contracts", nodes.synthesize_contract_reviews)
+    builder.add_node("verify_contracts", nodes.verify_contract_reviews)
+    builder.add_edge(START, "plan_contract")
+
+    def dispatch_contract(state: WorkflowState):
+        plan = dict(state.get("active_workflow_plan") or {})
+        return [
+            Send("run_contract_analysis", {**state, "active_agent_task": task})
+            for task in plan.get("tasks") or []
+            if task.get("phase") == "analysis"
+        ]
+
+    builder.add_conditional_edges("plan_contract", dispatch_contract)
+    builder.add_edge("run_contract_analysis", "synthesize_contracts")
+    builder.add_edge("synthesize_contracts", "verify_contracts")
+    builder.add_edge("verify_contracts", END)
     return builder.compile()
 
 
@@ -95,6 +128,9 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
         result = credit_subgraph.invoke(state)
         trace_offset = len(state.get("trace") or [])
         error_offset = len(state.get("errors") or [])
+        plan_offset = len(state.get("workflow_plans") or [])
+        run_offset = len(state.get("agent_runs") or [])
+        result_offset = len(state.get("agent_task_results") or [])
         return {
             "stage": result.get("stage"),
             "status": result.get("status"),
@@ -105,6 +141,12 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
             ),
             "credit_status": result.get("credit_status"),
             "waiting_for": result.get("waiting_for"),
+            "workflow_plans": list(result.get("workflow_plans") or [])[plan_offset:],
+            "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
+            "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
+            "active_workflow_plan": result.get("active_workflow_plan"),
+            "credit_analysis": result.get("credit_analysis"),
+            "credit_verification": result.get("credit_verification"),
             "trace": list(result.get("trace") or [])[trace_offset:],
             "errors": list(result.get("errors") or [])[error_offset:],
         }
@@ -113,9 +155,17 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
         result = contract_subgraph.invoke(state)
         trace_offset = len(state.get("trace") or [])
         error_offset = len(state.get("errors") or [])
+        plan_offset = len(state.get("workflow_plans") or [])
+        run_offset = len(state.get("agent_runs") or [])
+        result_offset = len(state.get("agent_task_results") or [])
         return {
             "stage": result.get("stage"),
             "contract_reviews": result.get("contract_reviews"),
+            "workflow_plans": list(result.get("workflow_plans") or [])[plan_offset:],
+            "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
+            "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
+            "active_workflow_plan": result.get("active_workflow_plan"),
+            "contract_verifications": result.get("contract_verifications"),
             "trace": list(result.get("trace") or [])[trace_offset:],
             "errors": list(result.get("errors") or [])[error_offset:],
         }

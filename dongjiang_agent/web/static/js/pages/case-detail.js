@@ -3,7 +3,7 @@ import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],
-  ["approval","审批记录"],["documents","原始资料"],["writeback","系统回写"],
+  ["agents","Agent运行"],["approval","审批记录"],["documents","原始资料"],["writeback","系统回写"],
 ]
 
 export async function renderCaseDetailPage(root, route) {
@@ -37,7 +37,7 @@ export async function renderCaseDetailPage(root, route) {
     root.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab))
     root.querySelector("#tabBody").innerHTML = ({
       overview:overviewTab(item), credit:creditTab(item), contract:contractTab(item),
-      approval:approvalTab(item), documents:documentsTab(item), writeback:writebackTab(item),
+      agents:agentExecutionTab(item), approval:approvalTab(item), documents:documentsTab(item), writeback:writebackTab(item),
     })[tab]
     if (tab === "contract") installEvidenceViewer(root, item)
     if (tab === "documents") installDocumentViewer(root, item)
@@ -152,6 +152,47 @@ function approvalTab(item) {
       ${item.approval_chain?.length ? `<div class="review-list">${item.approval_chain.map((step) => `<div class="review-row"><b>${escapeHtml(approvalStage(step.stage))}</b><span>${escapeHtml(step.status || "pending")}</span></div>`).join("")}</div>` : `<div class="empty-note">尚未形成 OA 审批链。</div>`}
       ${item.approval_evidence?.length ? `<div class="form-section"><div class="section-heading"><h3>审批证据</h3></div><div class="review-list">${item.approval_evidence.map((evidence) => `<div class="review-row"><b>${escapeHtml(evidence.name)}</b><span>${escapeHtml(evidence.actor_id || "")} · ${dateTime(evidence.archived_at)}</span></div>`).join("")}</div></div>` : ""}
     </section></div>`
+}
+
+function agentExecutionTab(item) {
+  const execution = item.agent_execution || {}, plans = execution.plans || []
+  if (!plans.length) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
+  return `<div class="agent-execution">
+    <div class="agent-parent"><div><small>父工作流</small><h3>${escapeHtml(execution.parent_label || "业务主流程")}</h3></div><span class="badge approved">受控动态编排</span></div>
+    <div class="agent-flow-connector" aria-hidden="true"></div>
+    ${plans.map(agentPlan).join("")}
+    <div class="agent-security-note">${escapeHtml(execution.security_notice || "")}</div>
+  </div>`
+}
+
+function agentPlan(plan) {
+  const groups = ["analysis","synthesis","decision","verification"].map((phase) => ({phase, nodes:(plan.nodes || []).filter((node) => node.phase === phase)})).filter((group) => group.nodes.length)
+  const statusLabel = ({completed:"已完成",running:"运行中",failed:"需检查"})[plan.status] || plan.status
+  return `<section class="agent-plan">
+    <header class="agent-plan-head"><div><small>${escapeHtml(plan.plan_id)} · 计划版本 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || plan.agent)}</h3><p>运行时选择 ${plan.task_count || 0} 个白名单任务，已完成 ${plan.completed_count || 0} 个</p></div><div class="agent-plan-status"><span class="badge ${plan.status === "completed" ? "approved" : plan.status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span><small>累计 ${duration(plan.total_duration_ms)}</small></div></header>
+    <div class="agent-lanes">${groups.map(agentLane).join("")}</div>
+  </section>`
+}
+
+function agentLane(group) {
+  const label = ({analysis:"并行分析",synthesis:"结果汇总",decision:"确定性决策",verification:"独立核验"})[group.phase] || group.phase
+  return `<section class="agent-lane"><div class="agent-lane-label"><span>${escapeHtml(label)}</span><small>${group.nodes.length} 个节点</small></div><div class="agent-node-grid">${group.nodes.map(agentNode).join("")}</div></section>`
+}
+
+function agentNode(node) {
+  const statusLabel = ({completed:"完成",degraded:"降级",failed:"失败",running:"运行",pending:"等待"})[node.status] || node.status
+  return `<article class="agent-node ${escapeHtml(node.status || "pending")}">
+    <div class="agent-node-head"><span class="agent-status-dot" aria-hidden="true"></span><div><small>${escapeHtml(node.task_type || "task")}</small><h4>${escapeHtml(node.label || node.task_id)}</h4></div><b>${escapeHtml(statusLabel)}</b></div>
+    <dl><div><dt>耗时</dt><dd>${duration(node.duration_ms)}</dd></div><div><dt>执行器</dt><dd>${escapeHtml(node.model || "待分配")}</dd></div></dl>
+    <div class="agent-node-summary"><small>输入摘要</small><p>${escapeHtml(node.input_summary || "等待执行")}</p><small>输出摘要</small><p>${escapeHtml(node.output_summary || "尚无输出")}</p></div>
+    ${node.depends_on?.length ? `<footer>依赖 ${node.depends_on.map((value) => escapeHtml(value)).join("、")}</footer>` : ""}
+  </article>`
+}
+
+function duration(value) {
+  if (value == null) return "—"
+  const ms = Number(value || 0)
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`
 }
 
 function documentsTab(item) {
