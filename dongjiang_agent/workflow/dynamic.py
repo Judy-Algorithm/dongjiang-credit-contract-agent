@@ -17,6 +17,17 @@ from ..domain.models import utc_now
 PLAN_VERSION = "2.0"
 TASK_CATALOG_VERSION = "dongjiang-controlled-tasks-v2"
 MAX_PLAN_TASKS = 48
+RETRYABLE_ANALYSIS_TASKS = {
+    "credit_data_completeness",
+    "credit_financial_analysis",
+    "credit_rating_analysis",
+    "credit_cooperation_analysis",
+    "credit_enterprise_analysis",
+    "credit_control_analysis",
+    "credit_tkm_analysis",
+    "contract_policy_review",
+    "contract_ai_review",
+}
 
 TASK_CATALOG: dict[str, dict[str, Any]] = {
     "credit_data_completeness": {"agent": "credit", "label": "资料完整性分析"},

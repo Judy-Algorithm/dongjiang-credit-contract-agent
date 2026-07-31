@@ -687,6 +687,13 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .agent-severity-legacy, .agent-severity-pending { color: var(--muted); background: var(--surface-strong); }
 .agent-issue-list { display: flex; gap: 4px; flex-wrap: wrap; }
 .agent-issue-list span { padding: 3px 5px; color: var(--body); font-size: 9px; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.incident-state { margin-top: 8px; padding-left: 8px; border-left: 2px solid var(--primary); }
+.incident-state b, .incident-state small { display: block; }
+.incident-state b { color: var(--ink); font-size: 10px; }
+.agent-row-actions { display: grid; justify-items: start; gap: 5px; min-width: 84px; }
+.agent-incident-dialog { display: grid; gap: 16px; }
+.agent-incident-dialog label { display: grid; gap: 7px; color: var(--body); font-size: 12px; }
+.agent-rerun-notice { padding: 10px 12px; color: var(--orange); font-size: 11px; line-height: 1.55; border-left: 3px solid var(--orange); background: var(--orange-soft); }
 .muted { color: var(--muted); }
 
 .revision-findings, .revision-list { display: grid; gap: 12px; margin-top: 14px; }

@@ -14,6 +14,7 @@ from unittest.mock import ANY, patch
 from dongjiang_agent.integrations import IntegrationBundle
 from dongjiang_agent.security import AuthStore
 from dongjiang_agent.web.server import AuditRequestHandler
+from dongjiang_agent.workflow import DongjiangWorkflowHarness
 
 
 class WebApiTests(unittest.TestCase):
@@ -1051,6 +1052,158 @@ class WebApiTests(unittest.TestCase):
         status, denied = self.request("GET", "/api/operations/agents")
         self.assertEqual(status, 403)
         self.assertFalse(denied["ok"])
+
+    def test_agent_incident_api_enforces_permissions_audits_notifies_and_redacts(self):
+        assignee = self.create_user("agent.assignee", "异常责任人", ["credit"])
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "异常接口测试客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        with DongjiangWorkflowHarness() as harness:
+            workflow_run = harness.get(case_id)
+            plan = workflow_run.state["workflow_plans"][-1]
+        analysis_task = next(
+            item for item in plan["tasks"] if item["phase"] == "analysis"
+        )
+        with DongjiangWorkflowHarness() as harness:
+            harness.graph.update_state(
+                harness._config(case_id),
+                {
+                    "execution_audits": [
+                        {
+                            "plan_id": plan["plan_id"],
+                            "status": "non_conformant",
+                            "integrity_valid": True,
+                            "missing_tasks": [analysis_task["task_id"]],
+                        }
+                    ]
+                },
+            )
+
+        status, acknowledged = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {
+                "action": "acknowledge",
+                "plan_id": plan["plan_id"],
+                "note": "接口确认备注不得原样返回",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(acknowledged["incident"]["status"], "acknowledged")
+        self.assertNotIn(
+            "接口确认备注不得原样返回",
+            json.dumps(acknowledged, ensure_ascii=False),
+        )
+
+        status, assigned = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {
+                "action": "assign",
+                "plan_id": plan["plan_id"],
+                "assignee_user_id": assignee["user_id"],
+                "note": "交由信用团队核查",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(assigned["incident"]["status"], "assigned")
+        self.assertEqual(
+            assigned["incident"]["assignee"]["user_id"], assignee["user_id"]
+        )
+        with AuthStore() as store:
+            notices = store.list_notifications(assignee["user_id"])
+            events = store.list_audit(limit=500)
+        self.assertTrue(
+            any(item["category"] == "agent_incident" for item in notices["items"])
+        )
+        event_types = {item["event_type"] for item in events}
+        self.assertIn("agent.incident.acknowledge", event_types)
+        self.assertIn("agent.incident.assign", event_types)
+
+        status, rerun = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {
+                "action": "rerun",
+                "plan_id": plan["plan_id"],
+                "task_id": analysis_task["task_id"],
+                "note": "候选重跑备注不得原样返回",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(
+            rerun["incident"]["latest_rerun"]["official_state_changed"]
+        )
+        payload_text = json.dumps(rerun, ensure_ascii=False)
+        self.assertNotIn("候选重跑备注不得原样返回", payload_text)
+        self.assertNotIn("history", rerun["incident"])
+        self.assertNotIn("rerun_history", rerun["incident"])
+
+        status, blocked = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {
+                "action": "rerun",
+                "plan_id": plan["plan_id"],
+                "task_id": "credit.scoring",
+                "note": "尝试重跑决策节点",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("禁止直接重跑", blocked["error"])
+
+        self.create_user("agent.incident.sales", "异常普通销售", ["sales"])
+        self.activate_user("agent.incident.sales")
+        status, denied = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {"action": "resolve", "plan_id": plan["plan_id"], "note": "关闭异常"},
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(denied["ok"])
+
+    def test_agent_incident_api_rejects_healthy_plan(self):
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "健康接口测试客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        plan_id = created["case"]["agent_execution"]["plans"][-1]["plan_id"]
+        status, rejected = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-incidents",
+            {"action": "acknowledge", "plan_id": plan_id},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("未发现可处置", rejected["error"])
 
     @patch("dongjiang_agent.web.server.SLAService")
     def test_sla_operations_are_admin_only_and_sweep_is_audited(self, service_class):

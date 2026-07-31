@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import sqlite3
 import hashlib
 import shutil
@@ -18,6 +19,7 @@ from ..domain.models import AuditCase, CreditProfile, utc_now
 from ..integrations import IntegrationBundle
 from ..persistence import CaseRepository
 from .codec import case_from_state, checkpoint_dict
+from .dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
 from .graph import build_workflow
 from .nodes import WorkflowNodes
 
@@ -248,6 +250,8 @@ class DongjiangWorkflowHarness:
             "agent_runs": [],
             "agent_task_results": [],
             "execution_audits": [],
+            "agent_incidents": [],
+            "agent_rerun_context": None,
             "active_workflow_plan": None,
             "active_agent_task": None,
             "credit_analysis": {},
@@ -285,6 +289,296 @@ class DongjiangWorkflowHarness:
             },
         )
         return self._run_result(current.case_id)
+
+    @staticmethod
+    def _latest_plan_rows(
+        rows: list[dict[str, Any]], plan_id: str
+    ) -> dict[str, dict[str, Any]]:
+        latest: dict[str, dict[str, Any]] = {}
+        for raw in rows:
+            row = dict(raw)
+            if str(row.get("plan_id") or "") != plan_id:
+                continue
+            task_id = str(row.get("task_id") or "")
+            if task_id:
+                latest[task_id] = row
+        return latest
+
+    @staticmethod
+    def _merge_node_update(
+        state: dict[str, Any], update: dict[str, Any]
+    ) -> dict[str, Any]:
+        for key, value in update.items():
+            if key in {"agent_task_results", "agent_runs", "execution_audits", "trace", "errors"}:
+                state[key] = list(state.get(key) or []) + list(value or [])
+            else:
+                state[key] = value
+        return state
+
+    def _isolated_agent_rerun(
+        self,
+        state: dict[str, Any],
+        plan: dict[str, Any],
+        task: dict[str, Any],
+        *,
+        incident_id: str,
+    ) -> dict[str, Any]:
+        """Execute a candidate analysis and re-verify it without changing business state."""
+        assert_plan_integrity(plan)
+        task_type = str(task.get("task_type") or "")
+        if task_type not in RETRYABLE_ANALYSIS_TASKS or task.get("phase") != "analysis":
+            raise ValueError("该节点属于决策、核验或非白名单节点，禁止直接重跑。")
+        plan_id = str(plan.get("plan_id") or "")
+        analysis_ids = {
+            str(item.get("task_id") or "")
+            for item in plan.get("tasks") or []
+            if item.get("phase") == "analysis"
+        }
+        latest_results = self._latest_plan_rows(
+            list(state.get("agent_task_results") or []), plan_id
+        )
+        latest_runs = self._latest_plan_rows(list(state.get("agent_runs") or []), plan_id)
+        candidate = deepcopy(state)
+        candidate["active_workflow_plan"] = deepcopy(plan)
+        candidate["active_agent_task"] = deepcopy(task)
+        candidate["agent_rerun_context"] = {
+            "incident_id": incident_id,
+            "plan_id": plan_id,
+            "task_id": task.get("task_id"),
+        }
+        candidate["agent_task_results"] = [
+            row
+            for task_id, row in latest_results.items()
+            if task_id in analysis_ids and task_id != task.get("task_id")
+        ]
+        candidate["agent_runs"] = [
+            row
+            for task_id, row in latest_runs.items()
+            if task_id in analysis_ids and task_id != task.get("task_id")
+        ]
+        candidate["execution_audits"] = []
+        candidate["trace"] = []
+        candidate["errors"] = []
+        if plan.get("agent") == "credit":
+            updates = [
+                self.nodes.run_credit_analysis(candidate),
+            ]
+            for update in updates:
+                self._merge_node_update(candidate, update)
+            self._merge_node_update(candidate, self.nodes.synthesize_credit_analysis(candidate))
+            self._merge_node_update(candidate, self.nodes.score_credit(candidate))
+            self._merge_node_update(candidate, self.nodes.verify_credit(candidate))
+            assessment = dict(candidate.get("credit_assessment") or {})
+            verification = dict(candidate.get("credit_verification") or {})
+            summary = {
+                "score": assessment.get("score"),
+                "risk_level": assessment.get("risk_level"),
+                "requires_supplement": bool(assessment.get("requires_supplement")),
+                "verification_status": verification.get("status"),
+            }
+        elif plan.get("agent") == "contract":
+            self._merge_node_update(candidate, self.nodes.run_contract_analysis(candidate))
+            self._merge_node_update(candidate, self.nodes.synthesize_contract_reviews(candidate))
+            self._merge_node_update(candidate, self.nodes.verify_contract_reviews(candidate))
+            reviews = list(candidate.get("contract_reviews") or [])
+            summary = {
+                "review_count": len(reviews),
+                "decisions": sorted(
+                    {str(item.get("decision") or "") for item in reviews if item.get("decision")}
+                ),
+                "verification_statuses": [
+                    str(item.get("status") or "")
+                    for item in candidate.get("contract_verifications") or []
+                ],
+            }
+        else:
+            raise ValueError("未知的Agent计划类型。")
+        rerun_run = next(
+            (
+                dict(item)
+                for item in reversed(candidate.get("agent_runs") or [])
+                if item.get("task_id") == task.get("task_id")
+            ),
+            {},
+        )
+        audit = dict((candidate.get("execution_audits") or [{}])[-1])
+        return {
+            "incident_id": incident_id,
+            "plan_id": plan_id,
+            "task_id": task.get("task_id"),
+            "task_type": task_type,
+            "status": str(rerun_run.get("status") or "failed"),
+            "attempt_count": int(rerun_run.get("attempt_count") or 0),
+            "evidence_gate": str(
+                rerun_run.get("evidence_gate") or "not_applicable"
+            ),
+            "execution_audit": str(audit.get("status") or "pending"),
+            "candidate_summary": summary,
+            "completed_at": utc_now(),
+            "official_state_changed": False,
+        }
+
+    def manage_agent_incident(
+        self,
+        case_id: str,
+        *,
+        plan_id: str,
+        action: str,
+        actor: ActorContext,
+        note: str = "",
+        assignee: dict[str, Any] | None = None,
+        task_id: str = "",
+    ) -> tuple[WorkflowRun, dict[str, Any]]:
+        if "admin" not in actor.roles and "system" not in actor.roles:
+            raise PermissionError("只有管理员可以处置Agent运行异常。")
+        if action not in {"acknowledge", "assign", "rerun", "resolve"}:
+            raise ValueError("未知的Agent异常处置动作。")
+        current = self.get(case_id)
+        state = dict(current.state)
+        plan = next(
+            (
+                deepcopy(item)
+                for item in reversed(state.get("workflow_plans") or [])
+                if str(item.get("plan_id") or "") == str(plan_id)
+            ),
+            None,
+        )
+        if plan is None:
+            raise KeyError("Agent计划不存在。")
+        clean_note = " ".join(str(note or "").split())[:500]
+        if action in {"rerun", "resolve"} and len(clean_note) < 2:
+            raise ValueError("重跑或关闭异常时必须填写处理说明。")
+        incidents = [deepcopy(item) for item in state.get("agent_incidents") or []]
+        incident = next(
+            (
+                item
+                for item in reversed(incidents)
+                if item.get("plan_id") == plan_id and item.get("status") != "resolved"
+            ),
+            None,
+        )
+        if incident is None:
+            try:
+                assert_plan_integrity(plan)
+                integrity_failed = False
+            except (TypeError, ValueError):
+                integrity_failed = True
+            latest_audit = next(
+                (
+                    dict(item)
+                    for item in reversed(state.get("execution_audits") or [])
+                    if item.get("plan_id") == plan_id
+                ),
+                {},
+            )
+            latest_runs = self._latest_plan_rows(
+                list(state.get("agent_runs") or []), plan_id
+            )
+            operational_issue = any(
+                str(item.get("status") or "") in {"failed", "degraded"}
+                or str(item.get("evidence_gate") or "") in {"failed", "degraded"}
+                or int(item.get("attempt_count") or 1) > 1
+                for item in latest_runs.values()
+            )
+            if not (
+                integrity_failed
+                or latest_audit.get("status") == "non_conformant"
+                or operational_issue
+            ):
+                raise ValueError("当前Agent计划未发现可处置的运行异常。")
+            if action != "acknowledge":
+                raise ValueError("请先确认Agent运行异常，再执行分派、重跑或关闭。")
+        now = utc_now()
+        if incident is None:
+            incident = {
+                "incident_id": f"AINC-{uuid4().hex[:12].upper()}",
+                "plan_id": plan_id,
+                "agent": plan.get("agent"),
+                "status": "open",
+                "opened_at": now,
+                "updated_at": now,
+                "assignee": {},
+                "history": [],
+                "rerun_history": [],
+            }
+            incidents.append(incident)
+        normalized_assignee = dict(assignee or {})
+        if action == "acknowledge":
+            incident["status"] = "acknowledged"
+            if not incident.get("assignee"):
+                incident["assignee"] = {
+                    "user_id": actor.actor_id,
+                    "display_name": actor.display_name or actor.actor_id,
+                }
+        elif action == "assign":
+            if not normalized_assignee.get("user_id") or not normalized_assignee.get(
+                "display_name"
+            ):
+                raise ValueError("请选择有效的异常责任人。")
+            incident["status"] = "assigned"
+            incident["assignee"] = {
+                "user_id": str(normalized_assignee["user_id"]),
+                "display_name": str(normalized_assignee["display_name"]),
+            }
+        elif action == "rerun":
+            task = next(
+                (
+                    deepcopy(item)
+                    for item in plan.get("tasks") or []
+                    if str(item.get("task_id") or "") == str(task_id)
+                ),
+                None,
+            )
+            if task is None:
+                raise KeyError("待重跑节点不存在。")
+            rerun = self._isolated_agent_rerun(
+                state, plan, task, incident_id=str(incident["incident_id"])
+            )
+            incident.setdefault("rerun_history", []).append(
+                {
+                    **rerun,
+                    "actor_id": actor.actor_id,
+                    "actor_name": actor.display_name or actor.actor_id,
+                    "note": clean_note,
+                }
+            )
+            incident["status"] = "rerun_completed"
+        else:
+            incident["status"] = "resolved"
+            incident["resolved_at"] = now
+        incident["updated_at"] = now
+        incident["latest_note"] = clean_note
+        incident.setdefault("history", []).append(
+            {
+                "action": action,
+                "actor_id": actor.actor_id,
+                "actor_name": actor.display_name or actor.actor_id,
+                "note": clean_note,
+                "at": now,
+            }
+        )
+        self.graph.update_state(
+            self._config(case_id),
+            {
+                "agent_incidents": incidents,
+                "trace": [
+                    {
+                        "ts": now,
+                        "stage": f"agent.incident.{action}",
+                        "message": "Agent运行异常已执行受控处置。",
+                        "data": {
+                            "incident_id": incident["incident_id"],
+                            "plan_id": plan_id,
+                            "task_id": task_id,
+                            "action": action,
+                            "actor_id": actor.actor_id,
+                            "official_state_changed": False,
+                        },
+                    }
+                ],
+            },
+        )
+        return self._run_result(case_id), deepcopy(incident)
 
     @staticmethod
     def _writeback_payload(state: dict[str, Any], phase: str) -> tuple[str, dict[str, Any]]:

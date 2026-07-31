@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..persistence import CaseRepository
-from ..workflow.dynamic import assert_plan_integrity
+from ..workflow.dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
 
 
 SEVERITY_ORDER = {
@@ -114,6 +114,58 @@ def _severity(
     return "healthy"
 
 
+def agent_incident_view(incident: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the operational incident fields that are safe for Web responses."""
+    source = dict(incident or {})
+    assignee = dict(source.get("assignee") or {})
+    reruns = list(source.get("rerun_history") or [])
+    latest = dict(reruns[-1]) if reruns else {}
+    candidate = dict(latest.get("candidate_summary") or {})
+    safe_candidate = {
+        key: candidate.get(key)
+        for key in (
+            "score",
+            "risk_level",
+            "requires_supplement",
+            "verification_status",
+            "review_count",
+            "decisions",
+            "verification_statuses",
+        )
+        if key in candidate
+    }
+    safe_rerun = (
+        {
+            "task_id": latest.get("task_id"),
+            "task_type": latest.get("task_type"),
+            "status": latest.get("status"),
+            "attempt_count": latest.get("attempt_count"),
+            "evidence_gate": latest.get("evidence_gate"),
+            "execution_audit": latest.get("execution_audit"),
+            "candidate_summary": safe_candidate,
+            "completed_at": latest.get("completed_at"),
+            "official_state_changed": bool(latest.get("official_state_changed")),
+        }
+        if latest
+        else {}
+    )
+    return {
+        "incident_id": source.get("incident_id") or "",
+        "plan_id": source.get("plan_id") or "",
+        "agent": source.get("agent") or "",
+        "status": source.get("status") or "",
+        "opened_at": source.get("opened_at") or "",
+        "updated_at": source.get("updated_at") or "",
+        "resolved_at": source.get("resolved_at") or "",
+        "assignee": {
+            "user_id": assignee.get("user_id") or "",
+            "display_name": assignee.get("display_name") or "",
+        },
+        "rerun_count": len(reruns),
+        "latest_rerun": safe_rerun,
+    }
+
+
 class AgentOperationsService:
     """Aggregate plan integrity and execution health without exposing task payloads."""
 
@@ -132,6 +184,9 @@ class AgentOperationsService:
             )
             audits_by_plan = _last_by_key(
                 list(case.get("execution_audits") or []), ("plan_id",)
+            )
+            incidents_by_plan = _last_by_key(
+                list(case.get("agent_incidents") or []), ("plan_id",)
             )
             for plan in _latest_plans(case):
                 plan_id = str(plan.get("plan_id") or "")
@@ -152,6 +207,7 @@ class AgentOperationsService:
                     for run in plan_runs
                 )
                 audit = audits_by_plan.get((plan_id,), {})
+                incident = incidents_by_plan.get((plan_id,), {})
                 audit_status = str(audit.get("status") or "pending")
                 integrity_status = _integrity_status(plan)
                 issues = _issue_types(
@@ -212,6 +268,17 @@ class AgentOperationsService:
                         "unexpected_tasks": list(audit.get("unexpected_tasks") or []),
                         "duplicate_results": list(audit.get("duplicate_results") or []),
                         "evidence_violations": list(audit.get("evidence_violations") or []),
+                        "retryable_tasks": [
+                            {
+                                "task_id": item.get("task_id"),
+                                "task_type": item.get("task_type"),
+                                "label": item.get("label"),
+                            }
+                            for item in plan.get("tasks") or []
+                            if item.get("phase") == "analysis"
+                            and item.get("task_type") in RETRYABLE_ANALYSIS_TASKS
+                        ],
+                        "incident": agent_incident_view(incident),
                         "updated_at": max(timestamps),
                     }
                 )
@@ -248,6 +315,14 @@ class AgentOperationsService:
                 "degraded_nodes": sum(int(row["degraded_count"]) for row in rows),
                 "retry_count": sum(int(row["retry_count"]) for row in rows),
                 "reused_nodes": sum(int(row["reused_count"]) for row in rows),
+                "open_incidents": sum(
+                    bool(row["incident"].get("incident_id"))
+                    and row["incident"].get("status") != "resolved"
+                    for row in rows
+                ),
+                "resolved_incidents": sum(
+                    row["incident"].get("status") == "resolved" for row in rows
+                ),
             },
             "plans": rows,
             "security_notice": (

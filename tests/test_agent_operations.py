@@ -149,6 +149,97 @@ class AgentOperationsTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["warning_plans"], 1)
         self.assertIn("evidence_degraded", report["plans"][0]["issue_types"])
 
+    def test_incident_metrics_retry_allowlist_and_sensitive_history_are_redacted(self):
+        plan = build_credit_plan(
+            "DJ-OPS-INCIDENT",
+            {"customer_type": "new", "business_type": "TKP"},
+            [],
+        )
+        analysis_task = next(
+            item for item in plan["tasks"] if item["phase"] == "analysis"
+        )
+        self.save_case(
+            {
+                "case_id": "DJ-OPS-INCIDENT",
+                "status": "credit_pending_approval",
+                "customer": {
+                    "customer_name": "异常聚合客户",
+                    "business_type": "TKP",
+                },
+                "workflow_plans": [plan],
+                "execution_audits": [
+                    {
+                        "plan_id": plan["plan_id"],
+                        "status": "non_conformant",
+                        "integrity_valid": True,
+                    }
+                ],
+                "agent_incidents": [
+                    {
+                        "incident_id": "AINC-OPS-1",
+                        "plan_id": plan["plan_id"],
+                        "agent": "credit",
+                        "status": "rerun_completed",
+                        "assignee": {
+                            "user_id": "credit-1",
+                            "display_name": "信用甲",
+                            "email": "secret@example.com",
+                        },
+                        "latest_note": "敏感处理备注不得出现在运维报表",
+                        "history": [{"note": "敏感历史备注不得出现在运维报表"}],
+                        "rerun_history": [
+                            {
+                                "task_id": analysis_task["task_id"],
+                                "task_type": analysis_task["task_type"],
+                                "status": "completed",
+                                "attempt_count": 1,
+                                "evidence_gate": "passed",
+                                "execution_audit": "conformant",
+                                "candidate_summary": {
+                                    "score": 82,
+                                    "risk_level": "low",
+                                    "secret_payload": "候选敏感原文不得出现",
+                                },
+                                "note": "重跑备注不得出现在运维报表",
+                                "official_state_changed": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        report = AgentOperationsService(case_root=str(self.case_root)).report()
+        row = report["plans"][0]
+        self.assertEqual(report["metrics"]["open_incidents"], 1)
+        self.assertEqual(report["metrics"]["resolved_incidents"], 0)
+        self.assertEqual(row["incident"]["assignee"]["display_name"], "信用甲")
+        self.assertEqual(row["incident"]["rerun_count"], 1)
+        retryable_types = {item["task_type"] for item in row["retryable_tasks"]}
+        self.assertIn(analysis_task["task_type"], retryable_types)
+        self.assertNotIn("credit_scoring", retryable_types)
+        self.assertNotIn("credit_verification", retryable_types)
+        report_text = json.dumps(report, ensure_ascii=False)
+        for secret in (
+            "secret@example.com",
+            "敏感处理备注不得出现在运维报表",
+            "敏感历史备注不得出现在运维报表",
+            "候选敏感原文不得出现",
+            "重跑备注不得出现在运维报表",
+        ):
+            self.assertNotIn(secret, report_text)
+
+        case = json.loads(
+            (self.case_root / "DJ-OPS-INCIDENT.json").read_text(encoding="utf-8")
+        )
+        case["agent_incidents"][0]["status"] = "resolved"
+        self.save_case(case)
+        metrics = AgentOperationsService(case_root=str(self.case_root)).report()[
+            "metrics"
+        ]
+        self.assertEqual(metrics["open_incidents"], 0)
+        self.assertEqual(metrics["resolved_incidents"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

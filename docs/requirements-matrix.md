@@ -1,6 +1,6 @@
 # 命题要求与实现矩阵
 
-更新时间：2026-07-30
+更新时间：2026-07-31
 
 ## 已可演示
 
@@ -29,6 +29,7 @@
 | AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
 | 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
 | Agent执行运维 | 跨案件汇总计划完整性、执行偏差、失败/降级节点、重试和幂等复用；旧计划单独标识，管理员可直达案件运行页 | `test_agent_operations.py`、Agent运维页 |
+| Agent异常处置闭环 | 管理员确认、分派、备注、候选重跑和关闭异常；仅白名单分析节点可在隔离副本重跑，正式结论、审批状态和待办保持不变；处置写Trace、安全审计和通知 | `test_agent_incidents.py`、`test_agent_incident_api_enforces_permissions_audits_notifies_and_redacts` |
 | 安全自助注册与审核 | 注册前邮箱验证码；账号待审核停用；管理员批准/拒绝并分配角色；审核结果站内信和邮件通知 | `test_verified_registration_requires_admin_review`、注册审核页 |
 | 业务通知中心 | 注册申请、审核结果、案件流转和失败回写通知；按用户隔离，支持单条/全部已读与业务跳转 | `test_notifications_are_scoped_to_recipient_and_support_read_all`、通知中心页 |
 | 审批时效运营 | 节点级可配置 SLA、临期/逾期展示、去重站内信/邮件提醒、管理员瓶颈看板 | `test_sla_operations.py`、时效运营页 |

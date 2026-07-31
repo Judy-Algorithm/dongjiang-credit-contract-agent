@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260731-agentops2"
+import {api} from "../api.js?v=20260731-nav"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const severityLabels = {
@@ -9,6 +9,10 @@ const issueLabels = {
   plan_integrity:"计划完整性失败", execution_deviation:"执行偏差",
   node_failed:"节点失败", evidence_degraded:"证据降级",
   fallback_degraded:"降级回退", retried:"发生重试", legacy_plan:"历史计划",
+}
+const incidentLabels = {
+  open:"待确认", acknowledged:"已确认", assigned:"已分派",
+  rerun_completed:"候选重跑完成", resolved:"已关闭",
 }
 
 export async function renderAgentOperationsPage(root) {
@@ -21,7 +25,7 @@ export async function renderAgentOperationsPage(root) {
       ${metric("治理覆盖率", percent(metrics.governance_coverage))}
       ${metric("严重异常", metrics.critical_plans, metrics.critical_plans ? "overdue" : "")}
       ${metric("需要关注", metrics.warning_plans, metrics.warning_plans ? "due_soon" : "")}
-      ${metric("缓存复用", metrics.reused_nodes)}
+      ${metric("开放异常单", metrics.open_incidents)}
     </section>
     <section class="panel agent-ops-panel">
       <div class="agent-ops-toolbar">
@@ -48,6 +52,12 @@ export async function renderAgentOperationsPage(root) {
   }
   ;[search,agentType,severity].forEach((control) => control.addEventListener("input", renderRows))
   root.querySelector("#refreshAgents").addEventListener("click", () => window.dispatchEvent(new Event("app:navigate")))
+  root.querySelector("#agentRows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-incident-action]")
+    if (!button) return
+    const plan = plans.find((item) => item.plan_id === button.dataset.planId && item.case_id === button.dataset.caseId)
+    if (plan) await showIncidentDialog(root, plan, button.dataset.incidentAction)
+  })
   renderRows()
 }
 
@@ -61,15 +71,44 @@ function percent(value) {
 
 function planRow(plan) {
   const issues = (plan.issue_types || []).map((issue) => issueLabels[issue] || issue)
+  const incident = plan.incident || {}, incidentStatus = incident.status || ""
+  const needsIncident = ["critical","warning"].includes(plan.severity)
   return `<tr class="agent-ops-row severity-${escapeHtml(plan.severity)}">
     <td><a class="case-name" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>${escapeHtml(plan.customer_name || "未命名客户")}</a><small>${escapeHtml(plan.case_id)} · ${escapeHtml(plan.business_type || "—")} · ${escapeHtml(plan.owner || "未分配")}</small><b>${escapeHtml(plan.label || plan.agent)}</b></td>
     <td><code>${escapeHtml(plan.plan_id)}</code><small>Plan ${escapeHtml(plan.version || "—")} · ${plan.spec_hash ? `规范 ${escapeHtml(plan.spec_hash)}` : "无冻结哈希"}</small></td>
     <td><span class="badge agent-severity-${escapeHtml(plan.severity)}">${escapeHtml(severityLabels[plan.severity] || plan.severity)}</span><small>${integrityLabel(plan.integrity_status)} · ${auditLabel(plan.audit_status)}</small></td>
     <td><span>${plan.executed_count}/${plan.task_count} 已执行</span><small>失败 ${plan.failed_count} · 降级 ${plan.degraded_count} · 重试 ${plan.retry_count} · 复用 ${plan.reused_count}</small></td>
-    <td>${issues.length ? `<div class="agent-issue-list">${issues.map((issue) => `<span>${escapeHtml(issue)}</span>`).join("")}</div>` : `<span class="muted">未发现异常</span>`}</td>
+    <td>${issues.length ? `<div class="agent-issue-list">${issues.map((issue) => `<span>${escapeHtml(issue)}</span>`).join("")}</div>` : `<span class="muted">未发现异常</span>`}${incidentStatus ? `<div class="incident-state"><b>${escapeHtml(incidentLabels[incidentStatus] || incidentStatus)}</b><small>${escapeHtml(incident.assignee?.display_name || "未分派")} · 重跑 ${incident.rerun_count || 0} 次</small></div>` : ""}</td>
     <td>${dateTime(plan.updated_at)}</td>
-    <td><a class="primary small" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>查看运行</a></td>
+    <td><div class="agent-row-actions"><a class="primary small" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>查看运行</a>${needsIncident && !incidentStatus ? actionButton(plan,"acknowledge","确认异常") : ""}${incidentStatus && incidentStatus !== "resolved" ? `${actionButton(plan,"assign","分派")}${plan.retryable_tasks?.length ? actionButton(plan,"rerun","候选重跑") : ""}${actionButton(plan,"resolve","关闭")}` : ""}</div></td>
   </tr>`
+}
+
+function actionButton(plan, action, label) {
+  return `<button class="text-button" data-incident-action="${escapeHtml(action)}" data-case-id="${escapeHtml(plan.case_id)}" data-plan-id="${escapeHtml(plan.plan_id)}">${escapeHtml(label)}</button>`
+}
+
+async function showIncidentDialog(root, plan, action) {
+  let users = []
+  if (action === "assign") users = (await api.listUsers()).users.filter((user) => user.active)
+  const title = ({acknowledge:"确认Agent异常",assign:"分派异常责任人",rerun:"受控候选重跑",resolve:"关闭Agent异常"})[action] || "处置Agent异常"
+  const incident = plan.incident || {}
+  root.insertAdjacentHTML("beforeend", `<div id="agentIncidentDialog" class="modal-backdrop"><form class="modal-panel agent-incident-dialog"><div class="section-heading"><h3>${escapeHtml(title)}</h3><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">案件 ${escapeHtml(plan.case_id)} · ${escapeHtml(plan.label)} · ${escapeHtml(plan.plan_id)}</p>
+    ${action === "assign" ? `<label>责任人<select id="incidentAssignee" required>${users.map((user) => `<option value="${escapeHtml(user.user_id)}" ${user.user_id === incident.assignee?.user_id ? "selected" : ""}>${escapeHtml(user.display_name)} · ${escapeHtml(user.role_labels.join("/"))}</option>`).join("")}</select></label>` : ""}
+    ${action === "rerun" ? `<label>允许重跑的分析节点<select id="incidentTask" required>${(plan.retryable_tasks || []).map((task) => `<option value="${escapeHtml(task.task_id)}">${escapeHtml(task.label)} · ${escapeHtml(task.task_type)}</option>`).join("")}</select></label><div class="agent-rerun-notice">候选重跑会在隔离副本中重新执行分析、汇总与核验，不会修改正式授信、合同结论或审批状态。</div>` : ""}
+    <label>处理说明<textarea id="incidentNote" rows="4" maxlength="500" ${["rerun","resolve"].includes(action) ? "required minlength=2" : ""} placeholder="记录判断依据、排查结果或后续动作"></textarea></label><div id="incidentError" class="error-box hidden"></div><div class="form-actions"><span></span><button class="primary" type="submit">确认${escapeHtml(title.replace(/^确认/,""))}</button></div></form></div>`)
+  const dialog = root.querySelector("#agentIncidentDialog")
+  dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.remove() })
+  dialog.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault(); const error = dialog.querySelector("#incidentError"), submit = event.submitter
+    error.classList.add("hidden"); submit.disabled = true
+    try {
+      await api.manageAgentIncident(plan.case_id, {action,plan_id:plan.plan_id,note:dialog.querySelector("#incidentNote").value,assignee_user_id:dialog.querySelector("#incidentAssignee")?.value || "",task_id:dialog.querySelector("#incidentTask")?.value || ""})
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:action === "rerun" ? "候选重跑已完成，正式结论未改变" : "Agent异常状态已更新"}))
+      window.dispatchEvent(new Event("app:navigate"))
+    } catch (reason) { error.textContent = reason.message || String(reason); error.classList.remove("hidden"); submit.disabled = false }
+  })
 }
 
 function integrityLabel(value) {

@@ -12,7 +12,7 @@ import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-nav"
 import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-nav"
 import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-nav"
 import {renderOperationsPage} from "./pages/operations.js?v=20260731-nav"
-import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260731-agentops2"
+import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260731-agentincidents"
 import {renderAnalyticsPage} from "./pages/analytics.js?v=20260731-nav"
 
 const root = document.getElementById("app")

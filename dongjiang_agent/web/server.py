@@ -15,7 +15,13 @@ from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
-from ..operations import AgentOperationsService, AnalyticsService, SLAMonitor, SLAService
+from ..operations import (
+    AgentOperationsService,
+    AnalyticsService,
+    SLAMonitor,
+    SLAService,
+    agent_incident_view,
+)
 from ..persistence import CaseRepository
 from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
@@ -776,6 +782,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 if resource == "writeback-retries":
                     self._retry_writeback(case_id, payload, user)
                     return
+                if resource == "agent-incidents":
+                    self._manage_agent_incident(case_id, payload, user)
+                    return
             if (
                 len(parts) == 6
                 and parts[:2] == ["api", "cases"]
@@ -1044,6 +1053,103 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 remote_address=self._remote_address(),
             )
         self._json(200, {"ok": True, "result": result, "case": view})
+
+    def _manage_agent_incident(
+        self,
+        case_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "admin")
+        action = str(payload.get("action") or "").strip()
+        plan_id = str(payload.get("plan_id") or "").strip()
+        note = str(payload.get("note") or "")
+        task_id = str(payload.get("task_id") or "").strip()
+        if not plan_id:
+            raise ValueError("请选择需要处置的Agent计划。")
+        assignee: dict[str, Any] = {}
+        assignee_user_id = str(payload.get("assignee_user_id") or "").strip()
+        recipients: list[dict[str, Any]] = []
+        with AuthStore() as store:
+            if action == "assign":
+                target = store.get_user(assignee_user_id)
+                if not target or not target.get("active"):
+                    raise ValueError("异常责任人不存在或已停用。")
+                assignee = {
+                    "user_id": target["user_id"],
+                    "display_name": target.get("display_name") or target.get("username"),
+                }
+        with DongjiangWorkflowHarness() as harness:
+            _run, incident = harness.manage_agent_incident(
+                case_id,
+                plan_id=plan_id,
+                action=action,
+                actor=self._actor(user),
+                note=note,
+                assignee=assignee,
+                task_id=task_id,
+            )
+        link = f"/cases/{case_id}?tab=agents"
+        with AuthStore() as store:
+            store.audit(
+                f"agent.incident.{action}",
+                actor=user,
+                target_type="agent_incident",
+                target_id=str(incident.get("incident_id") or ""),
+                detail={
+                    "case_id": case_id,
+                    "plan_id": plan_id,
+                    "task_id": task_id,
+                    "assignee_user_id": assignee.get("user_id"),
+                    "status": incident.get("status"),
+                    "official_state_changed": False,
+                },
+                remote_address=self._remote_address(),
+            )
+            if action == "assign" and assignee.get("user_id"):
+                notification = store.create_notification(
+                    str(assignee["user_id"]),
+                    category="agent_incident",
+                    title="Agent运行异常已分派",
+                    body=f"案件 {case_id} 的Agent运行异常已分派给你处理。",
+                    link=link,
+                    dedupe_key=(
+                        f"agent-incident:{incident.get('incident_id')}:"
+                        f"assign:{assignee.get('user_id')}:{incident.get('updated_at')}"
+                    ),
+                )
+                if notification:
+                    recipients = [assignee]
+            elif action in {"rerun", "resolve"}:
+                recipients = store.notify_roles(
+                    ["admin"],
+                    category="agent_incident",
+                    title=(
+                        "Agent候选重跑已完成"
+                        if action == "rerun"
+                        else "Agent运行异常已关闭"
+                    ),
+                    body=f"案件 {case_id} 的Agent异常处置状态已更新。",
+                    link=link,
+                    exclude_user_id=str(user.get("user_id") or ""),
+                )
+        if recipients:
+            self._send_notification_emails(
+                recipients,
+                "Agent运行异常处置",
+                f"案件 {case_id} 的Agent异常状态已更新。",
+                link,
+            )
+        self._json(
+            200,
+            {
+                "ok": True,
+                "incident": agent_incident_view(incident),
+                "case_id": case_id,
+            },
+        )
 
     def _submit_contract_revision(
         self,

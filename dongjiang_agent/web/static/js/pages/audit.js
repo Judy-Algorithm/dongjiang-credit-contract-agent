@@ -7,6 +7,7 @@ const labels = {
   "user.created":"创建用户","user.updated":"调整用户","case.created":"发起信审","case.action":"处理案件",
   "case.owner_assigned":"调整负责人",
   "integration.writeback_retried":"重试系统回写",
+  "agent.incident.acknowledge":"确认Agent异常","agent.incident.assign":"分派Agent异常","agent.incident.rerun":"候选重跑Agent节点","agent.incident.resolve":"关闭Agent异常",
 }
 
 export async function renderAuditPage(root) {

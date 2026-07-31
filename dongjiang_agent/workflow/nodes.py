@@ -136,6 +136,12 @@ def cached_task_update(
     task: dict[str, Any],
     executions: TaskExecutionStore,
 ) -> dict[str, Any] | None:
+    rerun = dict(state.get("agent_rerun_context") or {})
+    if (
+        rerun.get("plan_id") == plan.get("plan_id")
+        and rerun.get("task_id") == task.get("task_id")
+    ):
+        return None
     cached = existing_task_result(state, plan, task)
     source = "checkpoint"
     if cached is None:
@@ -636,13 +642,14 @@ class WorkflowNodes:
                     ),
                     output_summary=summary,
                 )
-        self.executions.save(
-            state["case_id"],
-            plan["plan_id"],
-            result["idempotency_key"],
-            result=result,
-            run=run,
-        )
+        if not state.get("agent_rerun_context"):
+            self.executions.save(
+                state["case_id"],
+                plan["plan_id"],
+                result["idempotency_key"],
+                result=result,
+                run=run,
+            )
         return {
             "agent_task_results": [result],
             "agent_runs": [run],
@@ -1522,13 +1529,14 @@ class WorkflowNodes:
             attempt_history=attempt_history,
             evidence_gate=evidence_gate,
         )
-        self.executions.save(
-            state["case_id"],
-            plan["plan_id"],
-            result["idempotency_key"],
-            result=result,
-            run=run,
-        )
+        if not state.get("agent_rerun_context"):
+            self.executions.save(
+                state["case_id"],
+                plan["plan_id"],
+                result["idempotency_key"],
+                result=result,
+                run=run,
+            )
         return {
             "agent_task_results": [result],
             "agent_runs": [run],
