@@ -28,6 +28,8 @@
 | 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
 | AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
 | 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
+| 安全自助注册与审核 | 注册前邮箱验证码；账号待审核停用；管理员批准/拒绝并分配角色；审核结果站内信和邮件通知 | `test_verified_registration_requires_admin_review`、注册审核页 |
+| 业务通知中心 | 注册申请、审核结果、案件流转和失败回写通知；按用户隔离，支持单条/全部已读与业务跳转 | `test_notifications_are_scoped_to_recipient_and_support_read_all`、通知中心页 |
 | 固定演示路径 | 幂等生成资料补件、TKP 120天特批、无责取消修订三条合成案件 | `python scripts/prepare_demo_cases.py` |
 | 结果可量化 | 决策回归准确率、平均/P95耗时 | `python3 scripts/evaluate.py` |
 | 可审计 | 案件 Trace、政策版本、证据和规则 ID | `audit-result.json` |

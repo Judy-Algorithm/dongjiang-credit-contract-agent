@@ -133,6 +133,7 @@ nav a.active:not(.primary)::after {
   border-radius: 999px;
   background: var(--primary);
 }
+.nav-count { min-width: 18px; height: 18px; margin-left: 5px; padding: 0 5px; display: inline-grid; place-items: center; border-radius: 999px; background: var(--primary); color: var(--canvas); font-size: 10px; font-weight: 700; line-height: 18px; }
 
 .page-shell {
   width: min(1180px, calc(100% - 48px));
@@ -437,6 +438,9 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .auth-links { min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .auth-links.single { justify-content: center; }
 .auth-links a, .link-button { padding: 2px 0; background: transparent; border: 0; color: var(--primary); font-size: 13px; font-weight: 600; cursor: pointer; }
+.code-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 7px; }
+.code-input-row input { margin-top: 0; }
+.code-input-row button { min-height: 46px; padding: 9px 13px; white-space: nowrap; }
 .auth-success { padding: 13px 14px; background: var(--green-bg); border: 1px solid #a9d5bb; border-radius: 8px; color: var(--green); font-size: 13px; line-height: 1.5; }
 .auth-footer { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
 .field-hint { margin: 0; color: var(--muted); font-size: 12px; font-weight: 400; }
@@ -463,6 +467,28 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .role-list { display: flex; gap: 5px; flex-wrap: wrap; }
 .role-list span { padding: 4px 8px; background: var(--surface-strong); border-radius: 999px; color: var(--body); font-size: 11px; }
 .danger-text { color: var(--red); }
+.registration-list { display: grid; gap: 14px; }
+.registration-card { padding: 24px; }
+.registration-person { display: flex; align-items: center; gap: 13px; }
+.registration-person > span { width: 48px; height: 48px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--ink); color: var(--canvas); font-size: 18px; font-weight: 650; }
+.registration-person h2 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 650; }
+.registration-person p, .registration-person small { display: block; margin: 3px 0 0; color: var(--muted); }
+.registration-actions { margin-top: 22px; display: flex; justify-content: flex-end; gap: 9px; }
+.reviewed-applications { margin-top: 20px; padding: 22px; }
+.notification-panel { overflow: hidden; }
+.notification-list { display: grid; }
+.notification-row { width: 100%; padding: 18px 20px; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: start; gap: 13px; background: var(--canvas); border: 0; border-bottom: 1px solid var(--hairline-soft); color: var(--body); cursor: pointer; text-align: left; }
+.notification-row:last-child { border-bottom: 0; }
+.notification-row:hover { background: var(--surface-soft); }
+.notification-row.unread { background: #fffafd; }
+.notification-dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: transparent; }
+.notification-row.unread .notification-dot { background: var(--primary); }
+.notification-content > * { display: block; }
+.notification-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.notification-meta b { color: var(--primary-active); font-weight: 650; }
+.notification-content strong { margin-top: 5px; color: var(--ink); font-size: 15px; font-weight: 650; }
+.notification-content > span:last-child { margin-top: 4px; color: var(--body); line-height: 1.55; }
+.notification-arrow { padding-top: 6px; color: var(--primary-active); font-size: 12px; font-weight: 650; white-space: nowrap; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; padding: 20px; display: grid; place-items: center; background: rgba(0, 0, 0, .5); }
 .modal-panel { width: min(480px, 100%); padding: 26px; background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .24); }
@@ -595,6 +621,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .primary, .secondary, .danger { min-height: 48px; }
   .primary.small { min-height: 44px; }
   .auth-screen { padding: 32px 16px; }
+  .code-input-row { grid-template-columns: 1fr; }
   .auth-panel { padding: 26px 20px; }
   .role-picker { display: grid; grid-template-columns: 1fr 1fr; }
   .inline-editor .form-actions { gap: 14px; }
@@ -610,6 +637,11 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .revision-version { align-items: stretch; flex-direction: column; }
   .revision-actions > * { flex: 1; text-align: center; }
   .toast { right: 12px; bottom: 12px; max-width: calc(100% - 24px); }
+  .registration-card { padding: 20px 16px; }
+  .registration-actions { flex-direction: column-reverse; }
+  .registration-actions > * { width: 100%; }
+  .notification-row { grid-template-columns: 8px minmax(0, 1fr); padding: 16px; }
+  .notification-arrow { grid-column: 2; padding-top: 0; }
   .modal-panel { padding: 22px 18px; }
 }
 

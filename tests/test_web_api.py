@@ -9,7 +9,7 @@ import unittest
 import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from dongjiang_agent.integrations import IntegrationBundle
 from dongjiang_agent.security import AuthStore
@@ -174,6 +174,10 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("角色", forbidden["error"])
 
         self.activate_user("credit.a")
+        status, credit_notices = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200)
+        self.assertEqual(credit_notices["unread"], 1)
+        self.assertEqual(credit_notices["items"][0]["link"], f"/cases/{case_id}/action")
         status, credit_tasks = self.request("GET", "/api/cases?mine=1")
         self.assertEqual(status, 200)
         self.assertEqual(credit_tasks["total"], 1)
@@ -188,6 +192,12 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(detail["case"]["next_action"])
         self.assertEqual(detail["case"]["pending_action"]["type"], "upload_contract")
+
+        self.assertEqual(self.login("sales.a", "ActivePass456")[0], 200)
+        status, sales_notices = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200)
+        self.assertEqual(sales_notices["unread"], 1)
+        self.assertEqual(sales_notices["items"][0]["link"], f"/cases/{case_id}/action")
 
     def test_admin_user_management_and_password_change(self):
         user = self.create_user("finance.a", "财务甲", ["finance"])
@@ -254,7 +264,41 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("首次登录", blocked["error"])
 
-    def test_public_registration_creates_disabled_sales_account(self):
+    @patch("dongjiang_agent.web.server.SecurityEmailSender")
+    def test_verified_registration_requires_admin_review(self, sender_class):
+        sender = sender_class.return_value
+        sender.configured = True
+        captured = {}
+        sender.send_registration_code.side_effect = (
+            lambda recipient, code: captured.update(recipient=recipient, code=code)
+        )
+        status, requested, _ = self.raw_request(
+            "POST", "/api/auth/registration-code", {"email": "sales@example.com"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(requested["ok"])
+        self.assertEqual(captured["recipient"], "sales@example.com")
+        self.assertRegex(captured["code"], r"^\d{6}$")
+        with AuthStore() as store:
+            row = store.connection.execute(
+                "SELECT code_hash FROM registration_verification_codes ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            self.assertNotEqual(row["code_hash"], captured["code"])
+
+        status, invalid, _ = self.raw_request(
+            "POST",
+            "/api/auth/register",
+            {
+                "display_name": "注册销售",
+                "username": "registered.sales",
+                "email": "sales@example.com",
+                "password": "Registered123",
+                "verification_code": "000000",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(invalid["ok"])
+
         status, registered, _ = self.raw_request(
             "POST",
             "/api/auth/register",
@@ -263,26 +307,130 @@ class WebApiTests(unittest.TestCase):
                 "username": "registered.sales",
                 "email": "sales@example.com",
                 "password": "Registered123",
+                "verification_code": captured["code"],
             },
         )
         self.assertEqual(status, 201)
         self.assertEqual(registered["user"]["roles"], ["sales"])
         self.assertFalse(registered["user"]["active"])
+        self.assertEqual(registered["user"]["registration_status"], "pending")
         self.assertNotIn("csrf_token", registered)
         self.assertEqual(self.login("registered.sales", "Registered123")[0], 401)
 
-        status, duplicate, _ = self.raw_request(
+        status, applications = self.request("GET", "/api/registrations")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(applications["applications"]), 1)
+        status, admin_notifications = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200)
+        self.assertEqual(admin_notifications["unread"], 1)
+        self.assertEqual(admin_notifications["items"][0]["category"], "registration")
+
+        user_id = registered["user"]["user_id"]
+        status, reviewed = self.request(
             "POST",
-            "/api/auth/register",
+            f"/api/registrations/{user_id}/review",
+            {"decision": "approve", "roles": ["sales", "credit"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(reviewed["user"]["active"])
+        self.assertEqual(reviewed["user"]["registration_status"], "approved")
+        self.assertEqual(reviewed["user"]["roles"], ["credit", "sales"])
+        sender.send_registration_review.assert_called_once_with(
+            "sales@example.com", approved=True, username="registered.sales"
+        )
+        self.assertEqual(self.login("registered.sales", "Registered123")[0], 200)
+        status, user_notifications = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200)
+        self.assertEqual(user_notifications["unread"], 1)
+        notice_id = user_notifications["items"][0]["notification_id"]
+        self.assertEqual(self.request("POST", f"/api/notifications/{notice_id}/read", {})[0], 200)
+        self.assertEqual(self.request("GET", "/api/notifications")[1]["unread"], 0)
+
+    def test_registration_review_is_admin_only_and_rejection_blocks_login(self):
+        with AuthStore() as store:
+            pending = store.create_user(
+                username="pending.user",
+                display_name="待审核用户",
+                email="pending@example.com",
+                password="PendingPass123",
+                roles=["sales"],
+                active=False,
+                registration_status="pending",
+                must_change_password=False,
+            )
+        sales = self.create_user("review.sales", "普通销售", ["sales"])
+        self.activate_user("review.sales")
+        status, denied = self.request("GET", "/api/registrations")
+        self.assertEqual(status, 403)
+        self.assertFalse(denied["ok"])
+
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
+        status, rejected = self.request(
+            "POST",
+            f"/api/registrations/{pending['user_id']}/review",
+            {"decision": "reject", "roles": ["sales"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(rejected["user"]["registration_status"], "rejected")
+        self.assertFalse(rejected["user"]["active"])
+        self.assertEqual(self.login("pending.user", "PendingPass123")[0], 401)
+
+    def test_notifications_are_scoped_to_recipient_and_support_read_all(self):
+        first = self.create_user("notice.first", "通知甲", ["sales"])
+        second = self.create_user("notice.second", "通知乙", ["sales"])
+        with AuthStore() as store:
+            first_notice = store.create_notification(
+                first["user_id"], category="system", title="甲的通知", body="仅甲可见"
+            )
+            store.create_notification(
+                second["user_id"], category="system", title="乙的通知", body="仅乙可见"
+            )
+        self.activate_user("notice.first")
+        status, notices = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200)
+        self.assertEqual([item["title"] for item in notices["items"]], ["甲的通知"])
+        status, missing = self.request("POST", "/api/notifications/not-owned/read", {})
+        self.assertEqual(status, 404)
+        self.assertFalse(missing["ok"])
+        self.assertEqual(self.request("POST", "/api/notifications/read-all", {})[0], 200)
+        self.assertEqual(self.request("GET", "/api/notifications")[1]["unread"], 0)
+
+    @patch("dongjiang_agent.web.server.SecurityEmailSender")
+    def test_case_notification_email_failure_does_not_block_workflow(self, sender_class):
+        credit = self.create_user("notice.credit", "邮件信用审批", ["credit"])
+        self.assertEqual(
+            self.request(
+                "PATCH", f"/api/users/{credit['user_id']}", {"email": "credit-notice@example.com"}
+            )[0],
+            200,
+        )
+        sender = sender_class.return_value
+        sender.configured = True
+        sender.send_notification.side_effect = RuntimeError("SMTP unavailable")
+        status, created = self.request(
+            "POST",
+            "/api/cases",
             {
-                "display_name": "重复邮箱",
-                "username": "registered.other",
-                "email": "SALES@example.com",
-                "password": "Registered456",
+                "customer": {
+                    "customer_name": "邮件失败不阻塞客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
             },
         )
-        self.assertEqual(status, 400)
-        self.assertFalse(duplicate["ok"])
+        self.assertEqual(status, 201)
+        self.assertEqual(created["case"]["status"], "credit_pending_approval")
+        sender.send_notification.assert_called_with(
+            "credit-notice@example.com",
+            title="待处理信用审批",
+            body=ANY,
+            link=f"/cases/{created['case']['case_id']}/action",
+        )
 
     @patch("dongjiang_agent.web.server.SecurityEmailSender")
     def test_email_code_resets_password_and_invalidates_session(self, sender_class):
@@ -533,13 +681,14 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
-        self.connection.request("GET", "/cases/new")
-        response = self.connection.getresponse()
-        html = response.read().decode("utf-8")
-        self.assertEqual(response.status, 200)
-        self.assertIn('id="app"', html)
-        self.assertNotIn("运行风险演示案例", html)
-        self.assertNotIn("华南精密制造示例有限公司", html)
+        for route in ("/cases/new", "/registrations", "/notifications"):
+            self.connection.request("GET", route)
+            response = self.connection.getresponse()
+            html = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn('id="app"', html)
+            self.assertNotIn("运行风险演示案例", html)
+            self.assertNotIn("华南精密制造示例有限公司", html)
 
     def test_oa_callback_requires_token_and_complete_approval_chain(self):
         _, created = self.request(

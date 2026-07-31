@@ -13,6 +13,8 @@ export function currentRoute() {
   if (path === "/setup") return {name:"setup", params}
   if (path === "/change-password") return {name:"change-password", params}
   if (path === "/users") return {name:"users", params}
+  if (path === "/registrations") return {name:"registrations", params}
+  if (path === "/notifications") return {name:"notifications", params}
   if (path === "/audit") return {name:"audit", params}
   if (path === "/writebacks") return {name:"writebacks", params}
   if (path === "/" || path === "/cases") return {name:"cases", params}

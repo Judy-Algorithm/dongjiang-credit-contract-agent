@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-auth"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-auth"
+import {api} from "../api.js?v=20260731-notify"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-notify"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],

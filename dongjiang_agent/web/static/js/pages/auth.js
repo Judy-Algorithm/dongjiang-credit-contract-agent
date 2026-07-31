@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260731-auth"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260731-auth"
-import {navigate} from "../router.js?v=20260731-auth"
-import {escapeHtml} from "../format.js?v=20260731-auth"
+import {api} from "../api.js?v=20260731-notify"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260731-notify"
+import {navigate} from "../router.js?v=20260731-notify"
+import {escapeHtml} from "../format.js?v=20260731-notify"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `
@@ -26,18 +26,44 @@ export function renderLoginPage(root) {
 }
 
 export function renderRegisterPage(root) {
-  root.innerHTML = authLayout("注册账号", "新账号默认获得销售角色", `
+  root.innerHTML = authLayout("注册账号", "验证邮箱后提交账号申请", `
     <form id="registerForm" class="auth-form">
       <label>姓名<input id="displayName" autocomplete="name" required autofocus></label>
       <label>用户名<input id="username" autocomplete="username" minlength="3" maxlength="40" required></label>
-      <label>邮箱<input id="email" type="email" autocomplete="email" required></label>
+      <label>邮箱<div class="code-input-row"><input id="email" type="email" autocomplete="email" required><button id="sendRegistrationCode" class="secondary" type="button">发送验证码</button></div></label>
+      <label>邮箱验证码<input id="verificationCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6位数字" required></label>
       <label>密码<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>
       <label>确认密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required></label>
-      <p class="field-hint">密码至少10个字符，同时包含字母和数字。其他审批角色由管理员分配。</p>
+      <p class="field-hint">验证码10分钟内有效。申请提交后由管理员审核并分配角色，结果会发送到该邮箱。</p>
       <div id="authError" class="error-box hidden"></div>
       <button class="primary auth-submit" type="submit">提交注册申请</button>
       <div class="auth-links single"><a href="/login" data-link>返回登录</a></div>
     </form>`)
+  const codeButton = root.querySelector("#sendRegistrationCode")
+  codeButton.addEventListener("click", async () => {
+    const error = root.querySelector("#authError")
+    const email = root.querySelector("#email")
+    error.classList.add("hidden")
+    if (!email.reportValidity()) return
+    codeButton.disabled = true
+    try {
+      const data = await api.requestRegistrationCode({email:email.value.trim()})
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:data.message}))
+      root.querySelector("#verificationCode").focus()
+      let seconds = 60
+      codeButton.textContent = `${seconds}秒后重发`
+      const timer = window.setInterval(() => {
+        if (!document.body.contains(codeButton)) return window.clearInterval(timer)
+        seconds -= 1
+        codeButton.textContent = seconds > 0 ? `${seconds}秒后重发` : "重新发送"
+        if (seconds <= 0) { codeButton.disabled = false; window.clearInterval(timer) }
+      }, 1000)
+    } catch (reason) {
+      error.textContent = reason.message || String(reason)
+      error.classList.remove("hidden")
+      codeButton.disabled = false
+    }
+  })
   root.querySelector("#registerForm").addEventListener("submit", async (event) => {
     event.preventDefault()
     await submitAuth(root, async () => {
@@ -47,6 +73,7 @@ export function renderRegisterPage(root) {
         display_name:root.querySelector("#displayName").value,
         username:root.querySelector("#username").value,
         email:root.querySelector("#email").value,
+        verification_code:root.querySelector("#verificationCode").value,
         password,
       })
       window.dispatchEvent(new CustomEvent("app:toast", {detail:data.message}))

@@ -1,14 +1,16 @@
-import {api} from "./api.js?v=20260731-auth"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-auth"
-import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-auth"
-import {renderAuditPage} from "./pages/audit.js?v=20260731-auth"
-import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-auth"
-import {renderCasesPage} from "./pages/cases.js?v=20260731-auth"
-import {renderNewCasePage} from "./pages/case-new.js?v=20260731-auth"
-import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-auth"
-import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-auth"
-import {renderUsersPage} from "./pages/users.js?v=20260731-auth"
-import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-auth"
+import {api} from "./api.js?v=20260731-notify"
+import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-notify"
+import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-notify"
+import {renderAuditPage} from "./pages/audit.js?v=20260731-notify"
+import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-notify"
+import {renderCasesPage} from "./pages/cases.js?v=20260731-notify"
+import {renderNewCasePage} from "./pages/case-new.js?v=20260731-notify"
+import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-notify"
+import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-notify"
+import {renderUsersPage} from "./pages/users.js?v=20260731-notify"
+import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-notify"
+import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-notify"
+import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-notify"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -28,7 +30,7 @@ async function render() {
     if (auth.authenticated && auth.user.must_change_password && route.name !== "change-password") return navigate("/change-password", {replace:true})
     if (route.name === "not-found") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
 
-    renderHeader(auth, route)
+    await renderHeader(auth, route)
     setActiveNav(route)
     if (route.name === "login") renderLoginPage(root)
     if (route.name === "register") renderRegisterPage(root)
@@ -54,6 +56,11 @@ async function render() {
       if (!hasRole("admin")) throw new Error("只有管理员可以处理系统回写。")
       await renderWritebacksPage(root)
     }
+    if (route.name === "registrations") {
+      if (!hasRole("admin")) throw new Error("只有管理员可以审核注册申请。")
+      await renderRegistrationsPage(root)
+    }
+    if (route.name === "notifications") await renderNotificationsPage(root)
   } catch (error) {
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
   } finally {
@@ -62,19 +69,31 @@ async function render() {
   }
 }
 
-function renderHeader(auth, route) {
+async function renderHeader(auth, route) {
   const publicPage = ["login","register","forgot-password","setup"].includes(route.name)
   shellHeader.classList.toggle("hidden", publicPage)
   root.classList.toggle("auth-shell", publicPage)
   if (publicPage || !auth.authenticated) return
   const user = auth.user
+  let unread = 0
+  let pendingRegistrations = 0
+  try {
+    unread = Number((await api.listNotifications()).unread || 0)
+    if (hasRole("admin")) {
+      const applications = (await api.listRegistrations()).applications || []
+      pendingRegistrations = applications.filter((item) => item.registration_status === "pending").length
+    }
+  } catch (_) {
+    // Header counters are helpful but must not block the working page.
+  }
   shellHeader.innerHTML = `
     <a class="identity" href="/cases" data-link><span class="brand-mark">东江</span><span>信审与合同评审</span></a>
     <nav>
       <a href="/cases" data-link data-nav="cases">案件</a>
       <a href="/cases?mine=1" data-link data-nav="tasks">我的待办</a>
       ${hasRole("sales") ? `<a class="primary small" href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
-      ${hasRole("admin") ? `<a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
+      <a href="/notifications" data-link data-nav="notifications">通知${unread ? `<span class="nav-count">${Math.min(unread, 99)}</span>` : ""}</a>
+      ${hasRole("admin") ? `<a href="/registrations" data-link data-nav="registrations">注册审核${pendingRegistrations ? `<span class="nav-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b></button>
         <div id="accountPopover" class="account-popover hidden">
@@ -91,7 +110,7 @@ function renderHeader(auth, route) {
 }
 
 function setActiveNav(route) {
-  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
+  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "registrations" ? "registrations" : route.name === "notifications" ? "notifications" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
 }
 

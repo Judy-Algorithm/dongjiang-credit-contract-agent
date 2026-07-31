@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260731-auth"
+import {api, setCsrfToken} from "./api.js?v=20260731-notify"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

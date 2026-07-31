@@ -1,9 +1,9 @@
-import {api} from "../api.js?v=20260731-auth"
-import {dateTime, escapeHtml} from "../format.js?v=20260731-auth"
+import {api} from "../api.js?v=20260731-notify"
+import {dateTime, escapeHtml} from "../format.js?v=20260731-notify"
 
 const labels = {
   "auth.login":"登录","auth.logout":"退出登录","auth.password_changed":"修改密码","auth.password_reset":"管理员重置密码",
-  "auth.password_reset_requested":"请求找回密码","auth.password_reset_confirmed":"确认找回密码","user.registered":"提交注册申请",
+  "auth.password_reset_requested":"请求找回密码","auth.password_reset_confirmed":"确认找回密码","auth.registration_code_requested":"请求注册验证码","auth.registration_code_confirmed":"确认注册验证码","user.registered":"提交注册申请","user.registration_reviewed":"审核注册申请",
   "user.created":"创建用户","user.updated":"调整用户","case.created":"发起信审","case.action":"处理案件",
   "case.owner_assigned":"调整负责人",
   "integration.writeback_retried":"重试系统回写",

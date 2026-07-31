@@ -39,9 +39,9 @@ python -m dongjiang_agent.cli serve --host 127.0.0.1 --port 8765
 
 `deploy/.env.local-tunnel` 只保存 Tunnel Token，并已加入 `.gitignore`。不要把 Token 写进脚本、截图或 GitHub。
 
-### 配置邮件找回密码
+### 配置注册验证和找回密码邮件
 
-找回密码需要 SMTP。以 163 邮箱为例，在邮箱设置中开启 SMTP 并生成客户端授权密码，然后在本机项目根目录的 `.env` 中填写：
+注册邮箱验证、注册审核结果和找回密码共用系统 SMTP 发件账号。以 163 邮箱为例，在邮箱设置中开启 SMTP 并生成客户端授权密码，然后在本机项目根目录的 `.env` 中填写：
 
 ```text
 DONGJIANG_SMTP_HOST=smtp.163.com
@@ -51,9 +51,10 @@ DONGJIANG_SMTP_PASSWORD=邮箱生成的客户端授权密码
 DONGJIANG_SMTP_FROM=你的163邮箱
 DONGJIANG_SMTP_USE_SSL=true
 DONGJIANG_SMTP_STARTTLS=false
+DONGJIANG_PUBLIC_URL=https://credit.1832104.xyz
 ```
 
-`DONGJIANG_SMTP_PASSWORD` 不是邮箱网页登录密码。修改 `.env` 后必须重启本地 Python 服务，不能把授权密码提交到 Git。
+`DONGJIANG_SMTP_PASSWORD` 不是邮箱网页登录密码。`DONGJIANG_PUBLIC_URL` 用于生成通知邮件中的案件处理链接，应填写实际 HTTPS 域名。修改 `.env` 后必须重启本地 Python 服务，不能把授权密码提交到 Git。
 
 ### Cloudflare Access
 

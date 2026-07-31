@@ -24,6 +24,21 @@ STATIC_ROOT = Path(__file__).with_name("static")
 MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_REQUEST_BYTES = 30 * 1024 * 1024
 SESSION_COOKIE = "dongjiang_session"
+WAITING_ROLES = {
+    "credit_approval": ["credit", "finance"],
+    "special_release": ["director"],
+    "manager_approval": ["director", "ceo"],
+    "finance_legal_review": ["finance", "legal"],
+}
+WAITING_LABELS = {
+    "credit_approval": "待处理信用审批",
+    "credit_supplement": "待补充信用资料",
+    "special_release": "待处理特别放行",
+    "contract_upload": "待上传合同",
+    "sales_revision": "待修改合同",
+    "manager_approval": "待处理管理层审批",
+    "finance_legal_review": "待处理财务法务复核",
+}
 
 
 class AuthenticationError(PermissionError):
@@ -168,11 +183,90 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         view["contract_revisions"] = ContractRevisionStore().list(str(view["case_id"]))
         return view
 
+    @staticmethod
+    def _notify_case_waiting(run: Any, actor: dict[str, Any]) -> None:
+        waiting_for = str(run.waiting_for or "")
+        if not waiting_for:
+            return
+        state = dict(run.state)
+        customer_name = str((state.get("customer") or {}).get("customer_name") or "客户")
+        title = WAITING_LABELS.get(waiting_for, "案件待处理")
+        body = f"案件 {run.case_id}（{customer_name}）已流转至：{title}。"
+        link = f"/cases/{run.case_id}/action"
+        recipients: list[dict[str, Any]] = []
+        with AuthStore() as store:
+            if waiting_for in {"credit_supplement", "contract_upload", "sales_revision"}:
+                owner = dict(state.get("owner") or state.get("applicant") or {})
+                owner_id = str(owner.get("user_id") or "")
+                if owner_id and owner_id != str(actor.get("user_id") or ""):
+                    store.create_notification(
+                        owner_id,
+                        category="case",
+                        title=title,
+                        body=body,
+                        link=link,
+                    )
+                    owner_user = store.get_user(owner_id)
+                    if owner_user:
+                        recipients.append(owner_user)
+            else:
+                roles = WAITING_ROLES.get(waiting_for)
+                if roles:
+                    recipients = store.notify_roles(
+                        roles,
+                        category="case",
+                        title=title,
+                        body=body,
+                        link=link,
+                        exclude_user_id=str(actor.get("user_id") or ""),
+                    )
+        AuditRequestHandler._send_notification_emails(recipients, title, body, link)
+
+    @staticmethod
+    def _send_notification_emails(
+        recipients: list[dict[str, Any]], title: str, body: str, link: str
+    ) -> None:
+        sender = SecurityEmailSender()
+        if not sender.configured:
+            return
+        for user in recipients:
+            email = str(user.get("email") or "").strip()
+            if not email:
+                continue
+            try:
+                sender.send_notification(email, title=title, body=body, link=link)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _notify_failed_writebacks(run: Any) -> None:
+        failures: list[str] = []
+        for phase, result in (run.state.get("writeback") or {}).items():
+            if not isinstance(result, dict):
+                continue
+            for system in ("oa", "crm", "sap"):
+                if str((result.get(system) or {}).get("status") or "") == "failed":
+                    failures.append(f"{system.upper()} / {phase}")
+        if not failures:
+            return
+        body = f"案件 {run.case_id} 的 {'、'.join(failures)} 回写失败，请进入回写运维处理。"
+        with AuthStore() as store:
+            recipients = store.notify_roles(
+                ["admin"],
+                category="writeback",
+                title="系统回写失败",
+                body=body,
+                link="/writebacks",
+            )
+        AuditRequestHandler._send_notification_emails(
+            recipients, "系统回写失败", body, "/writebacks"
+        )
+
     def _static(self, relative: str) -> None:
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -328,6 +422,17 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     users = store.list_users()
                 self._json(200, {"ok": True, "users": users})
                 return
+            if path == "/api/registrations":
+                self._require_roles(user, "admin")
+                with AuthStore() as store:
+                    applications = store.list_registration_applications()
+                self._json(200, {"ok": True, "applications": applications})
+                return
+            if path == "/api/notifications":
+                with AuthStore() as store:
+                    result = store.list_notifications(str(user["user_id"]))
+                self._json(200, {"ok": True, **result})
+                return
             if path == "/api/audit":
                 self._require_roles(user, "admin")
                 with AuthStore() as store:
@@ -433,12 +538,37 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         display_name=str(payload.get("display_name") or ""),
                         email=str(payload.get("email") or ""),
                         password=str(payload.get("password") or ""),
+                        verification_code=str(payload.get("verification_code") or ""),
                         remote_address=self._remote_address(),
                     )
+                    administrators = store.users_for_roles(["admin"])
+                self._send_notification_emails(
+                    administrators,
+                    "新的注册申请",
+                    f"{user['display_name']}（{user['username']}）已完成邮箱验证，等待审核。",
+                    "/registrations",
+                )
                 self._json(
                     201,
                     {"ok": True, "user": user, "message": "注册申请已提交，请等待管理员启用账号。"},
                 )
+                return
+            if path == "/api/auth/registration-code":
+                sender = SecurityEmailSender()
+                if not sender.configured:
+                    raise RuntimeError("邮件服务尚未配置，请联系管理员。")
+                with AuthStore() as store:
+                    issued = store.issue_registration_verification_code(
+                        str(payload.get("email") or ""), self._remote_address()
+                    )
+                if issued:
+                    try:
+                        sender.send_registration_code(*issued)
+                    except Exception:
+                        with AuthStore() as store:
+                            store.invalidate_latest_registration_code(issued[0])
+                        raise
+                self._json(200, {"ok": True, "message": "验证码已发送，请检查邮箱。"})
                 return
             if path == "/api/auth/password-reset/request":
                 email = str(payload.get("email") or "")
@@ -522,6 +652,38 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 return
             if user.get("must_change_password"):
                 raise PermissionError("首次登录必须先修改初始密码。")
+            if path == "/api/notifications/read-all":
+                with AuthStore() as store:
+                    store.mark_all_notifications_read(str(user["user_id"]))
+                self._json(200, {"ok": True})
+                return
+            parts = [item for item in path.split("/") if item]
+            if len(parts) == 4 and parts[:2] == ["api", "notifications"] and parts[3] == "read":
+                with AuthStore() as store:
+                    store.mark_notification_read(str(user["user_id"]), parts[2])
+                self._json(200, {"ok": True})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "registrations"] and parts[3] == "review":
+                self._require_roles(user, "admin")
+                decision = str(payload.get("decision") or "").strip().lower()
+                with AuthStore() as store:
+                    reviewed = store.review_registration(
+                        parts[2],
+                        decision=decision,
+                        roles=list(payload.get("roles") or ["sales"]),
+                        actor=user,
+                        remote_address=self._remote_address(),
+                    )
+                try:
+                    SecurityEmailSender().send_registration_review(
+                        str(reviewed.get("email") or ""),
+                        approved=decision == "approve",
+                        username=str(reviewed.get("username") or ""),
+                    )
+                except Exception:
+                    pass
+                self._json(200, {"ok": True, "user": reviewed})
+                return
             if path == "/api/users":
                 self._require_roles(user, "admin")
                 with AuthStore() as store:
@@ -666,6 +828,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 decision,
                 actor=ActorContext(str(payload.get("actor_id") or "oa-callback"), ("finance",), "oa", "OA审批"),
             )
+        self._notify_case_waiting(run, {"user_id": str(payload.get("actor_id") or "oa-callback")})
+        self._notify_failed_writebacks(run)
         self._json(200, {"ok": True, "case": case_view(dict(run.state), waiting_for=run.waiting_for)})
 
     def _create_case(self, payload: dict[str, Any], user: dict[str, Any]) -> None:
@@ -691,6 +855,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 target_id=run.case_id,
                 remote_address=self._remote_address(),
             )
+        self._notify_case_waiting(run, user)
+        self._notify_failed_writebacks(run)
         self._json(201, {"ok": True, "case": self._workflow_view(run, user)})
 
     def _create_contract_revision(
@@ -860,6 +1026,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 detail={"revision_id": revision_id, **result},
                 remote_address=self._remote_address(),
             )
+        self._notify_case_waiting(run, user)
+        self._notify_failed_writebacks(run)
         self._json(
             200,
             {
@@ -944,6 +1112,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 detail={"resource": resource, "action": action},
                 remote_address=self._remote_address(),
             )
+        self._notify_case_waiting(run, user)
+        self._notify_failed_writebacks(run)
         self._json(200, {"ok": True, "case": self._workflow_view(run, user)})
 
     @staticmethod
