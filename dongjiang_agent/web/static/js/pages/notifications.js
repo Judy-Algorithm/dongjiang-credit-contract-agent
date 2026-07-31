@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260731-sla"
-import {navigate} from "../router.js?v=20260731-sla"
-import {escapeHtml, dateTime} from "../format.js?v=20260731-sla"
+import {api} from "../api.js?v=20260731-analytics"
+import {navigate} from "../router.js?v=20260731-analytics"
+import {escapeHtml, dateTime} from "../format.js?v=20260731-analytics"
 
 const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", sla:"时效", system:"系统"}
 

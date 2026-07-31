@@ -38,7 +38,7 @@ dongjiang_agent/
 ├── contract/       合同事实提取与规则审查子 Agent
 ├── config/         版本化信用政策与合同规则
 ├── persistence/    案件和有效信审缓存
-├── operations/     节点SLA、逾期提醒去重与运营看板聚合
+├── operations/     节点SLA、逾期提醒、历史分析及管理报表导出
 ├── integrations/   CRM/OA 端口及 Webhook 适配器
 ├── llm/            只接受脱敏文本的可选模型增强
 ├── reporting/      JSON/HTML 审评报告

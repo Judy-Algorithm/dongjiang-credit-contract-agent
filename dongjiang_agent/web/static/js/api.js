@@ -67,6 +67,8 @@ export const api = {
   listWritebackFailures:() => request("/api/operations/writebacks"),
   getSlaDashboard:() => request("/api/operations/sla"),
   runSlaSweep:() => post("/api/operations/sla/sweep", {}),
+  getAnalytics:(days = 30) => request(`/api/operations/analytics?days=${encodeURIComponent(days)}`),
+  analyticsExportUrl:(days, format) => `/api/operations/analytics/export.${encodeURIComponent(format)}?days=${encodeURIComponent(days)}`,
   listCases:({mine = false} = {}) => request(`/api/cases${mine ? "?mine=1" : ""}`),
   getCase:(caseId) => request(`/api/cases/${encodeURIComponent(caseId)}`),
   getDocumentFragment:(caseId, documentId, fragmentId = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}`),

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
-from ..operations import SLAMonitor, SLAService
+from ..operations import AnalyticsService, SLAMonitor, SLAService
 from ..persistence import CaseRepository
 from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
@@ -98,6 +98,19 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         self.send_header("Content-Disposition", content_disposition(filename))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _download(
+        self, body: bytes, *, filename: str, content_type: str
+    ) -> None:
+        safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -267,7 +280,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "analytics", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -469,6 +482,33 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/operations/sla":
                 self._require_roles(user, "admin")
                 self._json(200, {"ok": True, **SLAService().dashboard()})
+                return
+            if path == "/api/operations/analytics":
+                self._require_roles(user, "admin")
+                days = parse_qs(parsed.query).get("days", ["30"])[0]
+                self._json(200, {"ok": True, **AnalyticsService().report(days=days)})
+                return
+            if path in {
+                "/api/operations/analytics/export.csv",
+                "/api/operations/analytics/export.xlsx",
+            }:
+                self._require_roles(user, "admin")
+                days = parse_qs(parsed.query).get("days", ["30"])[0]
+                service = AnalyticsService()
+                report = service.report(days=days)
+                suffix = "all" if report["range_days"] == 0 else f"{report['range_days']}d"
+                if path.endswith(".csv"):
+                    self._download(
+                        service.export_csv(report),
+                        filename=f"dongjiang-approval-analytics-{suffix}.csv",
+                        content_type="text/csv; charset=utf-8",
+                    )
+                else:
+                    self._download(
+                        service.export_xlsx(report),
+                        filename=f"dongjiang-approval-analytics-{suffix}.xlsx",
+                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
                 return
             if path == "/api/cases":
                 cases = CaseRepository().list_cases()

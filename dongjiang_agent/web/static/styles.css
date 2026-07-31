@@ -508,6 +508,30 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .bottleneck-row small { margin-top: 3px; color: var(--muted); }
 .bottleneck-row > span { color: var(--green); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .bottleneck-row > span.urgent { color: var(--red); }
+.report-actions select { min-height: 44px; min-width: 120px; }
+.analytics-metrics { grid-template-columns: repeat(5, 1fr); }
+.report-metric { cursor: default; }
+.report-metric:hover { transform: none; box-shadow: none; }
+.report-metric.on_track strong { color: var(--green); }
+.report-metric.due_soon strong { color: var(--orange); }
+.report-metric.overdue strong { color: var(--red); }
+.analytics-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; min-width: 0; }
+.analytics-layout > * { min-width: 0; }
+.analytics-layout > .panel > .section-heading, .backlog-panel > .section-heading { padding: 18px 20px; border-bottom: 1px solid var(--hairline-soft); }
+.backlog-panel { padding: 0 20px 8px; }
+.analytics-trend-panel { margin-bottom: 16px; padding: 20px; }
+.analytics-trend-panel .section-heading { margin-bottom: 18px; }
+.trend-chart { min-height: 160px; padding: 8px 4px 0; display: flex; align-items: stretch; gap: min(14px, 1.2vw); overflow-x: auto; border-bottom: 1px solid var(--hairline); }
+.trend-column { min-width: 24px; flex: 1 0 24px; display: grid; grid-template-rows: 124px 24px; gap: 6px; text-align: center; }
+.trend-bars { height: 124px; display: flex; align-items: end; justify-content: center; gap: 3px; }
+.trend-bars i { width: min(12px, 38%); min-height: 0; display: block; border-radius: 4px 4px 0 0; }
+.trend-bars i.created, .trend-legend i.created { background: var(--ink); }
+.trend-bars i.completed, .trend-legend i.completed { background: var(--primary); }
+.trend-column small { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.trend-legend { margin-top: 12px; display: flex; justify-content: flex-end; gap: 18px; color: var(--muted); font-size: 12px; }
+.trend-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.trend-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.report-footnote { margin-top: 18px; color: var(--muted); font-size: 12px; text-align: right; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; padding: 20px; display: grid; place-items: center; background: rgba(0, 0, 0, .5); }
 .modal-panel { width: min(480px, 100%); padding: 26px; background: var(--canvas); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .24); }
@@ -596,7 +620,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .form-grid, .form-grid.two, .summary-grid, .info-grid { grid-template-columns: 1fr 1fr; }
   .rating-row { grid-template-columns: 1fr 1fr; }
   .contract-review-layout, .document-layout, .overview-layout, .approval-layout { grid-template-columns: 1fr; }
-  .operations-layout { grid-template-columns: minmax(0, 1fr); }
+  .operations-layout, .analytics-layout { grid-template-columns: minmax(0, 1fr); }
   .case-rail { padding: 22px 0 0; border-top: 1px solid var(--hairline-soft); border-left: 0; }
   .evidence-viewer { position: relative; top: auto; max-height: none; }
   .integration-grid { grid-template-columns: 1fr 1fr; }
@@ -628,7 +652,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .page-header, .action-banner, .form-actions { flex-direction: column; align-items: stretch; }
   .page-header { margin-bottom: 22px; }
   .page-header p { font-size: 14px; }
-  .metric-grid, .toolbar, .form-grid, .form-grid.two, .summary-grid, .info-grid, .decision-context, .info-grid.compact, .integration-grid, .sla-metrics { grid-template-columns: 1fr; }
+  .metric-grid, .toolbar, .form-grid, .form-grid.two, .summary-grid, .info-grid, .decision-context, .info-grid.compact, .integration-grid, .sla-metrics, .analytics-metrics { grid-template-columns: 1fr; }
   .metric-grid { gap: 10px; }
   .metric-card { min-height: 96px; padding: 16px; }
   .toolbar { display: grid; padding: 12px; }

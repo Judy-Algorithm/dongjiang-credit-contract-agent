@@ -681,7 +681,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
-        for route in ("/cases/new", "/registrations", "/notifications", "/operations"):
+        for route in ("/cases/new", "/registrations", "/notifications", "/operations", "/analytics"):
             self.connection.request("GET", route)
             response = self.connection.getresponse()
             html = response.read().decode("utf-8")
@@ -1015,6 +1015,42 @@ class WebApiTests(unittest.TestCase):
         self.activate_user("sla.sales")
         self.assertEqual(self.request("GET", "/api/operations/sla")[0], 403)
         self.assertEqual(self.request("POST", "/api/operations/sla/sweep", {})[0], 403)
+
+    @patch("dongjiang_agent.web.server.AnalyticsService")
+    def test_analytics_and_exports_are_admin_only(self, service_class):
+        service = service_class.return_value
+        service.report.return_value = {
+            "range_days": 30,
+            "range_label": "近30天",
+            "generated_at": "2026-07-31T00:00:00+00:00",
+            "policy_version": "test-v1",
+            "metrics": {},
+            "nodes": [],
+            "backlog": [],
+            "trend": [],
+            "cases": [],
+            "intervals": [],
+        }
+        service.export_csv.return_value = b"csv-report"
+        service.export_xlsx.return_value = b"xlsx-report"
+
+        status, analytics = self.request("GET", "/api/operations/analytics?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(analytics["range_days"], 30)
+        status, body, headers = self.download("/api/operations/analytics/export.csv?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"csv-report")
+        self.assertIn("text/csv", headers["Content-Type"])
+        self.assertIn("attachment", headers["Content-Disposition"])
+        status, body, headers = self.download("/api/operations/analytics/export.xlsx?days=30")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"xlsx-report")
+        self.assertIn("spreadsheetml", headers["Content-Type"])
+
+        self.create_user("analytics.sales", "分析普通销售", ["sales"])
+        self.activate_user("analytics.sales")
+        self.assertEqual(self.request("GET", "/api/operations/analytics?days=30")[0], 403)
+        self.assertEqual(self.download("/api/operations/analytics/export.csv?days=30")[0], 403)
 
 
 if __name__ == "__main__":

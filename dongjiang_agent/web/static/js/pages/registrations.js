@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-sla"
-import {escapeHtml, dateTime} from "../format.js?v=20260731-sla"
+import {api} from "../api.js?v=20260731-analytics"
+import {escapeHtml, dateTime} from "../format.js?v=20260731-analytics"
 
 const roles = [
   ["sales","销售"],["credit","信用管理"],["finance","财务"],["legal","法务"],

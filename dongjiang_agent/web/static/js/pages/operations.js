@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-sla"
-import {dateTime, escapeHtml} from "../format.js?v=20260731-sla"
+import {api} from "../api.js?v=20260731-analytics"
+import {dateTime, escapeHtml} from "../format.js?v=20260731-analytics"
 
 export async function renderOperationsPage(root) {
   const data = await api.getSlaDashboard()
