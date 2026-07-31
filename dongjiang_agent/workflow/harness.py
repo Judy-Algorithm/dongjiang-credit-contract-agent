@@ -21,6 +21,7 @@ from ..persistence import CaseRepository
 from .codec import case_from_state, checkpoint_dict
 from .dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
 from .graph import build_workflow
+from .incidents import detect_plan_incident, new_agent_incident
 from .nodes import WorkflowNodes
 
 
@@ -458,53 +459,27 @@ class DongjiangWorkflowHarness:
             None,
         )
         if incident is None:
-            try:
-                assert_plan_integrity(plan)
-                integrity_failed = False
-            except (TypeError, ValueError):
-                integrity_failed = True
-            latest_audit = next(
-                (
-                    dict(item)
-                    for item in reversed(state.get("execution_audits") or [])
-                    if item.get("plan_id") == plan_id
-                ),
-                {},
-            )
-            latest_runs = self._latest_plan_rows(
-                list(state.get("agent_runs") or []), plan_id
-            )
-            operational_issue = any(
-                str(item.get("status") or "") in {"failed", "degraded"}
-                or str(item.get("evidence_gate") or "") in {"failed", "degraded"}
-                or int(item.get("attempt_count") or 1) > 1
-                for item in latest_runs.values()
-            )
-            if not (
-                integrity_failed
-                or latest_audit.get("status") == "non_conformant"
-                or operational_issue
-            ):
+            signal = detect_plan_incident(state, plan)
+            if signal is None:
                 raise ValueError("当前Agent计划未发现可处置的运行异常。")
+            if any(
+                item.get("status") == "resolved"
+                and item.get("issue_fingerprint") == signal["issue_fingerprint"]
+                for item in incidents
+            ):
+                raise ValueError("当前Agent异常事实已处置，未发现新的异常变化。")
             if action != "acknowledge":
                 raise ValueError("请先确认Agent运行异常，再执行分派、重跑或关闭。")
+        elif incident.get("status") == "open" and action != "acknowledge":
+            raise ValueError("请先确认Agent运行异常，再执行分派、重跑或关闭。")
         now = utc_now()
         if incident is None:
-            incident = {
-                "incident_id": f"AINC-{uuid4().hex[:12].upper()}",
-                "plan_id": plan_id,
-                "agent": plan.get("agent"),
-                "status": "open",
-                "opened_at": now,
-                "updated_at": now,
-                "assignee": {},
-                "history": [],
-                "rerun_history": [],
-            }
+            incident = new_agent_incident(signal, source="manual")
             incidents.append(incident)
         normalized_assignee = dict(assignee or {})
         if action == "acknowledge":
             incident["status"] = "acknowledged"
+            incident["responded_at"] = incident.get("responded_at") or now
             if not incident.get("assignee"):
                 incident["assignee"] = {
                     "user_id": actor.actor_id,
@@ -516,6 +491,7 @@ class DongjiangWorkflowHarness:
             ):
                 raise ValueError("请选择有效的异常责任人。")
             incident["status"] = "assigned"
+            incident["responded_at"] = incident.get("responded_at") or now
             incident["assignee"] = {
                 "user_id": str(normalized_assignee["user_id"]),
                 "display_name": str(normalized_assignee["display_name"]),

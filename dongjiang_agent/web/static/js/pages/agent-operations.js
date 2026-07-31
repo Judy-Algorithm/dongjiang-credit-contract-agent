@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260731-nav"
+import {api} from "../api.js?v=20260801-agentsla"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const severityLabels = {
@@ -9,6 +9,7 @@ const issueLabels = {
   plan_integrity:"计划完整性失败", execution_deviation:"执行偏差",
   node_failed:"节点失败", evidence_degraded:"证据降级",
   fallback_degraded:"降级回退", retried:"发生重试", legacy_plan:"历史计划",
+  repeated_degradation:"连续分析降级",
 }
 const incidentLabels = {
   open:"待确认", acknowledged:"已确认", assigned:"已分派",
@@ -19,13 +20,15 @@ export async function renderAgentOperationsPage(root) {
   const data = await api.getAgentOperations()
   const metrics = data.metrics || {}, plans = data.plans || []
   root.innerHTML = `
-    <header class="page-header"><div><h1>Agent 运维</h1><p>跨案件检查动态计划完整性、执行偏差、节点降级和重试</p></div><button id="refreshAgents" class="secondary">刷新状态</button></header>
+    <header class="page-header"><div><h1>Agent 运维</h1><p>跨案件发现、处置并跟踪信用与合同子 Agent 的运行异常</p></div><div class="header-actions"><button id="sweepAgents" class="secondary">立即扫描</button><button id="refreshAgents" class="secondary">刷新状态</button></div></header>
     <section class="metric-grid agent-ops-metrics">
       ${metric("动态计划", metrics.plan_total)}
       ${metric("治理覆盖率", percent(metrics.governance_coverage))}
       ${metric("严重异常", metrics.critical_plans, metrics.critical_plans ? "overdue" : "")}
       ${metric("需要关注", metrics.warning_plans, metrics.warning_plans ? "due_soon" : "")}
       ${metric("开放异常单", metrics.open_incidents)}
+      ${metric("响应逾期", metrics.response_overdue, metrics.response_overdue ? "overdue" : "")}
+      ${metric("解决逾期", metrics.resolution_overdue, metrics.resolution_overdue ? "overdue" : "")}
     </section>
     <section class="panel agent-ops-panel">
       <div class="agent-ops-toolbar">
@@ -52,6 +55,18 @@ export async function renderAgentOperationsPage(root) {
   }
   ;[search,agentType,severity].forEach((control) => control.addEventListener("input", renderRows))
   root.querySelector("#refreshAgents").addEventListener("click", () => window.dispatchEvent(new Event("app:navigate")))
+  root.querySelector("#sweepAgents").addEventListener("click", async (event) => {
+    const button = event.currentTarget
+    button.disabled = true
+    try {
+      const result = await api.sweepAgentIncidents()
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:`扫描完成，新建 ${result.opened_incidents || 0} 个异常单`}))
+      window.dispatchEvent(new Event("app:navigate"))
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+    }
+  })
   root.querySelector("#agentRows").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-incident-action]")
     if (!button) return
@@ -72,16 +87,29 @@ function percent(value) {
 function planRow(plan) {
   const issues = (plan.issue_types || []).map((issue) => issueLabels[issue] || issue)
   const incident = plan.incident || {}, incidentStatus = incident.status || ""
-  const needsIncident = ["critical","warning"].includes(plan.severity)
+  const canOpenIncident = Boolean(plan.incident_eligible) && (!incidentStatus || incidentStatus === "resolved")
   return `<tr class="agent-ops-row severity-${escapeHtml(plan.severity)}">
     <td><a class="case-name" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>${escapeHtml(plan.customer_name || "未命名客户")}</a><small>${escapeHtml(plan.case_id)} · ${escapeHtml(plan.business_type || "—")} · ${escapeHtml(plan.owner || "未分配")}</small><b>${escapeHtml(plan.label || plan.agent)}</b></td>
     <td><code>${escapeHtml(plan.plan_id)}</code><small>Plan ${escapeHtml(plan.version || "—")} · ${plan.spec_hash ? `规范 ${escapeHtml(plan.spec_hash)}` : "无冻结哈希"}</small></td>
     <td><span class="badge agent-severity-${escapeHtml(plan.severity)}">${escapeHtml(severityLabels[plan.severity] || plan.severity)}</span><small>${integrityLabel(plan.integrity_status)} · ${auditLabel(plan.audit_status)}</small></td>
     <td><span>${plan.executed_count}/${plan.task_count} 已执行</span><small>失败 ${plan.failed_count} · 降级 ${plan.degraded_count} · 重试 ${plan.retry_count} · 复用 ${plan.reused_count}</small></td>
-    <td>${issues.length ? `<div class="agent-issue-list">${issues.map((issue) => `<span>${escapeHtml(issue)}</span>`).join("")}</div>` : `<span class="muted">未发现异常</span>`}${incidentStatus ? `<div class="incident-state"><b>${escapeHtml(incidentLabels[incidentStatus] || incidentStatus)}</b><small>${escapeHtml(incident.assignee?.display_name || "未分派")} · 重跑 ${incident.rerun_count || 0} 次</small></div>` : ""}</td>
+    <td>${issues.length ? `<div class="agent-issue-list">${issues.map((issue) => `<span>${escapeHtml(issue)}</span>`).join("")}</div>` : `<span class="muted">未发现异常</span>`}${incidentStatus ? `<div class="incident-state"><b>${escapeHtml(incidentLabels[incidentStatus] || incidentStatus)}${incident.source === "automatic" ? " · 自动发现" : ""}</b><small>${escapeHtml(incident.assignee?.display_name || "未分派")} · 重跑 ${incident.rerun_count || 0} 次</small>${slaSummary(incident.sla)}</div>` : ""}</td>
     <td>${dateTime(plan.updated_at)}</td>
-    <td><div class="agent-row-actions"><a class="primary small" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>查看运行</a>${needsIncident && !incidentStatus ? actionButton(plan,"acknowledge","确认异常") : ""}${incidentStatus && incidentStatus !== "resolved" ? `${actionButton(plan,"assign","分派")}${plan.retryable_tasks?.length ? actionButton(plan,"rerun","候选重跑") : ""}${actionButton(plan,"resolve","关闭")}` : ""}</div></td>
+    <td><div class="agent-row-actions"><a class="primary small" href="/cases/${encodeURIComponent(plan.case_id)}?tab=agents" data-link>查看运行</a>${canOpenIncident || incidentStatus === "open" ? actionButton(plan,"acknowledge","确认异常") : ""}${incidentStatus && !["open","resolved"].includes(incidentStatus) ? `${actionButton(plan,"assign","分派")}${plan.retryable_tasks?.length ? actionButton(plan,"rerun","候选重跑") : ""}${actionButton(plan,"resolve","关闭")}` : ""}</div></td>
   </tr>`
+}
+
+function slaSummary(sla = {}) {
+  const response = sla.response || {}, resolution = sla.resolution || {}
+  const tone = [response.state,resolution.state].includes("overdue") ? "overdue" : [response.state,resolution.state].includes("due_soon") ? "due_soon" : ""
+  const phase = response.state === "completed" ? `解决 ${slaState(resolution)}` : `响应 ${slaState(response)}`
+  return `<small class="incident-sla ${tone}">${escapeHtml(phase)}</small>`
+}
+
+function slaState(item = {}) {
+  if (item.state === "completed") return "已完成"
+  if (item.remaining_hours == null) return item.state_label || "未配置"
+  return item.remaining_hours < 0 ? `逾期 ${Math.abs(item.remaining_hours).toFixed(1)} 小时` : `剩余 ${Number(item.remaining_hours).toFixed(1)} 小时`
 }
 
 function actionButton(plan, action, label) {

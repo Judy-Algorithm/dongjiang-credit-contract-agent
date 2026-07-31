@@ -104,6 +104,7 @@ class AgentIncidentTests(unittest.TestCase):
             note="确认存在执行结果缺失",
         )
         self.assertEqual(incident["status"], "acknowledged")
+        self.assertTrue(incident["responded_at"])
 
         run, incident = self.harness.manage_agent_incident(
             run.case_id,

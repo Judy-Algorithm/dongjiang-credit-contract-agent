@@ -1238,6 +1238,45 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/operations/sla")[0], 403)
         self.assertEqual(self.request("POST", "/api/operations/sla/sweep", {})[0], 403)
 
+    @patch("dongjiang_agent.web.server.AgentIncidentService")
+    def test_agent_incident_sweep_is_admin_only_and_audited(self, service_class):
+        service_class.return_value.sweep.return_value = {
+            "ok": True,
+            "examined_cases": 3,
+            "opened_incidents": 1,
+            "opened": [
+                {
+                    "case_id": "DJ-AUTO-1",
+                    "incident_id": "AINC-AUTO-1",
+                    "plan_id": "CREDIT-AUTO-1",
+                    "severity": "critical",
+                    "issue_types": ["execution_deviation"],
+                }
+            ],
+            "notifications_created": 1,
+            "emails_sent": 0,
+            "audit_events": 1,
+            "policy_version": "competition-agent-operations-v1",
+            "generated_at": "2026-08-01T00:00:00+00:00",
+        }
+        status, result = self.request("POST", "/api/operations/agents/sweep", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(result["opened_incidents"], 1)
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        self.assertTrue(
+            any(
+                item["event_type"] == "operations.agent_incident_sweep"
+                for item in events
+            )
+        )
+
+        self.create_user("agent.sweep.sales", "扫描普通销售", ["sales"])
+        self.activate_user("agent.sweep.sales")
+        status, denied = self.request("POST", "/api/operations/agents/sweep", {})
+        self.assertEqual(status, 403)
+        self.assertFalse(denied["ok"])
+
     @patch("dongjiang_agent.web.server.AnalyticsService")
     def test_analytics_and_exports_are_admin_only(self, service_class):
         service = service_class.return_value

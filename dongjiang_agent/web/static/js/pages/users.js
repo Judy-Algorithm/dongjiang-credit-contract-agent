@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260731-nav"
+import {api} from "../api.js?v=20260801-agentsla"
 import {escapeHtml, dateTime} from "../format.js?v=20260731-nav"
 
 const roles = [

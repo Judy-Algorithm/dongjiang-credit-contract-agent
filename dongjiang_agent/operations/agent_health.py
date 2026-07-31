@@ -7,6 +7,11 @@ from typing import Any
 
 from ..persistence import CaseRepository
 from ..workflow.dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
+from ..workflow.incidents import (
+    detect_plan_incident,
+    incident_sla,
+    load_agent_operations_policy,
+)
 
 
 SEVERITY_ORDER = {
@@ -114,7 +119,12 @@ def _severity(
     return "healthy"
 
 
-def agent_incident_view(incident: dict[str, Any] | None) -> dict[str, Any]:
+def agent_incident_view(
+    incident: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return the operational incident fields that are safe for Web responses."""
     source = dict(incident or {})
     assignee = dict(source.get("assignee") or {})
@@ -154,6 +164,10 @@ def agent_incident_view(incident: dict[str, Any] | None) -> dict[str, Any]:
         "plan_id": source.get("plan_id") or "",
         "agent": source.get("agent") or "",
         "status": source.get("status") or "",
+        "source": source.get("source") or "manual",
+        "severity": source.get("severity") or "",
+        "issue_types": list(source.get("issue_types") or []),
+        "affected_task_ids": list(source.get("affected_task_ids") or []),
         "opened_at": source.get("opened_at") or "",
         "updated_at": source.get("updated_at") or "",
         "resolved_at": source.get("resolved_at") or "",
@@ -163,6 +177,7 @@ def agent_incident_view(incident: dict[str, Any] | None) -> dict[str, Any]:
         },
         "rerun_count": len(reruns),
         "latest_rerun": safe_rerun,
+        "sla": incident_sla(source, now=now, policy=policy) if source else {},
     }
 
 
@@ -172,7 +187,8 @@ class AgentOperationsService:
     def __init__(self, *, case_root: str = "data/cases") -> None:
         self.repository = CaseRepository(case_root)
 
-    def report(self) -> dict[str, Any]:
+    def report(self, *, now: datetime | None = None) -> dict[str, Any]:
+        policy = load_agent_operations_policy()
         rows: list[dict[str, Any]] = []
         case_ids: set[str] = set()
         for case in self.repository.list_cases():
@@ -185,9 +201,8 @@ class AgentOperationsService:
             audits_by_plan = _last_by_key(
                 list(case.get("execution_audits") or []), ("plan_id",)
             )
-            incidents_by_plan = _last_by_key(
-                list(case.get("agent_incidents") or []), ("plan_id",)
-            )
+            case_incidents = list(case.get("agent_incidents") or [])
+            incidents_by_plan = _last_by_key(case_incidents, ("plan_id",))
             for plan in _latest_plans(case):
                 plan_id = str(plan.get("plan_id") or "")
                 plan_runs = [
@@ -208,6 +223,12 @@ class AgentOperationsService:
                 )
                 audit = audits_by_plan.get((plan_id,), {})
                 incident = incidents_by_plan.get((plan_id,), {})
+                signal = detect_plan_incident(case, plan)
+                known_fingerprints = {
+                    str(item.get("issue_fingerprint") or "")
+                    for item in case_incidents
+                    if item.get("plan_id") == plan_id and item.get("issue_fingerprint")
+                }
                 audit_status = str(audit.get("status") or "pending")
                 integrity_status = _integrity_status(plan)
                 issues = _issue_types(
@@ -278,7 +299,16 @@ class AgentOperationsService:
                             if item.get("phase") == "analysis"
                             and item.get("task_type") in RETRYABLE_ANALYSIS_TASKS
                         ],
-                        "incident": agent_incident_view(incident),
+                        "incident": agent_incident_view(
+                            incident, now=now, policy=policy
+                        ),
+                        "incident_eligible": bool(
+                            signal
+                            and not (
+                                incident and incident.get("status") != "resolved"
+                            )
+                            and signal.get("issue_fingerprint") not in known_fingerprints
+                        ),
                         "updated_at": max(timestamps),
                     }
                 )
@@ -323,6 +353,23 @@ class AgentOperationsService:
                 "resolved_incidents": sum(
                     row["incident"].get("status") == "resolved" for row in rows
                 ),
+                "automatic_incidents": sum(
+                    row["incident"].get("source") == "automatic" for row in rows
+                ),
+                "response_overdue": sum(
+                    (row["incident"].get("sla") or {}).get("response", {}).get("state")
+                    == "overdue"
+                    for row in rows
+                ),
+                "resolution_overdue": sum(
+                    (row["incident"].get("sla") or {}).get("resolution", {}).get("state")
+                    == "overdue"
+                    for row in rows
+                ),
+            },
+            "incident_policy": {
+                "version": policy.get("version") or "",
+                "status": policy.get("status") or "",
             },
             "plans": rows,
             "security_notice": (

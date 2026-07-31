@@ -1,4 +1,4 @@
-import {api} from "./api.js?v=20260731-nav"
+import {api} from "./api.js?v=20260801-agentsla"
 import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-nav"
 import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-nav"
 import {renderAuditPage} from "./pages/audit.js?v=20260731-nav"
@@ -12,7 +12,7 @@ import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-nav"
 import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-nav"
 import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-nav"
 import {renderOperationsPage} from "./pages/operations.js?v=20260731-nav"
-import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260731-agentincidents"
+import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260801-agentsla"
 import {renderAnalyticsPage} from "./pages/analytics.js?v=20260731-nav"
 
 const root = document.getElementById("app")

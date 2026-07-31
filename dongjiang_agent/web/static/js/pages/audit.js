@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260731-nav"
+import {api} from "../api.js?v=20260801-agentsla"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const labels = {
@@ -8,6 +8,7 @@ const labels = {
   "case.owner_assigned":"调整负责人",
   "integration.writeback_retried":"重试系统回写",
   "agent.incident.acknowledge":"确认Agent异常","agent.incident.assign":"分派Agent异常","agent.incident.rerun":"候选重跑Agent节点","agent.incident.resolve":"关闭Agent异常",
+  "agent.incident.auto_open":"自动发现Agent异常","agent.incident.sla_alert":"Agent异常时效提醒","operations.agent_incident_sweep":"扫描Agent异常",
 }
 
 export async function renderAuditPage(root) {

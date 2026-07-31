@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
 from ..operations import (
+    AgentIncidentService,
     AgentOperationsService,
     AnalyticsService,
     SLAMonitor,
@@ -721,6 +722,26 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         actor=user,
                         target_type="operations",
                         detail=result,
+                        remote_address=self._remote_address(),
+                    )
+                self._json(200, result)
+                return
+            if path == "/api/operations/agents/sweep":
+                self._require_roles(user, "admin")
+                result = AgentIncidentService().sweep()
+                with AuthStore() as store:
+                    store.audit(
+                        "operations.agent_incident_sweep",
+                        actor=user,
+                        target_type="operations",
+                        detail={
+                            "examined_cases": result.get("examined_cases"),
+                            "opened_incidents": result.get("opened_incidents"),
+                            "notifications_created": result.get(
+                                "notifications_created"
+                            ),
+                            "policy_version": result.get("policy_version"),
+                        },
                         remote_address=self._remote_address(),
                     )
                 self._json(200, result)

@@ -1,0 +1,15 @@
+{
+  "version": "competition-agent-operations-v1",
+  "status": "PROPOSED_NOT_OFFICIAL",
+  "description": "比赛演示用Agent异常响应与解决时效，需按东江正式运维制度确认后调整。",
+  "critical": {
+    "response_hours": 2,
+    "resolution_hours": 24,
+    "warning_before_hours": 1
+  },
+  "warning": {
+    "response_hours": 4,
+    "resolution_hours": 48,
+    "warning_before_hours": 2
+  }
+}

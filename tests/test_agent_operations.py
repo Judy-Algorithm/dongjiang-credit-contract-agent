@@ -215,6 +215,7 @@ class AgentOperationsTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["resolved_incidents"], 0)
         self.assertEqual(row["incident"]["assignee"]["display_name"], "信用甲")
         self.assertEqual(row["incident"]["rerun_count"], 1)
+        self.assertFalse(row["incident_eligible"])
         retryable_types = {item["task_type"] for item in row["retryable_tasks"]}
         self.assertIn(analysis_task["task_type"], retryable_types)
         self.assertNotIn("credit_scoring", retryable_types)

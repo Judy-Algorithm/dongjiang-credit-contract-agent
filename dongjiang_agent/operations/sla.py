@@ -285,6 +285,12 @@ class SLAMonitor(threading.Thread):
                 SLAService().sweep()
             except Exception as exc:
                 print(f"[sla] scan failed: {exc}")
+            try:
+                from .agent_incidents import AgentIncidentService
+
+                AgentIncidentService().sweep()
+            except Exception as exc:
+                print(f"[agent-incident] scan failed: {exc}")
 
     def stop(self) -> None:
         self.stopped.set()
