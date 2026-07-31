@@ -168,10 +168,33 @@ function agentExecutionTab(item) {
 function agentPlan(plan) {
   const groups = ["analysis","synthesis","decision","verification"].map((phase) => ({phase, nodes:(plan.nodes || []).filter((node) => node.phase === phase)})).filter((group) => group.nodes.length)
   const statusLabel = ({completed:"已完成",running:"运行中",failed:"需检查"})[plan.status] || plan.status
+  const snapshot = plan.runtime_snapshot || {}, audit = plan.execution_audit || {}
+  const auditLabel = ({conformant:"执行一致",non_conformant:"发现偏差",pending:"等待审计"})[audit.status] || audit.status
   return `<section class="agent-plan">
-    <header class="agent-plan-head"><div><small>${escapeHtml(plan.plan_id)} · 计划版本 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || plan.agent)}</h3><p>运行时选择 ${plan.task_count || 0} 个白名单任务，已完成 ${plan.completed_count || 0} 个</p></div><div class="agent-plan-status"><span class="badge ${plan.status === "completed" ? "approved" : plan.status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span><small>累计 ${duration(plan.total_duration_ms)}</small></div></header>
+    <header class="agent-plan-head"><div><small>${escapeHtml(plan.plan_id)} · 计划版本 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || plan.agent)}</h3><p>运行时选择 ${plan.task_count || 0} 个白名单任务，已完成 ${plan.completed_count || 0} 个</p><div class="agent-plan-tags"><span>${plan.frozen ? "计划已冻结" : "计划未冻结"}</span><span>规范 ${escapeHtml(plan.spec_hash || "—")}</span><span>${escapeHtml(plan.task_catalog_version || "任务目录未记录")}</span></div></div><div class="agent-plan-status"><span class="badge ${plan.status === "completed" ? "approved" : plan.status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span><small>累计 ${duration(plan.total_duration_ms)}</small></div></header>
+    ${agentRuntimeSnapshot(snapshot)}
     <div class="agent-lanes">${groups.map(agentLane).join("")}</div>
+    <div class="agent-audit ${audit.status === "non_conformant" ? "has-deviation" : ""}"><div><small>执行偏差审计</small><strong>${escapeHtml(auditLabel || "等待审计")}</strong></div><dl><div><dt>完整性</dt><dd>${audit.integrity_valid === true ? "通过" : audit.integrity_valid === false ? "失败" : "待核验"}</dd></div><div><dt>重试</dt><dd>${audit.retry_count || 0} 次</dd></div><div><dt>降级</dt><dd>${audit.fallback_count || 0} 次</dd></div></dl>${agentAuditIssues(audit)}</div>
   </section>`
+}
+
+function agentRuntimeSnapshot(snapshot) {
+  const values = [
+    ["信用规则", snapshot.credit_policy_version, snapshot.credit_policy_hash],
+    ["合同规则", snapshot.contract_policy_version, snapshot.contract_policy_hash],
+    ["模型", snapshot.ai_enabled ? snapshot.model : "未启用", ""],
+    ["提示词", snapshot.prompt_version, snapshot.prompt_hash],
+  ]
+  if (!values.some(([, value]) => value)) return ""
+  return `<div class="agent-runtime">${values.map(([label, value, hash]) => `<div><small>${escapeHtml(label)}</small><b>${escapeHtml(value || "—")}</b>${hash ? `<code>${escapeHtml(hash)}</code>` : ""}</div>`).join("")}</div>`
+}
+
+function agentAuditIssues(audit) {
+  const issues = [
+    ["缺失任务", audit.missing_tasks], ["越权任务", audit.unexpected_tasks],
+    ["重复结果", audit.duplicate_results], ["证据违规", audit.evidence_violations],
+  ].filter(([, values]) => values?.length)
+  return issues.length ? `<div class="agent-audit-issues">${issues.map(([label, values]) => `<span><b>${escapeHtml(label)}</b>${values.map(escapeHtml).join("、")}</span>`).join("")}</div>` : ""
 }
 
 function agentLane(group) {
@@ -180,10 +203,13 @@ function agentLane(group) {
 }
 
 function agentNode(node) {
-  const statusLabel = ({completed:"完成",degraded:"降级",failed:"失败",running:"运行",pending:"等待"})[node.status] || node.status
+  const statusLabel = ({completed:"完成",degraded:"降级",failed:"失败",running:"运行",pending:"等待",reused:"已复用"})[node.status] || node.status
+  const evidenceLabel = ({passed:"证据通过",degraded:"证据降级",failed:"证据失败",not_applicable:"无需证据"})[node.evidence_gate] || node.evidence_gate
   return `<article class="agent-node ${escapeHtml(node.status || "pending")}">
     <div class="agent-node-head"><span class="agent-status-dot" aria-hidden="true"></span><div><small>${escapeHtml(node.task_type || "task")}</small><h4>${escapeHtml(node.label || node.task_id)}</h4></div><b>${escapeHtml(statusLabel)}</b></div>
     <dl><div><dt>耗时</dt><dd>${duration(node.duration_ms)}</dd></div><div><dt>执行器</dt><dd>${escapeHtml(node.model || "待分配")}</dd></div></dl>
+    <div class="agent-node-tags"><span>尝试 ${node.attempt_count || 0} 次</span>${node.idempotency_key ? `<span>幂等 ${escapeHtml(node.idempotency_key)}</span>` : ""}${node.evidence_gate && node.evidence_gate !== "not_applicable" ? `<span class="${node.evidence_gate === "degraded" || node.evidence_gate === "failed" ? "warn" : ""}">${escapeHtml(evidenceLabel)}</span>` : ""}</div>
+    ${node.attempt_count > 1 ? `<div class="agent-attempts">${node.attempt_history.map((attempt) => `<span>第 ${attempt.attempt} 次 · ${escapeHtml(attempt.status || "未知")} · ${duration(attempt.duration_ms)}${attempt.error_type ? ` · ${escapeHtml(attempt.error_type)}` : ""}</span>`).join("")}</div>` : ""}
     <div class="agent-node-summary"><small>输入摘要</small><p>${escapeHtml(node.input_summary || "等待执行")}</p><small>输出摘要</small><p>${escapeHtml(node.output_summary || "尚无输出")}</p></div>
     ${node.depends_on?.length ? `<footer>依赖 ${node.depends_on.map((value) => escapeHtml(value)).join("、")}</footer>` : ""}
   </article>`

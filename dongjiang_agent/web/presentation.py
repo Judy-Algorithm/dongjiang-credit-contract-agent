@@ -198,6 +198,7 @@ def _records(trace: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
     runs = list(case.get("agent_runs") or [])
+    audits = list(case.get("execution_audits") or [])
     run_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for run in runs:
         key = (str(run.get("plan_id") or ""), str(run.get("task_id") or ""))
@@ -209,6 +210,25 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
         if not plan_id or plan_id in seen:
             continue
         seen.add(plan_id)
+        raw_snapshot = dict(raw_plan.get("runtime_snapshot") or {})
+        snapshot = {
+            "credit_policy_version": raw_snapshot.get("credit_policy_version") or "",
+            "credit_policy_hash": str(raw_snapshot.get("credit_policy_hash") or "")[:12],
+            "contract_policy_version": raw_snapshot.get("contract_policy_version") or "",
+            "contract_policy_hash": str(raw_snapshot.get("contract_policy_hash") or "")[:12],
+            "model": raw_snapshot.get("model") or "",
+            "ai_enabled": bool(raw_snapshot.get("ai_enabled")),
+            "prompt_version": raw_snapshot.get("prompt_version") or "",
+            "prompt_hash": str(raw_snapshot.get("prompt_hash") or "")[:12],
+        }
+        audit = next(
+            (
+                dict(item)
+                for item in reversed(audits)
+                if str(item.get("plan_id") or "") == plan_id
+            ),
+            {},
+        )
         nodes: list[dict[str, Any]] = []
         for task in raw_plan.get("tasks") or []:
             run = run_by_key.get((plan_id, str(task.get("task_id") or "")), {})
@@ -226,6 +246,23 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
                     "input_summary": run.get("input_summary") or "等待执行",
                     "output_summary": run.get("output_summary") or "尚无输出",
                     "model": run.get("model") or "",
+                    "attempt_count": int(run.get("attempt_count") or 0),
+                    "attempt_history": [
+                        {
+                            "attempt": item.get("attempt"),
+                            "status": item.get("status"),
+                            "duration_ms": item.get("duration_ms"),
+                            "error_type": item.get("error_type") or "",
+                        }
+                        for item in run.get("attempt_history") or []
+                    ],
+                    "idempotency_key": str(run.get("idempotency_key") or "")[:12],
+                    "execution_policy": dict(
+                        run.get("execution_policy")
+                        or task.get("execution_policy")
+                        or {}
+                    ),
+                    "evidence_gate": run.get("evidence_gate") or "not_applicable",
                     "sensitive_input": run.get("sensitive_input") or "not_logged",
                 }
             )
@@ -238,16 +275,36 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
                 "label": raw_plan.get("label"),
                 "version": raw_plan.get("version"),
                 "planner": raw_plan.get("planner"),
+                "frozen": bool(raw_plan.get("frozen")),
+                "spec_hash": str(raw_plan.get("spec_hash") or "")[:12],
+                "task_catalog_version": raw_plan.get("task_catalog_version") or "",
+                "runtime_snapshot": snapshot,
+                "execution_audit": {
+                    "status": audit.get("status") or "pending",
+                    "integrity_valid": audit.get("integrity_valid"),
+                    "missing_tasks": list(audit.get("missing_tasks") or []),
+                    "unexpected_tasks": list(audit.get("unexpected_tasks") or []),
+                    "duplicate_results": list(audit.get("duplicate_results") or []),
+                    "evidence_violations": list(audit.get("evidence_violations") or []),
+                    "retry_count": int(audit.get("retry_count") or 0),
+                    "fallback_count": int(audit.get("fallback_count") or 0),
+                    "audited_at": audit.get("audited_at") or "",
+                },
                 "status": raw_plan.get("status") or (
                     "completed"
-                    if nodes and all(node["status"] == "completed" for node in nodes)
+                    if nodes
+                    and all(
+                        node["status"] in {"completed", "degraded", "reused"}
+                        for node in nodes
+                    )
                     else "running"
                 ),
                 "created_at": raw_plan.get("created_at"),
                 "completed_at": raw_plan.get("completed_at"),
                 "task_count": len(nodes),
                 "completed_count": sum(
-                    node["status"] in {"completed", "degraded"} for node in nodes
+                    node["status"] in {"completed", "degraded", "reused"}
+                    for node in nodes
                 ),
                 "total_duration_ms": total_duration,
                 "nodes": nodes,

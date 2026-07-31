@@ -24,6 +24,8 @@ _JSON_BLOCK = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTAL
 class ContractAIAssistant:
     """Call the optional text model and normalize its response safely."""
 
+    prompt_version = "dongjiang-contract-assistant-v2"
+
     def __init__(
         self,
         gateway: OpenAICompatibleGateway | None = None,

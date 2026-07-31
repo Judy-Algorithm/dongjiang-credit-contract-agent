@@ -29,11 +29,19 @@ from ..domain.models import (
 from ..ingestion import DocumentExtractor, ExtractedDocument, locate_excerpt
 from ..integrations import IntegrationBundle
 from ..llm import ContractAIAssistant
-from ..persistence import CaseDocumentArchive, CaseRepository
+from ..persistence import CaseDocumentArchive, CaseRepository, TaskExecutionStore
 from ..reporting import AuditReporter
 from ..security import RedactionVault
 from .codec import case_from_state, checkpoint_dict
-from .dynamic import build_contract_plan, build_credit_plan, plan_task
+from .dynamic import (
+    assert_plan_integrity,
+    audit_plan_execution,
+    build_contract_plan,
+    build_credit_plan,
+    canonical_hash,
+    plan_task,
+    task_idempotency_key,
+)
 from .state import WorkflowState
 
 
@@ -51,7 +59,21 @@ def agent_run(
     output_summary: str,
     status: str = "completed",
     model: str = "deterministic",
+    attempt_history: list[dict[str, Any]] | None = None,
+    idempotency_key: str = "",
+    evidence_gate: str = "not_applicable",
 ) -> dict[str, Any]:
+    attempts = list(attempt_history or [])
+    if not attempts:
+        attempts = [
+            {
+                "attempt": 1,
+                "status": status,
+                "started_at": started_at,
+                "completed_at": utc_now(),
+                "duration_ms": max(0, int(duration_ms)),
+            }
+        ]
     return {
         "run_id": f"{plan.get('plan_id')}:{task.get('task_id')}",
         "plan_id": plan.get("plan_id"),
@@ -67,19 +89,86 @@ def agent_run(
         "input_summary": input_summary[:240],
         "output_summary": output_summary[:500],
         "model": model,
+        "idempotency_key": idempotency_key or task_idempotency_key(plan, task),
+        "attempt_count": len(attempts) or 1,
+        "attempt_history": attempts,
+        "execution_policy": dict(task.get("execution_policy") or {}),
+        "evidence_gate": evidence_gate,
         "sensitive_input": "redacted_or_structured",
     }
 
 
 def task_result(
-    plan: dict[str, Any], task: dict[str, Any], payload: dict[str, Any]
+    plan: dict[str, Any],
+    task: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    evidence_gate: str = "not_applicable",
 ) -> dict[str, Any]:
     return {
         "plan_id": plan.get("plan_id"),
         "task_id": task.get("task_id"),
         "task_type": task.get("task_type"),
         "input_refs": list(task.get("input_refs") or []),
+        "idempotency_key": task_idempotency_key(plan, task),
+        "evidence_gate": evidence_gate,
         "payload": payload,
+    }
+
+
+def existing_task_result(
+    state: WorkflowState, plan: dict[str, Any], task: dict[str, Any]
+) -> dict[str, Any] | None:
+    key = task_idempotency_key(plan, task)
+    return next(
+        (
+            dict(item)
+            for item in state.get("agent_task_results") or []
+            if item.get("idempotency_key") == key
+        ),
+        None,
+    )
+
+
+def cached_task_update(
+    state: WorkflowState,
+    plan: dict[str, Any],
+    task: dict[str, Any],
+    executions: TaskExecutionStore,
+) -> dict[str, Any] | None:
+    cached = existing_task_result(state, plan, task)
+    source = "checkpoint"
+    if cached is None:
+        stored = executions.load(
+            state.get("case_id"), plan.get("plan_id"), task_idempotency_key(plan, task)
+        )
+        cached = dict((stored or {}).get("result") or {}) or None
+        source = "execution_store"
+    if cached is None:
+        return None
+    return {
+        "agent_task_results": [] if source == "checkpoint" else [cached],
+        "agent_runs": [
+            agent_run(
+                plan,
+                task,
+                started_at=utc_now(),
+                duration_ms=0,
+                input_summary=f"命中{source}稳定幂等键",
+                output_summary="复用已完成任务结果，未重复执行",
+                status="reused",
+                model="idempotency-cache",
+            )
+        ],
+        "trace": [
+            trace(
+                f"agent.{task.get('agent')}.task_reused",
+                f"{task.get('label')}已按幂等键复用。",
+                plan_id=plan.get("plan_id"),
+                task_id=task.get("task_id"),
+                source=source,
+            )
+        ],
     }
 
 
@@ -154,6 +243,7 @@ class WorkflowNodes:
         inbox_dir: str | Path,
         output_dir: str | Path,
         archive_dir: str | Path = "data/archive",
+        execution_dir: str | Path = "data/executions",
         integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
         ai_assistant: ContractAIAssistant | None = None,
@@ -163,6 +253,7 @@ class WorkflowNodes:
         self.inbox_dir = Path(inbox_dir).resolve()
         self.output_dir = Path(output_dir)
         self.archive = CaseDocumentArchive(archive_dir)
+        self.executions = TaskExecutionStore(execution_dir)
         self.integrations = integrations or IntegrationBundle.from_environment()
         self.documents = DocumentExtractor()
         self.credit_facts = CreditFactExtractor()
@@ -171,6 +262,23 @@ class WorkflowNodes:
         self.contract_engine = ContractReviewEngine(self.credit_engine.policy)
         self.contract_ai = ai_assistant or ContractAIAssistant()
         self.reporter = AuditReporter()
+
+    def _runtime_snapshot(self) -> dict[str, Any]:
+        contract_policy = dict(self.contract_engine.contract_policy or {})
+        return {
+            "credit_policy_version": str(self.credit_engine.policy.get("version") or ""),
+            "credit_policy_hash": canonical_hash(self.credit_engine.policy),
+            "contract_policy_version": str(contract_policy.get("version") or ""),
+            "contract_policy_hash": canonical_hash(contract_policy),
+            "model": str(self.contract_ai.gateway.model or ""),
+            "ai_enabled": bool(self.contract_ai.enabled),
+            "prompt_version": str(self.contract_ai.prompt_version),
+            "prompt_hash": canonical_hash(
+                self.contract_ai._instruction(
+                    contract_facts_from_dict({"contract_name": "snapshot"})
+                )
+            ),
+        }
 
     @staticmethod
     def _is_contract(document: ExtractedDocument) -> bool:
@@ -415,6 +523,7 @@ class WorkflowNodes:
             str(state["case_id"]),
             dict(state.get("customer") or {}),
             list(state.get("source_documents") or []),
+            runtime_snapshot=self._runtime_snapshot(),
         )
         return {
             "stage": "credit_planned",
@@ -427,6 +536,8 @@ class WorkflowNodes:
                     plan_id=plan["plan_id"],
                     task_count=len(plan["tasks"]),
                     task_types=[item["task_type"] for item in plan["tasks"]],
+                    spec_hash=plan["spec_hash"],
+                    runtime_snapshot=plan["runtime_snapshot"],
                 )
             ],
         }
@@ -434,6 +545,10 @@ class WorkflowNodes:
     def run_credit_analysis(self, state: WorkflowState) -> dict[str, Any]:
         plan = dict(state.get("active_workflow_plan") or {})
         task = dict(state.get("active_agent_task") or {})
+        assert_plan_integrity(plan)
+        reused = cached_task_update(state, plan, task, self.executions)
+        if reused:
+            return reused
         task_type = str(task.get("task_type") or "")
         profile = profile_from_dict(dict(state["customer"]))
         started_at = utc_now()
@@ -509,10 +624,8 @@ class WorkflowNodes:
         else:
             raise ValueError(f"未授权的信用分析任务：{task_type}")
         duration_ms = round((perf_counter() - started) * 1000)
-        return {
-            "agent_task_results": [task_result(plan, task, payload)],
-            "agent_runs": [
-                agent_run(
+        result = task_result(plan, task, payload)
+        run = agent_run(
                     plan,
                     task,
                     started_at=started_at,
@@ -522,7 +635,16 @@ class WorkflowNodes:
                     ),
                     output_summary=summary,
                 )
-            ],
+        self.executions.save(
+            state["case_id"],
+            plan["plan_id"],
+            result["idempotency_key"],
+            result=result,
+            run=run,
+        )
+        return {
+            "agent_task_results": [result],
+            "agent_runs": [run],
             "trace": [
                 trace(
                     "agent.credit.task_completed",
@@ -679,6 +801,25 @@ class WorkflowNodes:
             "verifier": "independent_credit_guard",
         }
         duration_ms = round((perf_counter() - started) * 1000)
+        verification_result = task_result(plan, task, verification)
+        verification_run = agent_run(
+            plan,
+            task,
+            started_at=started_at,
+            duration_ms=duration_ms,
+            input_summary="信用评分与动态分析摘要",
+            output_summary=f"独立核验{verification['status']}，{sum(checks.values())}/{len(checks)}项通过",
+            status="completed" if verification["status"] == "passed" else "failed",
+            model="independent-credit-guard",
+        )
+        execution_audit = audit_plan_execution(
+            plan,
+            list(state.get("agent_runs") or []) + [verification_run],
+            list(state.get("agent_task_results") or []) + [verification_result],
+        )
+        if execution_audit["status"] != "conformant":
+            verification["status"] = "failed"
+            verification["execution_audit"] = "non_conformant"
         if verification["status"] == "failed":
             assessment["requires_supplement"] = True
             reasons = list(assessment.get("supplement_reasons") or [])
@@ -710,19 +851,9 @@ class WorkflowNodes:
                 else "credit_supplement"
             ),
             "credit_verification": verification,
-            "agent_task_results": [task_result(plan, task, verification)],
-            "agent_runs": [
-                agent_run(
-                    plan,
-                    task,
-                    started_at=started_at,
-                    duration_ms=duration_ms,
-                    input_summary="信用评分与动态分析摘要",
-                    output_summary=f"独立核验{verification['status']}，{sum(checks.values())}/{len(checks)}项通过",
-                    status="completed" if verification["status"] == "passed" else "failed",
-                    model="independent-credit-guard",
-                )
-            ],
+            "agent_task_results": [verification_result],
+            "agent_runs": [verification_run],
+            "execution_audits": [execution_audit],
             "trace": [
                 trace(
                     "agent.credit.verified",
@@ -730,6 +861,7 @@ class WorkflowNodes:
                     plan_id=plan.get("plan_id"),
                     status=verification["status"],
                     checks=checks,
+                    execution_audit=execution_audit["status"],
                 )
             ],
         }
@@ -1182,6 +1314,7 @@ class WorkflowNodes:
             ai_available=bool(
                 self.contract_ai.enabled and self.contract_ai.gateway.available
             ),
+            runtime_snapshot=self._runtime_snapshot(),
         )
         return {
             "stage": "contract_planned",
@@ -1198,6 +1331,8 @@ class WorkflowNodes:
                         item["task_type"] == "contract_ai_review"
                         for item in plan["tasks"]
                     ),
+                    spec_hash=plan["spec_hash"],
+                    runtime_snapshot=plan["runtime_snapshot"],
                 )
             ],
         }
@@ -1231,6 +1366,10 @@ class WorkflowNodes:
     def run_contract_analysis(self, state: WorkflowState) -> dict[str, Any]:
         plan = dict(state.get("active_workflow_plan") or {})
         task = dict(state.get("active_agent_task") or {})
+        assert_plan_integrity(plan)
+        reused = cached_task_update(state, plan, task, self.executions)
+        if reused:
+            return reused
         task_type = str(task.get("task_type") or "")
         document_ref = str((task.get("input_refs") or [""])[0])
         raw_contract = self._contract_by_ref(state, document_ref)
@@ -1273,6 +1412,8 @@ class WorkflowNodes:
         started_at = utc_now()
         started = perf_counter()
         model = "deterministic"
+        attempt_history: list[dict[str, Any]] = []
+        evidence_gate = "not_applicable"
         if task_type == "contract_policy_review":
             assessment = assessment_from_dict(state.get("effective_credit_assessment"))
             if assessment is None:
@@ -1298,11 +1439,52 @@ class WorkflowNodes:
             ai_text = facts.raw_text or ""
             if "⟦" not in ai_text:
                 ai_text = "⟦REDACTED_TEXT⟧\n" + ai_text
-            assistance = self.contract_ai.review(
-                facts,
-                redacted_text=ai_text,
-                fragments=fragments,
-            )
+            policy = dict(task.get("execution_policy") or {})
+            max_attempts = int(policy.get("max_attempts") or 1)
+            assistance: dict[str, Any] = {}
+            for attempt in range(1, max_attempts + 1):
+                attempt_started_at = utc_now()
+                attempt_started = perf_counter()
+                assistance = self.contract_ai.review(
+                    facts,
+                    redacted_text=ai_text,
+                    fragments=fragments,
+                )
+                attempt_duration = round((perf_counter() - attempt_started) * 1000)
+                attempt_history.append(
+                    {
+                        "attempt": attempt,
+                        "status": str(assistance.get("status") or "failed"),
+                        "started_at": attempt_started_at,
+                        "completed_at": utc_now(),
+                        "duration_ms": attempt_duration,
+                        "error_type": str(assistance.get("error_type") or ""),
+                    }
+                )
+                if assistance.get("status") != "failed":
+                    break
+            findings = list(assistance.get("findings") or [])
+            located = [
+                item
+                for item in findings
+                if item.get("document_id") and item.get("fragment_id")
+            ]
+            evidence_coverage = len(located) / len(findings) if findings else 1.0
+            minimum_coverage = float(policy.get("minimum_evidence_coverage") or 0)
+            if findings and evidence_coverage < minimum_coverage:
+                assistance = {
+                    **assistance,
+                    "findings": located,
+                    "summary": (
+                        f"证据定位率{evidence_coverage:.0%}低于门槛"
+                        f"{minimum_coverage:.0%}，未定位发现已降级剔除。"
+                    ),
+                    "evidence_degraded": True,
+                    "original_finding_count": len(findings),
+                }
+                evidence_gate = "degraded"
+            else:
+                evidence_gate = "passed"
             payload = {"document_id": document_ref, "ai_assistance": assistance}
             summary = (
                 f"AI辅助状态{assistance.get('status')}，"
@@ -1312,25 +1494,43 @@ class WorkflowNodes:
         else:
             raise ValueError(f"未授权的合同分析任务：{task_type}")
         duration_ms = round((perf_counter() - started) * 1000)
+        node_status = (
+            "degraded"
+            if task_type == "contract_ai_review"
+            and (
+                payload["ai_assistance"].get("status") == "failed"
+                or evidence_gate == "degraded"
+            )
+            else "completed"
+        )
+        result = task_result(
+            plan,
+            task,
+            payload,
+            evidence_gate=evidence_gate,
+        )
+        run = agent_run(
+            plan,
+            task,
+            started_at=started_at,
+            duration_ms=duration_ms,
+            input_summary=f"合同引用{document_ref}；内容已脱敏",
+            output_summary=summary,
+            model=model,
+            status=node_status,
+            attempt_history=attempt_history,
+            evidence_gate=evidence_gate,
+        )
+        self.executions.save(
+            state["case_id"],
+            plan["plan_id"],
+            result["idempotency_key"],
+            result=result,
+            run=run,
+        )
         return {
-            "agent_task_results": [task_result(plan, task, payload)],
-            "agent_runs": [
-                agent_run(
-                    plan,
-                    task,
-                    started_at=started_at,
-                    duration_ms=duration_ms,
-                    input_summary=f"合同引用{document_ref}；内容已脱敏",
-                    output_summary=summary,
-                    model=model,
-                    status=(
-                        "degraded"
-                        if task_type == "contract_ai_review"
-                        and payload["ai_assistance"].get("status") == "failed"
-                        else "completed"
-                    ),
-                )
-            ],
+            "agent_task_results": [result],
+            "agent_runs": [run],
             "trace": [
                 trace(
                     "agent.contract.task_completed",
@@ -1339,6 +1539,8 @@ class WorkflowNodes:
                     task_id=task.get("task_id"),
                     document_id=document_ref,
                     duration_ms=duration_ms,
+                    attempt_count=len(attempt_history) or 1,
+                    evidence_gate=evidence_gate,
                 )
             ],
         }
@@ -1560,6 +1762,13 @@ class WorkflowNodes:
             else "failed"
         )
         plan["completed_at"] = utc_now()
+        execution_audit = audit_plan_execution(
+            plan,
+            list(state.get("agent_runs") or []) + runs,
+            list(state.get("agent_task_results") or []) + results,
+        )
+        if execution_audit["status"] != "conformant":
+            plan["status"] = "failed"
         verified_reviews = [dict(item) for item in reviews]
         if plan["status"] == "failed":
             for review in verified_reviews:
@@ -1580,6 +1789,7 @@ class WorkflowNodes:
             "contract_verifications": verifications,
             "agent_runs": runs,
             "agent_task_results": results,
+            "execution_audits": [execution_audit],
             "trace": [
                 trace(
                     "agent.contract.verified",
@@ -1587,6 +1797,7 @@ class WorkflowNodes:
                     plan_id=plan.get("plan_id"),
                     status=plan["status"],
                     contract_count=len(verifications),
+                    execution_audit=execution_audit["status"],
                 )
             ],
         }

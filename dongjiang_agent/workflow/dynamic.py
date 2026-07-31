@@ -7,16 +7,18 @@ an allowlist and the graph remains responsible for ordering and permissions.
 from __future__ import annotations
 
 from collections import deque
+import hashlib
+import json
 from typing import Any
-from uuid import uuid4
 
 from ..domain.models import utc_now
 
 
-PLAN_VERSION = "1.0"
+PLAN_VERSION = "2.0"
+TASK_CATALOG_VERSION = "dongjiang-controlled-tasks-v2"
 MAX_PLAN_TASKS = 48
 
-TASK_CATALOG: dict[str, dict[str, str]] = {
+TASK_CATALOG: dict[str, dict[str, Any]] = {
     "credit_data_completeness": {"agent": "credit", "label": "资料完整性分析"},
     "credit_financial_analysis": {"agent": "credit", "label": "财务指标分析"},
     "credit_rating_analysis": {"agent": "credit", "label": "外部评级分析"},
@@ -28,10 +30,68 @@ TASK_CATALOG: dict[str, dict[str, str]] = {
     "credit_scoring": {"agent": "credit", "label": "确定性信用评分"},
     "credit_verification": {"agent": "credit", "label": "信用结论独立核验"},
     "contract_policy_review": {"agent": "contract", "label": "合同制度规则审查"},
-    "contract_ai_review": {"agent": "contract", "label": "合同AI辅助审查"},
+    "contract_ai_review": {
+        "agent": "contract",
+        "label": "合同AI辅助审查",
+        "max_attempts": 2,
+        "fallback": "rule_only",
+        "minimum_evidence_coverage": 0.8,
+    },
     "contract_synthesis": {"agent": "contract", "label": "合同风险汇总"},
     "contract_verification": {"agent": "contract", "label": "合同结论独立核验"},
 }
+
+
+def canonical_hash(value: Any) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _plan_spec(plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "case_id": plan.get("case_id"),
+        "agent": plan.get("agent"),
+        "label": plan.get("label"),
+        "version": plan.get("version"),
+        "planner": plan.get("planner"),
+        "task_catalog_version": plan.get("task_catalog_version"),
+        "runtime_snapshot": dict(plan.get("runtime_snapshot") or {}),
+        "tasks": list(plan.get("tasks") or []),
+    }
+
+
+def freeze_plan(
+    plan: dict[str, Any], runtime_snapshot: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    frozen = dict(plan)
+    frozen["runtime_snapshot"] = dict(runtime_snapshot or {})
+    frozen["task_catalog_version"] = TASK_CATALOG_VERSION
+    frozen["frozen"] = True
+    frozen["frozen_at"] = utc_now()
+    frozen["spec_hash"] = canonical_hash(_plan_spec(frozen))
+    return frozen
+
+
+def assert_plan_integrity(plan: dict[str, Any]) -> None:
+    validate_plan(plan)
+    if not plan.get("frozen") or not plan.get("spec_hash"):
+        raise ValueError("动态计划尚未冻结，拒绝执行。")
+    if str(plan.get("spec_hash")) != canonical_hash(_plan_spec(plan)):
+        raise ValueError("动态计划规范哈希不匹配，拒绝执行。")
+
+
+def task_idempotency_key(plan: dict[str, Any], task: dict[str, Any]) -> str:
+    return canonical_hash(
+        {
+            "plan_id": plan.get("plan_id"),
+            "spec_hash": plan.get("spec_hash"),
+            "task_id": task.get("task_id"),
+            "task_type": task.get("task_type"),
+            "input_refs": list(task.get("input_refs") or []),
+        }
+    )
 
 
 def _task(
@@ -53,6 +113,13 @@ def _task(
         "depends_on": list(depends_on or []),
         "input_refs": list(input_refs or []),
         "required_evidence": bool(required_evidence),
+        "execution_policy": {
+            "max_attempts": int(catalog.get("max_attempts") or 1),
+            "fallback": str(catalog.get("fallback") or "fail_closed"),
+            "minimum_evidence_coverage": float(
+                catalog.get("minimum_evidence_coverage") or 0
+            ),
+        },
     }
 
 
@@ -76,6 +143,10 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
         dependencies = {str(value) for value in item.get("depends_on") or []}
         if not dependencies.issubset(known) or str(item["task_id"]) in dependencies:
             raise ValueError(f"动态计划任务依赖无效：{item['task_id']}")
+        policy = dict(item.get("execution_policy") or {})
+        attempts = int(policy.get("max_attempts") or 1)
+        if attempts < 1 or attempts > 5:
+            raise ValueError(f"动态计划任务重试次数无效：{item['task_id']}")
 
     indegree = {identifier: 0 for identifier in identifiers}
     outgoing: dict[str, list[str]] = {identifier: [] for identifier in identifiers}
@@ -103,6 +174,8 @@ def build_credit_plan(
     case_id: str,
     customer: dict[str, Any],
     source_documents: list[dict[str, Any]],
+    *,
+    runtime_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     analysis_types = ["credit_data_completeness"]
     if any(
@@ -188,19 +261,22 @@ def build_credit_plan(
             phase="verification",
         )
     )
-    return validate_plan(
-        {
-            "plan_id": f"CREDIT-{uuid4().hex[:12].upper()}",
-            "case_id": case_id,
-            "agent": "credit",
-            "label": "信用信审子 Agent",
-            "version": PLAN_VERSION,
-            "planner": "controlled_runtime_planner",
-            "status": "running",
-            "created_at": utc_now(),
-            "tasks": tasks,
-        }
-    )
+    plan = {
+        "plan_id": "",
+        "case_id": case_id,
+        "agent": "credit",
+        "label": "信用信审子 Agent",
+        "version": PLAN_VERSION,
+        "planner": "controlled_runtime_planner",
+        "status": "running",
+        "created_at": utc_now(),
+        "tasks": tasks,
+    }
+    plan["runtime_snapshot"] = dict(runtime_snapshot or {})
+    plan["task_catalog_version"] = TASK_CATALOG_VERSION
+    plan["plan_id"] = f"CREDIT-{canonical_hash(_plan_spec(plan))[:12].upper()}"
+    validate_plan(plan)
+    return freeze_plan(plan, runtime_snapshot)
 
 
 def build_contract_plan(
@@ -208,9 +284,9 @@ def build_contract_plan(
     contracts: list[dict[str, Any]],
     *,
     ai_available: bool,
+    runtime_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tasks: list[dict[str, Any]] = []
-    verification_ids: list[str] = []
     for index, contract in enumerate(contracts, start=1):
         document_ref = str(contract.get("document_id") or f"contract-{index}")
         policy_id = f"contract.{index}.policy"
@@ -255,7 +331,6 @@ def build_contract_plan(
                 phase="verification",
             )
         )
-        verification_ids.append(verification_id)
     if not tasks:
         tasks.extend(
             [
@@ -282,22 +357,26 @@ def build_contract_plan(
                 ),
             ]
         )
-    return validate_plan(
-        {
-            "plan_id": f"CONTRACT-{uuid4().hex[:12].upper()}",
-            "case_id": case_id,
-            "agent": "contract",
-            "label": "合同审查子 Agent",
-            "version": PLAN_VERSION,
-            "planner": "controlled_runtime_planner",
-            "status": "running",
-            "created_at": utc_now(),
-            "tasks": tasks,
-        }
-    )
+    plan = {
+        "plan_id": "",
+        "case_id": case_id,
+        "agent": "contract",
+        "label": "合同审查子 Agent",
+        "version": PLAN_VERSION,
+        "planner": "controlled_runtime_planner",
+        "status": "running",
+        "created_at": utc_now(),
+        "tasks": tasks,
+    }
+    plan["runtime_snapshot"] = dict(runtime_snapshot or {})
+    plan["task_catalog_version"] = TASK_CATALOG_VERSION
+    plan["plan_id"] = f"CONTRACT-{canonical_hash(_plan_spec(plan))[:12].upper()}"
+    validate_plan(plan)
+    return freeze_plan(plan, runtime_snapshot)
 
 
 def plan_task(plan: dict[str, Any], task_type: str, *, input_ref: str = "") -> dict[str, Any]:
+    assert_plan_integrity(plan)
     candidates = [
         item
         for item in plan.get("tasks") or []
@@ -307,3 +386,57 @@ def plan_task(plan: dict[str, Any], task_type: str, *, input_ref: str = "") -> d
     if not candidates:
         raise KeyError(f"动态计划中缺少任务：{task_type}")
     return dict(candidates[0])
+
+
+def audit_plan_execution(
+    plan: dict[str, Any],
+    runs: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    planned = {str(item.get("task_id") or "") for item in plan.get("tasks") or []}
+    relevant_results = [
+        item for item in results if item.get("plan_id") == plan.get("plan_id")
+    ]
+    executed = {str(item.get("task_id") or "") for item in relevant_results}
+    result_counts: dict[str, int] = {}
+    for item in relevant_results:
+        task_id = str(item.get("task_id") or "")
+        result_counts[task_id] = result_counts.get(task_id, 0) + 1
+    evidence_violations = [
+        str(item.get("task_id") or "")
+        for item in relevant_results
+        if item.get("evidence_gate") == "failed"
+    ]
+    relevant_runs = [item for item in runs if item.get("plan_id") == plan.get("plan_id")]
+    retry_count = sum(max(0, int(item.get("attempt_count") or 1) - 1) for item in relevant_runs)
+    integrity_valid = bool(plan.get("frozen")) and str(
+        plan.get("spec_hash") or ""
+    ) == canonical_hash(_plan_spec(plan))
+    missing = sorted(planned - executed)
+    unexpected = sorted(executed - planned)
+    duplicate_results = sorted(
+        task_id for task_id, count in result_counts.items() if count > 1
+    )
+    conformant = (
+        integrity_valid
+        and not missing
+        and not unexpected
+        and not duplicate_results
+        and not evidence_violations
+    )
+    return {
+        "plan_id": plan.get("plan_id"),
+        "status": "conformant" if conformant else "non_conformant",
+        "audited_at": utc_now(),
+        "integrity_valid": integrity_valid,
+        "planned_count": len(planned),
+        "executed_count": len(executed),
+        "missing_tasks": missing,
+        "unexpected_tasks": unexpected,
+        "duplicate_results": duplicate_results,
+        "evidence_violations": evidence_violations,
+        "retry_count": retry_count,
+        "fallback_count": sum(
+            str(item.get("status") or "") == "degraded" for item in relevant_runs
+        ),
+    }

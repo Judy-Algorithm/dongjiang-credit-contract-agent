@@ -7,6 +7,7 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from .dynamic import assert_plan_integrity
 from .nodes import WorkflowNodes
 from .state import WorkflowState
 
@@ -82,6 +83,7 @@ def build_credit_subgraph(nodes: WorkflowNodes):
 
     def dispatch_credit(state: WorkflowState):
         plan = dict(state.get("active_workflow_plan") or {})
+        assert_plan_integrity(plan)
         return [
             Send("run_credit_analysis", {**state, "active_agent_task": task})
             for task in plan.get("tasks") or []
@@ -106,6 +108,7 @@ def build_contract_subgraph(nodes: WorkflowNodes):
 
     def dispatch_contract(state: WorkflowState):
         plan = dict(state.get("active_workflow_plan") or {})
+        assert_plan_integrity(plan)
         return [
             Send("run_contract_analysis", {**state, "active_agent_task": task})
             for task in plan.get("tasks") or []
@@ -131,6 +134,7 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
         plan_offset = len(state.get("workflow_plans") or [])
         run_offset = len(state.get("agent_runs") or [])
         result_offset = len(state.get("agent_task_results") or [])
+        audit_offset = len(state.get("execution_audits") or [])
         return {
             "stage": result.get("stage"),
             "status": result.get("status"),
@@ -144,6 +148,7 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
             "workflow_plans": list(result.get("workflow_plans") or [])[plan_offset:],
             "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
             "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
+            "execution_audits": list(result.get("execution_audits") or [])[audit_offset:],
             "active_workflow_plan": result.get("active_workflow_plan"),
             "credit_analysis": result.get("credit_analysis"),
             "credit_verification": result.get("credit_verification"),
@@ -158,12 +163,14 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
         plan_offset = len(state.get("workflow_plans") or [])
         run_offset = len(state.get("agent_runs") or [])
         result_offset = len(state.get("agent_task_results") or [])
+        audit_offset = len(state.get("execution_audits") or [])
         return {
             "stage": result.get("stage"),
             "contract_reviews": result.get("contract_reviews"),
             "workflow_plans": list(result.get("workflow_plans") or [])[plan_offset:],
             "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
             "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
+            "execution_audits": list(result.get("execution_audits") or [])[audit_offset:],
             "active_workflow_plan": result.get("active_workflow_plan"),
             "contract_verifications": result.get("contract_verifications"),
             "trace": list(result.get("trace") or [])[trace_offset:],

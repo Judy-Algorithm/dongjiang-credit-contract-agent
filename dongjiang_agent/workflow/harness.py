@@ -73,6 +73,7 @@ class DongjiangWorkflowHarness:
         output_dir: str | Path = "output",
         evidence_dir: str | Path | None = None,
         archive_dir: str | Path | None = None,
+        execution_dir: str | Path | None = None,
         integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
     ) -> None:
@@ -114,6 +115,13 @@ class DongjiangWorkflowHarness:
                 else Path("data/archive")
                 if default_layout
                 else self.inbox_dir.parent / "archive"
+            ),
+            execution_dir=(
+                Path(execution_dir)
+                if execution_dir is not None
+                else Path("data/executions")
+                if default_layout
+                else self.inbox_dir.parent / "executions"
             ),
             integrations=integration_bundle,
             policy=policy,
@@ -239,6 +247,7 @@ class DongjiangWorkflowHarness:
             "workflow_plans": [],
             "agent_runs": [],
             "agent_task_results": [],
+            "execution_audits": [],
             "active_workflow_plan": None,
             "active_agent_task": None,
             "credit_analysis": {},

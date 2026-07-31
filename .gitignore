@@ -17,4 +17,6 @@ data/auth/
 data/revisions/
 data/demo/
 data/runtime/
+data/executions/
+data/deployment-backups/
 output/

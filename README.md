@@ -65,6 +65,8 @@ python3 scripts/check_hkgai_config.py
 
 `DongjiangWorkflowHarness` 是CRM、泛微OA、Web和CLI调用的稳定边界，负责案件号、角色权限、信用资料与合同的分阶段暂存、Checkpoint和恢复；LangGraph负责信审/合同子图、条件路由、循环和人工中断。
 
+动态计划采用Plan 2.0执行治理：计划在运行前冻结并校验SHA-256规范摘要，同时快照信用规则、合同规则、模型和提示词版本；节点使用持久幂等键避免重复调用，合同AI失败最多重试一次并回退到制度规则，证据定位不足的发现自动降级剔除。独立核验会审计缺失、越权、重复和证据违规任务，偏差会强制补件或人工复核。前端“Agent运行”页可查看上述状态，但只显示脱敏摘要和截断哈希。
+
 模型计算结果不等于正式授信。系统依次区分：
 
 1. `calculated`：模型已给出建议额度、账期和风险等级；
@@ -159,11 +161,12 @@ python3 -m pip install -e '.[documents]'
 - `data/integrations/DJ-*/*.json`：OA、CRM、SAP每次调用的成功、失败或未配置记录。
 - `data/auth/auth.sqlite`：本地用户、密码摘要、会话、安全审计、注册验证码摘要和站内通知；不保存明文密码、明文验证码或会话令牌。
 - `data/revisions/DJ-*/REV-*`：合同修订决策、带修订痕迹版、清洁版和重新审查结果。
+- `data/executions/DJ-*/PLAN-*/*.json`：按冻结计划和幂等键保存的节点执行结果，用于重启后安全复用。
 - `output/DJ-*/audit-result.json`：机器可读结果。
 - `output/DJ-*/audit-report.html`：人工审阅报告。
 - `output/evaluation-report.json`：量化回归结果。
 
-`data/cases`、`data/vault`、`data/auth` 和 `output` 已加入 `.gitignore`，不得提交真实企业数据或身份数据。
+`data/cases`、`data/vault`、`data/auth`、`data/executions` 和 `output` 已加入 `.gitignore`，不得提交真实企业数据、身份数据或节点执行结果。
 
 ## 公网部署
 
