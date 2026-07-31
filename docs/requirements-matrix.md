@@ -24,6 +24,8 @@
 | CRM/OA预留端口 | `CRMPort`、`OAPort`、Webhook 示例适配器 | `integrations/ports.py` |
 | 可视化后台 | 多文件上传、案件统计、案件列表和详情回看 | `scripts/run_web.sh`、`test_web_api.py` |
 | 文件证据定位 | PDF页码、DOCX段落、XLSX工作表/单元格、文本行号；风险卡片联动受控原文预览 | `test_document_locations.py`、`test_contract_risk_exposes_line_location_and_controlled_preview` |
+| 合同修订闭环 | 风险逐项采用建议/人工修改/保留说明；生成Word修订稿与清洁稿；清洁稿重新审查并保留版本链 | `test_contract_revisions.py`、`test_contract_revision_generates_downloads_and_resubmits_clean_version` |
+| 固定演示路径 | 幂等生成资料补件、TKP 120天特批、无责取消修订三条合成案件 | `python scripts/prepare_demo_cases.py` |
 | 结果可量化 | 决策回归准确率、平均/P95耗时 | `python3 scripts/evaluate.py` |
 | 可审计 | 案件 Trace、政策版本、证据和规则 ID | `audit-result.json` |
 
@@ -40,4 +42,4 @@
 ## 比赛前仍需补强
 
 当前已补齐TKM业务子类型、首期采购款豁免、总信用额、一年无订单自动失活、OA审批链数据、批准范围/有效期、HTTP回写适配器、原件案件级归档、内部用户权限和文件证据定位。真实企业联调仍需东江提供测试地址、鉴权、流程ID和字段字典。
-5. 原 Word 合同保真修订、条款级多语言及结构化LLM抽取。
+5. 原 Word 合同已支持段落级格式保留和修订痕迹；后续继续补表格内局部文字修订、条款级多语言及结构化LLM抽取。

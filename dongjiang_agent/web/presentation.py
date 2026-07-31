@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..contract.revisions import suggested_replacement
 from ..ingestion import location_label
 
 
@@ -241,6 +242,11 @@ def case_view(
     status = str(case.get("status") or "created")
     findings = [
         {
+            "finding_key": (
+                f"{item.get('rule_id')}:{item.get('document_id')}:{item.get('fragment_id')}"
+                if item.get("document_id") and item.get("fragment_id")
+                else ""
+            ),
             "rule_id": item.get("rule_id"),
             "title": item.get("title"),
             "level": item.get("level"),
@@ -253,6 +259,9 @@ def case_view(
             "location_label": location_label(item.get("location"))
             if item.get("document_id")
             else "",
+            "suggested_replacement": suggested_replacement(
+                str(item.get("rule_id") or "")
+            ),
         }
         for review in reviews
         for item in review.get("findings") or []

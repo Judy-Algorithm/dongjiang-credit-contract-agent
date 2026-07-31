@@ -77,6 +77,9 @@ python3 scripts/check_hkgai_config.py
 - `POST /api/cases/{case_id}/credit-actions`
 - `POST /api/cases/{case_id}/contracts`
 - `POST /api/cases/{case_id}/contract-actions`
+- `POST /api/cases/{case_id}/revisions`
+- `GET /api/cases/{case_id}/revisions/{revision_id}/redline|clean`
+- `POST /api/cases/{case_id}/revisions/{revision_id}/submit`
 
 详细设计见[LangGraph与Harness落地设计](docs/langgraph-harness-design.md)。
 
@@ -114,6 +117,16 @@ python3 scripts/check_hkgai_config.py
 
 Web页面包含登录、我的待办、案件列表、发起信审、六页签案件工作台、案件处理、用户管理和安全审计。首次启动需在页面创建管理员；普通账号只能由管理员创建，不开放公开注册。销售、信用管理、财务、法务、市场总监、集团管理层和管理员按照真实登录身份执行工作流权限。新案件自动归属发起销售，管理员可以改派负责人。新解析文件支持 PDF 页码、DOCX 段落、XLSX 工作表/单元格和文本行号定位，风险卡片可在受控查看器中打开对应原文。信用资料和合同使用不同入口，合同只能在授信审批生效后上传。上传限制为单文件15MB、单次请求30MB。
 
+合同处于“等待修改”时，销售可以逐项采用标准建议、人工修改或保留并填写理由。系统不会覆盖原合同，而是生成带 Word 修订痕迹版和清洁版；清洁版可以直接重新送入既有规则审查，修订决策、文件摘要和复审结果按案件保留。当前自动修订支持具有行号或段落号定位的 TXT、Markdown 和 DOCX；PDF 及复杂版式合同保留人工上传新版本通道。
+
+比赛演示可用合成数据一键准备三条固定路径：
+
+```bash
+python3 scripts/prepare_demo_cases.py
+```
+
+脚本重复执行不会重复创建案件，生成的资料位于已忽略的数据目录。
+
 可选安装：
 
 ```bash
@@ -133,6 +146,7 @@ python3 -m pip install -e '.[documents]'
 - `data/archive/DJ-*/credit|contract/*`：案件级原始信用资料和合同，按SHA-256归档。
 - `data/integrations/DJ-*/*.json`：OA、CRM、SAP每次调用的成功、失败或未配置记录。
 - `data/auth/auth.sqlite`：本地用户、密码摘要、会话和安全审计；不保存明文密码或会话令牌。
+- `data/revisions/DJ-*/REV-*`：合同修订决策、带修订痕迹版、清洁版和重新审查结果。
 - `output/DJ-*/audit-result.json`：机器可读结果。
 - `output/DJ-*/audit-report.html`：人工审阅报告。
 - `output/evaluation-report.json`：量化回归结果。

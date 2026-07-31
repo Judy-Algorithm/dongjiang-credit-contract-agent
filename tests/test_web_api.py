@@ -1,10 +1,12 @@
 import base64
 import http.client
+import io
 import json
 import os
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.server import ThreadingHTTPServer
 
 from dongjiang_agent.web.server import AuditRequestHandler
@@ -74,6 +76,12 @@ class WebApiTests(unittest.TestCase):
             merged.setdefault("X-CSRF-Token", self.csrf_token)
         status, data, _ = self.raw_request(method, path, payload, merged)
         return status, data
+
+    def download(self, path):
+        headers = {"Cookie": self.cookie} if self.cookie else {}
+        self.connection.request("GET", path, headers=headers)
+        response = self.connection.getresponse()
+        return response.status, response.read(), dict(response.getheaders())
 
     def login(self, username, password):
         status, data, headers = self.raw_request(
@@ -522,6 +530,100 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
+
+    def test_contract_revision_generates_downloads_and_resubmits_clean_version(self):
+        _, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "合同修订闭环客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        case_id = created["case"]["case_id"]
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+            )[0],
+            200,
+        )
+        contract = """销售合同
+甲方：东江集团；乙方：合同修订闭环客户。
+合同标的：精密组件。合同金额：100万元。信用额度：100万元。
+付款及账期：月结60天。知识产权：各自所有。保密：不得披露。
+买方可随时取消订单且不承担任何责任。
+违约责任：赔偿直接损失。解除与终止：违约催告后解除。争议解决：深圳法院。
+"""
+        status, submitted = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contracts",
+            {"contract_texts": [contract]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(submitted["case"]["status"], "blocked")
+        finding = next(
+            item
+            for item in submitted["case"]["findings"]
+            if item["rule_id"] == "DJ-CANCEL-WITHOUT-LIABILITY"
+        )
+        self.assertTrue(finding["finding_key"])
+        self.assertIn("提前30日", finding["suggested_replacement"])
+
+        status, created_revision = self.request(
+            "POST",
+            f"/api/cases/{case_id}/revisions",
+            {
+                "document_id": finding["document_id"],
+                "decisions": [
+                    {
+                        "finding_key": finding["finding_key"],
+                        "action": "accept",
+                        "reason": "采用标准取消补偿机制",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 201)
+        revision = created_revision["revision"]
+        revision_id = revision["revision_id"]
+        self.assertNotIn("path", json.dumps(revision, ensure_ascii=False))
+
+        status, body, headers = self.download(
+            f"/api/cases/{case_id}/revisions/{revision_id}/redline"
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"PK"))
+        self.assertIn("attachment", headers["Content-Disposition"])
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            xml = archive.read("word/document.xml").decode("utf-8")
+        self.assertIn("<w:del", xml)
+        self.assertIn("<w:ins", xml)
+
+        status, resubmitted = self.request(
+            "POST",
+            f"/api/cases/{case_id}/revisions/{revision_id}/submit",
+            {},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(resubmitted["revision"]["status"], "submitted")
+        self.assertEqual(resubmitted["case"]["status"], "approved")
+        self.assertFalse(
+            any(
+                item["rule_id"] == "DJ-CANCEL-WITHOUT-LIABILITY"
+                for item in resubmitted["case"]["findings"]
+            )
+        )
+        status, detail = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["case"]["contract_revisions"][0]["status"], "submitted")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ export async function renderCaseActionPage(root, route) {
     <section class="panel action-card">
       ${context(item)}
       ${["upload_contract","submit_revision"].includes(type)
-        ? contractForm(type)
+        ? contractForm(type, item)
         : type === "credit_supplement"
           ? creditSupplementForm()
           : decisionForm(type, item)}
@@ -37,6 +37,27 @@ export async function renderCaseActionPage(root, route) {
     const encoded = await encodeFiles(files?.files || [])
     const contractText = root.querySelector("#contractText")?.value.trim() || ""
     let data
+    if (type === "submit_revision" && action === "create_revision") {
+      const decisions = Array.from(root.querySelectorAll("[data-revision-finding]")).map((card) => ({
+        finding_key:card.dataset.revisionFinding,
+        action:card.querySelector("select").value,
+        replacement:card.querySelector("textarea[data-replacement]")?.value.trim() || "",
+        reason:card.querySelector("textarea[data-reason]")?.value.trim() || "",
+      }))
+      if (!decisions.length) throw new Error("当前没有可自动定位的风险项，请上传人工修订版本。")
+      const documentId = root.querySelector("#revisionDocumentId")?.value || ""
+      await api.createContractRevision(item.case_id, {document_id:documentId, decisions})
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"修订版本已生成"}))
+      navigate(`/cases/${encodeURIComponent(item.case_id)}/action`, {replace:true})
+      return
+    }
+    if (type === "submit_revision" && action === "submit_revision_version") {
+      const revisionId = submitter.dataset.revisionId
+      const submitted = await api.submitContractRevision(item.case_id, revisionId)
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"清洁版已重新送审"}))
+      navigate(`/cases/${encodeURIComponent(submitted.case.case_id)}`, {replace:true})
+      return
+    }
     if (["manager_review","special_release"].includes(type) && action === "approve" && !encoded.length) {
       throw new Error("批准例外或特别放行时必须上传审批证据附件。")
     }
@@ -110,7 +131,8 @@ function message(type) {
   })[type] || "请处理当前事项。"
 }
 
-function contractForm(type) {
+function contractForm(type, item) {
+  if (type === "submit_revision") return revisionForm(item)
   return `
     <form id="actionForm">
       <div class="form-section">
@@ -129,6 +151,51 @@ function contractForm(type) {
         <button type="submit" class="primary" data-action="${type}">${type === "submit_revision" ? "重新提交" : "提交合同审核"}</button>
       </div>
     </form>`
+}
+
+function revisionForm(item) {
+  const supported = (item.source_documents || []).filter((doc) =>
+    doc.document_kind === "contract" && ["txt","md","docx"].includes((doc.media_type || "").toLowerCase())
+  )
+  const documentIds = new Set(supported.map((doc) => doc.document_id))
+  const findings = (item.findings || []).filter((finding) => finding.finding_key && documentIds.has(finding.document_id))
+  const grouped = supported.map((doc) => ({doc, findings:findings.filter((finding) => finding.document_id === doc.document_id)})).filter((row) => row.findings.length)
+  const selected = grouped.at(-1) || grouped[0]
+  const revisions = item.contract_revisions || []
+  return `
+    <form id="actionForm">
+      ${selected ? `<div class="form-section revision-editor">
+        <div class="section-heading"><h3>逐项处理风险</h3><span>${selected.findings.length} 项可定位</span></div>
+        <label>修订合同<select id="revisionDocumentId"><option value="${escapeHtml(selected.doc.document_id)}">${escapeHtml(selected.doc.name)}</option></select></label>
+        <div class="revision-findings">${selected.findings.map(revisionFinding).join("")}</div>
+        <div class="form-actions"><button type="submit" class="danger" data-action="close_case">关闭案件</button><button type="submit" class="primary" data-action="create_revision">生成修订版本</button></div>
+      </div>` : `<div class="supplement-notice"><strong>当前合同无法自动修订</strong><p>仅可对具有行号或段落号定位的 TXT、MD、DOCX 合同生成修订稿。请在下方上传人工修改后的版本。</p></div>`}
+      ${revisionHistory(item, revisions)}
+      <div class="form-section"><div class="section-heading"><h3>上传人工修订版本</h3><span>适用于 PDF 或复杂版式合同</span></div>
+        <label class="upload-zone" for="actionFiles"><input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf"><b>选择修改后的合同</b><span>支持 TXT、DOCX、PDF</span></label>
+        <div id="actionFileList" class="file-list"></div>
+        <label class="full">合同正文<textarea id="contractText" rows="7" placeholder="也可以在这里粘贴修改后的合同正文"></textarea></label>
+        <div class="form-actions"><span></span><button type="submit" class="secondary" data-action="submit_revision">直接重新送审</button></div>
+      </div>
+    </form>`
+}
+
+function revisionFinding(finding) {
+  const suggestion = finding.suggested_replacement || ""
+  return `<article class="revision-finding" data-revision-finding="${escapeHtml(finding.finding_key)}">
+    <header><div><small>${escapeHtml(finding.rule_id)} · ${escapeHtml(finding.location_label)}</small><h3>${escapeHtml(finding.title)}</h3></div>
+      <select aria-label="${escapeHtml(finding.title)}处置方式"><option value="${suggestion ? "accept" : "custom"}">${suggestion ? "采用标准建议" : "人工修改"}</option>${suggestion ? `<option value="custom">人工修改</option>` : ""}<option value="retain">保留并说明</option></select></header>
+    <p>${escapeHtml(finding.message)}</p>
+    <label>替换后的完整条款<textarea data-replacement rows="4" placeholder="填写替换后的完整条款">${escapeHtml(suggestion)}</textarea></label>
+    <label>修改或保留理由<textarea data-reason rows="2" placeholder="保留原条款时必填；修改时建议填写谈判依据"></textarea></label>
+  </article>`
+}
+
+function revisionHistory(item, revisions) {
+  if (!revisions.length) return ""
+  return `<div class="form-section"><div class="section-heading"><h3>修订版本</h3><span>${revisions.length} 个版本</span></div>
+    <div class="revision-list">${revisions.map((revision) => `<article class="revision-version"><div><b>${escapeHtml(revision.revision_id)}</b><small>${escapeHtml(revision.source_name)} · ${revision.decisions?.length || 0} 项处置 · ${escapeHtml(revision.status === "submitted" ? "已送审" : "草稿")}</small></div><div class="revision-actions"><a class="secondary" href="${api.revisionDownloadUrl(item.case_id, revision.revision_id, "redline")}">下载修订稿</a><a class="secondary" href="${api.revisionDownloadUrl(item.case_id, revision.revision_id, "clean")}">下载清洁稿</a>${revision.status === "draft" ? `<button type="submit" class="primary" data-action="submit_revision_version" data-revision-id="${escapeHtml(revision.revision_id)}">用清洁稿重新送审</button>` : ""}</div></article>`).join("")}</div>
+  </div>`
 }
 
 function creditSupplementForm() {

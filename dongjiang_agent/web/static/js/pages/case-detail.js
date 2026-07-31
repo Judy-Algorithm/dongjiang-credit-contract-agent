@@ -101,6 +101,14 @@ function contractTab(item) {
       ${item.findings.length ? item.findings.map((finding, index) => findingCard(finding, index)).join("") : `<div class="empty-note">未发现需要处理的合同风险。</div>`}
     </section>
     <aside id="evidenceViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>原文证据</strong><p>点击风险事项中的“查看原文”，这里会显示对应页码、段落或单元格。</p></div></aside>
+  </div>${revisionArchive(item)}`
+}
+
+function revisionArchive(item) {
+  const revisions = item.contract_revisions || []
+  if (!revisions.length) return ""
+  return `<div class="form-section"><div class="section-heading"><h3>合同版本链</h3><span>${revisions.length} 个修订版本</span></div>
+    <div class="revision-list">${revisions.map((revision) => `<article class="revision-version"><div><b>${escapeHtml(revision.revision_id)}</b><small>${escapeHtml(revision.source_name)} · ${revision.decisions?.length || 0} 项处置 · ${escapeHtml(revision.status === "submitted" ? "已重新送审" : "草稿")}</small></div><div class="revision-actions"><a class="secondary" href="${api.revisionDownloadUrl(item.case_id, revision.revision_id, "redline")}">修订稿</a><a class="secondary" href="${api.revisionDownloadUrl(item.case_id, revision.revision_id, "clean")}">清洁稿</a></div></article>`).join("")}</div>
   </div>`
 }
 

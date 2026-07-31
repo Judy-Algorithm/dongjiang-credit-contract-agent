@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..persistence import CaseRepository
 from ..security import AuthStore
 from .presentation import case_summary, case_view
@@ -71,6 +72,17 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         for name, value in (headers or {}).items():
             self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _file(self, target: Path, filename: str) -> None:
+        body = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.send_header("Content-Disposition", content_disposition(filename))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -140,7 +152,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         return "; ".join(parts)
 
     def _workflow_view(self, run: Any, user: dict[str, Any]) -> dict[str, Any]:
-        return case_view(dict(run.state), waiting_for=run.waiting_for, actor=user)
+        view = case_view(dict(run.state), waiting_for=run.waiting_for, actor=user)
+        view["contract_revisions"] = ContractRevisionStore().list(str(view["case_id"]))
+        return view
 
     def _static(self, relative: str) -> None:
         requested = relative.lstrip("/")
@@ -178,7 +192,24 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             return self._workflow_view(run, user)
         except KeyError:
             stored = CaseRepository().get_case(case_id)
-            return case_view(stored, actor=user) if stored else None
+            if not stored:
+                return None
+            view = case_view(stored, actor=user)
+            view["contract_revisions"] = ContractRevisionStore().list(case_id)
+            return view
+
+    @staticmethod
+    def _case_state(case_id: str) -> dict[str, Any]:
+        from ..workflow import DongjiangWorkflowHarness
+
+        try:
+            with DongjiangWorkflowHarness() as harness:
+                return dict(harness.get(case_id).state)
+        except KeyError:
+            stored = CaseRepository().get_case(case_id)
+            if not stored:
+                raise KeyError("案件不存在。")
+            return stored
 
     def _document_fragment(
         self,
@@ -308,6 +339,16 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 payload = self._document_fragment(parts[2], parts[4], fragment_id)
                 self._json(200, {"ok": True, **payload})
                 return
+            if (
+                len(parts) == 6
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "revisions"
+            ):
+                target, filename = ContractRevisionStore().artifact_path(
+                    parts[2], parts[4], parts[5]
+                )
+                self._file(target, filename)
+                return
             if path.startswith("/api/cases/"):
                 case_id = path.rsplit("/", 1)[-1]
                 case = self._case_detail(case_id, user)
@@ -418,6 +459,17 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 if resource in {"credit-documents", "credit-actions", "contracts", "contract-actions"}:
                     self._handle_case_action(case_id, resource, payload, user)
                     return
+                if resource == "revisions":
+                    self._create_contract_revision(case_id, payload, user)
+                    return
+            if (
+                len(parts) == 6
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "revisions"
+                and parts[5] == "submit"
+            ):
+                self._submit_contract_revision(parts[2], parts[4], user)
+                return
             self._json(404, {"ok": False, "error": "API 不存在"})
         except AuthenticationError as exc:
             self._json(401, {"ok": False, "error": str(exc)})
@@ -549,6 +601,92 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 remote_address=self.client_address[0],
             )
         self._json(201, {"ok": True, "case": self._workflow_view(run, user)})
+
+    def _create_contract_revision(
+        self,
+        case_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        self._require_roles(user, "sales", "legal")
+        actor = {
+            "actor_id": user.get("user_id"),
+            "display_name": user.get("display_name") or user.get("username"),
+        }
+        state = self._case_state(case_id)
+        if state.get("waiting_for") != "sales_revision":
+            raise ValueError("当前案件不在等待合同修订状态。")
+        revision = ContractRevisionStore().create(
+            state,
+            document_id=str(payload.get("document_id") or ""),
+            decisions=list(payload.get("decisions") or []),
+            actor=actor,
+        )
+        with AuthStore() as store:
+            store.audit(
+                "contract.revision_created",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={
+                    "revision_id": revision["revision_id"],
+                    "decision_count": len(revision.get("decisions") or []),
+                },
+                remote_address=self.client_address[0],
+            )
+        self._json(201, {"ok": True, "revision": revision})
+
+    def _submit_contract_revision(
+        self,
+        case_id: str,
+        revision_id: str,
+        user: dict[str, Any],
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "sales")
+        store = ContractRevisionStore()
+        manifest = store.get(case_id, revision_id)
+        if manifest.get("status") != "draft":
+            raise ValueError("该修订版本已经提交，不能重复送审。")
+        clean_path, _ = store.artifact_path(case_id, revision_id, "clean")
+        with DongjiangWorkflowHarness() as harness:
+            current = harness.get(case_id)
+            self._assert_owner(current, user)
+            if current.waiting_for != "sales_revision":
+                raise ValueError("当前案件不在等待合同修订状态。")
+            run = harness.resume(
+                case_id,
+                {"action": "submit_revision", "file_paths": [str(clean_path)]},
+                actor=self._actor(user),
+            )
+        result = {
+            "status": run.status,
+            "decision": run.state.get("decision"),
+            "waiting_for": run.waiting_for,
+            "finding_count": sum(
+                len(item.get("findings") or [])
+                for item in run.state.get("contract_reviews") or []
+            ),
+        }
+        revision = store.mark_submitted(case_id, revision_id, result)
+        with AuthStore() as auth:
+            auth.audit(
+                "contract.revision_submitted",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={"revision_id": revision_id, **result},
+                remote_address=self.client_address[0],
+            )
+        self._json(
+            200,
+            {
+                "ok": True,
+                "revision": revision,
+                "case": self._workflow_view(run, user),
+            },
+        )
 
     @staticmethod
     def _assert_owner(current: Any, user: dict[str, Any]) -> None:
