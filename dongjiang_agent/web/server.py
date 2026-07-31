@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
-from ..operations import AnalyticsService, SLAMonitor, SLAService
+from ..operations import AgentOperationsService, AnalyticsService, SLAMonitor, SLAService
 from ..persistence import CaseRepository
 from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
@@ -280,7 +280,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "analytics", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "agent-operations", "analytics", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -482,6 +482,10 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/operations/sla":
                 self._require_roles(user, "admin")
                 self._json(200, {"ok": True, **SLAService().dashboard()})
+                return
+            if path == "/api/operations/agents":
+                self._require_roles(user, "admin")
+                self._json(200, {"ok": True, **AgentOperationsService().report()})
                 return
             if path == "/api/operations/analytics":
                 self._require_roles(user, "admin")

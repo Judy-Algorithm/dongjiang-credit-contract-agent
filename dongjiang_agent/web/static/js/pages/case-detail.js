@@ -53,7 +53,8 @@ export async function renderCaseDetailPage(root, route) {
     if (!sales.length) return window.dispatchEvent(new CustomEvent("app:toast", {detail:"请先创建销售用户"}))
     showOwnerDialog(root, item, sales)
   })
-  renderTab("overview")
+  const requestedTab = route.params.get("tab")
+  renderTab(tabs.some(([key]) => key === requestedTab) ? requestedTab : "overview")
 }
 
 function overviewTab(item) {

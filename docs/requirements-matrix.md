@@ -28,6 +28,7 @@
 | 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
 | AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
 | 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
+| Agent执行运维 | 跨案件汇总计划完整性、执行偏差、失败/降级节点、重试和幂等复用；旧计划单独标识，管理员可直达案件运行页 | `test_agent_operations.py`、Agent运维页 |
 | 安全自助注册与审核 | 注册前邮箱验证码；账号待审核停用；管理员批准/拒绝并分配角色；审核结果站内信和邮件通知 | `test_verified_registration_requires_admin_review`、注册审核页 |
 | 业务通知中心 | 注册申请、审核结果、案件流转和失败回写通知；按用户隔离，支持单条/全部已读与业务跳转 | `test_notifications_are_scoped_to_recipient_and_support_read_all`、通知中心页 |
 | 审批时效运营 | 节点级可配置 SLA、临期/逾期展示、去重站内信/邮件提醒、管理员瓶颈看板 | `test_sla_operations.py`、时效运营页 |

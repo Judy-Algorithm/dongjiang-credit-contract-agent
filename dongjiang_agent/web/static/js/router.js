@@ -16,6 +16,7 @@ export function currentRoute() {
   if (path === "/registrations") return {name:"registrations", params}
   if (path === "/notifications") return {name:"notifications", params}
   if (path === "/operations") return {name:"operations", params}
+  if (path === "/agent-operations") return {name:"agent-operations", params}
   if (path === "/analytics") return {name:"analytics", params}
   if (path === "/audit") return {name:"audit", params}
   if (path === "/writebacks") return {name:"writebacks", params}

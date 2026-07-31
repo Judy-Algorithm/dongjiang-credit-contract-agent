@@ -66,6 +66,7 @@ export const api = {
   listAudit:() => request("/api/audit"),
   listWritebackFailures:() => request("/api/operations/writebacks"),
   getSlaDashboard:() => request("/api/operations/sla"),
+  getAgentOperations:() => request("/api/operations/agents"),
   runSlaSweep:() => post("/api/operations/sla/sweep", {}),
   getAnalytics:(days = 30) => request(`/api/operations/analytics?days=${encodeURIComponent(days)}`),
   analyticsExportUrl:(days, format) => `/api/operations/analytics/export.${encodeURIComponent(format)}?days=${encodeURIComponent(days)}`,

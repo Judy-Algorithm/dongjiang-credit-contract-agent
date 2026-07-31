@@ -671,6 +671,23 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .writeback-metrics .metric-card { cursor: default; }
 .writeback-metrics .metric-card:hover { transform: none; box-shadow: none; }
 .integration-error { max-width: 360px; color: var(--red); overflow-wrap: anywhere; }
+.agent-ops-metrics { grid-template-columns: repeat(5, 1fr); }
+.agent-ops-panel { overflow: hidden; }
+.agent-ops-toolbar { padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; gap: 14px; border-bottom: 1px solid var(--hairline-soft); }
+.agent-ops-toolbar > div { display: grid; grid-template-columns: minmax(220px, 1fr) 150px 150px; gap: 8px; flex: 1; }
+.agent-ops-toolbar input, .agent-ops-toolbar select { min-height: 40px; }
+.agent-ops-toolbar > span { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.agent-ops-row td { vertical-align: top; }
+.agent-ops-row td:first-child b, .agent-ops-row td small, .agent-ops-row code { display: block; }
+.agent-ops-row td:first-child b { margin-top: 5px; color: var(--body); font-size: 11px; }
+.agent-ops-row code { max-width: 210px; color: var(--ink); font-size: 10px; overflow-wrap: anywhere; }
+.agent-severity-critical { color: var(--red); background: var(--red-soft); }
+.agent-severity-warning { color: var(--orange); background: var(--orange-soft); }
+.agent-severity-healthy { color: var(--green); background: var(--green-soft); }
+.agent-severity-legacy, .agent-severity-pending { color: var(--muted); background: var(--surface-strong); }
+.agent-issue-list { display: flex; gap: 4px; flex-wrap: wrap; }
+.agent-issue-list span { padding: 3px 5px; color: var(--body); font-size: 9px; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.muted { color: var(--muted); }
 
 .revision-findings, .revision-list { display: grid; gap: 12px; margin-top: 14px; }
 .revision-finding { padding: 17px; background: var(--canvas); border: 1px solid var(--hairline); border-left: 3px solid var(--orange); border-radius: 0 12px 12px 0; }
@@ -725,7 +742,9 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .page-header, .action-banner, .form-actions { flex-direction: column; align-items: stretch; }
   .page-header { margin-bottom: 22px; }
   .page-header p { font-size: 14px; }
-  .metric-grid, .toolbar, .form-grid, .form-grid.two, .summary-grid, .info-grid, .decision-context, .info-grid.compact, .integration-grid, .sla-metrics, .analytics-metrics { grid-template-columns: 1fr; }
+  .metric-grid, .toolbar, .form-grid, .form-grid.two, .summary-grid, .info-grid, .decision-context, .info-grid.compact, .integration-grid, .sla-metrics, .analytics-metrics, .agent-ops-metrics { grid-template-columns: 1fr; }
+  .agent-ops-toolbar { align-items: stretch; flex-direction: column; }
+  .agent-ops-toolbar > div { grid-template-columns: 1fr; width: 100%; }
   .metric-grid { gap: 10px; }
   .metric-card { min-height: 96px; padding: 16px; }
   .toolbar { display: grid; padding: 12px; }

@@ -681,7 +681,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
-        for route in ("/cases/new", "/registrations", "/notifications", "/operations", "/analytics"):
+        for route in ("/cases/new", "/registrations", "/notifications", "/operations", "/agent-operations", "/analytics"):
             self.connection.request("GET", route)
             response = self.connection.getresponse()
             html = response.read().decode("utf-8")
@@ -696,6 +696,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertNotIn('data-nav="tasks">我的待办', javascript)
         self.assertIn('href="/cases/new" data-link data-nav="new">发起信审', javascript)
+        self.assertIn('href="/agent-operations" data-link data-nav="agent-operations">Agent运维', javascript)
         self.assertNotIn('class="primary small" href="/cases/new"', javascript)
         account_start = javascript.index('<div id="accountPopover"')
         account_end = javascript.index('</div>', account_start)
@@ -993,6 +994,63 @@ class WebApiTests(unittest.TestCase):
         status, failures = self.request("GET", "/api/operations/writebacks")
         self.assertEqual(status, 200)
         self.assertEqual(failures["total"], 0)
+
+    def test_agent_operations_is_admin_only_and_exposes_aggregates(self):
+        case_id = "DJ-AGENT-OPS1"
+        case_dir = Path("data/cases")
+        case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / f"{case_id}.json").write_text(
+            json.dumps(
+                {
+                    "case_id": case_id,
+                    "status": "completed",
+                    "customer": {"customer_name": "Agent运维客户", "business_type": "TKP"},
+                    "workflow_plans": [
+                        {
+                            "plan_id": "CREDIT-OPS-1",
+                            "agent": "credit",
+                            "label": "信用信审子 Agent",
+                            "version": "2.0",
+                            "frozen": True,
+                            "spec_hash": "not-a-valid-hash",
+                            "task_catalog_version": "dongjiang-controlled-tasks-v2",
+                            "runtime_snapshot": {},
+                            "tasks": [],
+                        }
+                    ],
+                    "agent_runs": [
+                        {
+                            "plan_id": "CREDIT-OPS-1",
+                            "task_id": "credit.verification",
+                            "status": "failed",
+                            "attempt_count": 1,
+                            "input_summary": "客户敏感内容",
+                            "output_summary": "模型原始输出",
+                        }
+                    ],
+                    "execution_audits": [
+                        {
+                            "plan_id": "CREDIT-OPS-1",
+                            "status": "non_conformant",
+                            "integrity_valid": False,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        status, report = self.request("GET", "/api/operations/agents")
+        self.assertEqual(status, 200)
+        self.assertEqual(report["metrics"]["critical_plans"], 1)
+        self.assertNotIn("客户敏感内容", json.dumps(report, ensure_ascii=False))
+        self.assertNotIn("模型原始输出", json.dumps(report, ensure_ascii=False))
+
+        self.create_user("agent.ops.sales", "普通销售", ["sales"])
+        self.assertEqual(self.login("agent.ops.sales", "InitialPass123")[0], 200)
+        status, denied = self.request("GET", "/api/operations/agents")
+        self.assertEqual(status, 403)
+        self.assertFalse(denied["ok"])
 
     @patch("dongjiang_agent.web.server.SLAService")
     def test_sla_operations_are_admin_only_and_sweep_is_audited(self, service_class):
