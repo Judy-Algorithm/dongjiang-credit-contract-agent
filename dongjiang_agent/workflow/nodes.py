@@ -27,6 +27,7 @@ from ..domain.models import (
 )
 from ..ingestion import DocumentExtractor, ExtractedDocument, locate_excerpt
 from ..integrations import IntegrationBundle
+from ..llm import ContractAIAssistant
 from ..persistence import CaseDocumentArchive, CaseRepository
 from ..reporting import AuditReporter
 from ..security import RedactionVault
@@ -111,6 +112,7 @@ class WorkflowNodes:
         archive_dir: str | Path = "data/archive",
         integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
+        ai_assistant: ContractAIAssistant | None = None,
     ) -> None:
         self.repository = repository
         self.vault_dir = Path(vault_dir)
@@ -123,6 +125,7 @@ class WorkflowNodes:
         self.credit_engine = CreditScoringEngine(policy)
         self.contract_facts = ContractFactExtractor()
         self.contract_engine = ContractReviewEngine(self.credit_engine.policy)
+        self.contract_ai = ai_assistant or ContractAIAssistant()
         self.reporter = AuditReporter()
 
     @staticmethod
@@ -861,6 +864,7 @@ class WorkflowNodes:
             raise ValueError("合同评审前缺少正式信审结果。")
         contract_facts = list(state.get("contract_facts") or [])
         reviews = []
+        traces: list[dict[str, Any]] = []
         for item in contract_facts:
             facts = contract_facts_from_dict(item)
             review = self.contract_engine.review(facts, assessment)
@@ -884,6 +888,25 @@ class WorkflowNodes:
                     finding.document_id = facts.document_id
                     finding.fragment_id = str(matched["fragment_id"])
                     finding.location = dict(matched["location"])
+            ai_text = facts.raw_text or ""
+            if "⟦" not in ai_text:
+                ai_text = "⟦REDACTED_TEXT⟧\n" + ai_text
+            review.ai_assistance = self.contract_ai.review(
+                facts,
+                redacted_text=ai_text,
+                fragments=fragments,
+            )
+            ai_result = review.ai_assistance
+            traces.append(
+                trace(
+                    "contract.ai_assistance",
+                    "合同 AI 辅助审查已完成；该结果不参与制度规则裁决。",
+                    contract_name=facts.contract_name,
+                    status=ai_result.get("status"),
+                    model=ai_result.get("model"),
+                    finding_count=len(ai_result.get("findings") or []),
+                )
+            )
             reviews.append(checkpoint_dict(review))
         if not reviews:
             review = ContractReview(
@@ -905,6 +928,12 @@ class WorkflowNodes:
                     "credit_score": assessment.score,
                     "policy_version": assessment.policy_version,
                 },
+                ai_assistance={
+                    "status": "not_applicable",
+                    "model": self.contract_ai.gateway.model,
+                    "findings": [],
+                    "summary": "没有可供模型辅助审查的合同文本。",
+                },
             )
             reviews.append(checkpoint_dict(review))
         return {
@@ -916,7 +945,8 @@ class WorkflowNodes:
                     "合同子图已完成完整性、授信、账期和法律风险检查。",
                     contract_count=len(contract_facts),
                     review_count=len(reviews),
-                )
+                ),
+                *traces,
             ],
         }
 

@@ -382,6 +382,16 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .finding h3 { margin: 0 0 6px; color: var(--ink); font-size: 15px; font-weight: 600; }
 .finding p { margin: 4px 0; color: var(--body); }
 .finding small { color: var(--muted); }
+.ai-assistance { margin-top: 28px; }
+.ai-assistance .section-heading > div { min-width: 0; }
+.ai-disclaimer { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.ai-summary { margin: 0 0 12px; color: var(--body); }
+.ai-finding-list { display: grid; gap: 10px; }
+.ai-finding { padding: 15px 16px; background: #fffafd; border: 1px solid #ffd5dd; border-left: 3px solid var(--primary); border-radius: 0 10px 10px 0; }
+.ai-finding h3 { margin: 3px 0 0; color: var(--ink); font-size: 15px; font-weight: 600; }
+.ai-finding p { margin: 7px 0; color: var(--body); }
+.ai-finding small { color: var(--muted); }
+.ai-location { display: block; margin-top: 9px; }
 
 .record-list { position: relative; margin-left: 6px; }
 .record { position: relative; padding: 0 0 22px 22px; border-left: 1px solid var(--hairline); }

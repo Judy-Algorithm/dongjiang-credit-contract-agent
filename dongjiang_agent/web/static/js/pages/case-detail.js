@@ -101,7 +101,23 @@ function contractTab(item) {
       ${item.findings.length ? item.findings.map((finding, index) => findingCard(finding, index)).join("") : `<div class="empty-note">未发现需要处理的合同风险。</div>`}
     </section>
     <aside id="evidenceViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>原文证据</strong><p>点击风险事项中的“查看原文”，这里会显示对应页码、段落或单元格。</p></div></aside>
-  </div>${revisionArchive(item)}`
+  </div>${aiAssistance(item)}${revisionArchive(item)}`
+}
+
+function aiAssistance(item) {
+  const groups = item.ai_assistance || []
+  if (!groups.length) return ""
+  const findings = groups.flatMap((group) => group.findings || [])
+  const status = groups.some((group) => group.status === "succeeded") ? "succeeded" : groups[0].status
+  const statusLabel = ({succeeded:"已完成", failed:"调用失败，已回退规则", not_configured:"未配置，当前使用规则审查", not_applicable:"不适用"})[status] || status
+  return `<section class="ai-assistance form-section"><div class="section-heading"><div><h3>AI 辅助发现</h3><span class="ai-disclaimer">仅供辅助，不改变制度规则和审批结论</span></div><span class="badge ${status === "succeeded" ? "approved" : status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span></div>
+    ${groups.map((group) => group.summary ? `<p class="ai-summary">${escapeHtml(group.summary)}</p>` : "").join("")}
+    ${findings.length ? `<div class="ai-finding-list">${findings.map(aiFindingCard).join("")}</div>` : `<div class="empty-note">当前没有额外的 AI 辅助发现。</div>`}
+  </section>`
+}
+
+function aiFindingCard(finding) {
+  return `<article class="ai-finding"><div class="finding-head"><div><small>${escapeHtml(finding.finding_id || "AI")}</small><h3>${escapeHtml(finding.title)}</h3></div><span class="badge ${escapeHtml(finding.level || "medium")}">${Math.round(Number(finding.confidence || 0) * 100)}% 置信</span></div><p>${escapeHtml(finding.message)}</p><div class="finding-suggestion"><b>建议</b><span>${escapeHtml(finding.suggestion || "人工复核")}</span></div>${finding.location_label ? `<small class="ai-location">证据位置：${escapeHtml(finding.location_label)}</small>` : ""}</article>`
 }
 
 function revisionArchive(item) {

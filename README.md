@@ -40,6 +40,7 @@ python3 scripts/evaluate.py --cases /path/to/cases.json
 OPENAI_BASE_URL      HKGAI文本模型OpenAI兼容地址
 OPENAI_API_KEY       文本模型API密钥
 OPENAI_MODEL         /v1/models返回的模型ID
+DONGJIANG_AI_ASSISTANCE_ENABLED  是否启用脱敏合同AI辅助审查（true/false）
 HKGAI_SPEECH_*       语音服务地址和API密钥
 HKGAI_TOOLHUB_*      Toolhub服务地址
 HKGAI_AGENTHUB_*     Agenthub搜索服务地址
@@ -49,6 +50,10 @@ HKGAI_APP_KEY        Toolhub/Agenthub共用App-Key
 
 当前代码已具备文本模型网关；语音、Toolhub和Agenthub的环境变量已预留，
 对应客户端及工作流节点仍需按具体API文档接入。
+
+合同AI辅助审查默认关闭。设置 `DONGJIANG_AI_ASSISTANCE_ENABLED=true` 后，
+系统会把已经本地可逆脱敏的合同文本发送给配置的文本模型，并要求返回结构化JSON。
+模型发现与制度规则分栏显示，模型调用失败时自动回退到现有规则链，且不会改变审批结论。
 
 可以执行以下命令检查配置；输出只包含布尔状态和模型ID，不会显示密钥：
 

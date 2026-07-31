@@ -25,6 +25,7 @@
 | 可视化后台 | 多文件上传、案件统计、案件列表和详情回看 | `scripts/run_web.sh`、`test_web_api.py` |
 | 文件证据定位 | PDF页码、DOCX段落、XLSX工作表/单元格、文本行号；风险卡片联动受控原文预览 | `test_document_locations.py`、`test_contract_risk_exposes_line_location_and_controlled_preview` |
 | 合同修订闭环 | 风险逐项采用建议/人工修改/保留说明；生成Word修订稿与清洁稿；清洁稿重新审查并保留版本链 | `test_contract_revisions.py`、`test_contract_revision_generates_downloads_and_resubmits_clean_version` |
+| 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
 | 固定演示路径 | 幂等生成资料补件、TKP 120天特批、无责取消修订三条合成案件 | `python scripts/prepare_demo_cases.py` |
 | 结果可量化 | 决策回归准确率、平均/P95耗时 | `python3 scripts/evaluate.py` |
 | 可审计 | 案件 Trace、政策版本、证据和规则 ID | `audit-result.json` |

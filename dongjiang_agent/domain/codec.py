@@ -117,5 +117,6 @@ def review_from_dict(payload: dict[str, Any]) -> ContractReview:
         findings=findings,
         summary=str(payload.get("summary") or ""),
         credit_cross_check=dict(payload.get("credit_cross_check") or {}),
+        ai_assistance=dict(payload.get("ai_assistance") or {}),
         reviewed_at=str(payload.get("reviewed_at") or ""),
     )

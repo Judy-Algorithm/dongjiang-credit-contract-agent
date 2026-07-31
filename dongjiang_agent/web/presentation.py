@@ -266,6 +266,25 @@ def case_view(
         for review in reviews
         for item in review.get("findings") or []
     ]
+    ai_assistance = [
+        {
+            "status": str(review.get("ai_assistance", {}).get("status") or "not_configured"),
+            "model": str(review.get("ai_assistance", {}).get("model") or ""),
+            "summary": str(review.get("ai_assistance", {}).get("summary") or ""),
+            "error": str(review.get("ai_assistance", {}).get("error") or ""),
+            "findings": [
+                {
+                    **dict(item),
+                    "location_label": location_label(item.get("location"))
+                    if item.get("location")
+                    else "",
+                }
+                for item in review.get("ai_assistance", {}).get("findings") or []
+            ],
+        }
+        for review in reviews
+        if review.get("ai_assistance")
+    ]
     documents = [
         Path(str(item)).name for item in case.get("source_files") or []
     ]
@@ -403,6 +422,7 @@ def case_view(
             for item in contracts
         ],
         "findings": findings,
+        "ai_assistance": ai_assistance,
         "records": records,
         "documents": documents,
         "source_documents": [

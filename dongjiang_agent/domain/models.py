@@ -177,6 +177,7 @@ class ContractReview:
     findings: list[RiskFinding]
     summary: str
     credit_cross_check: dict[str, Any]
+    ai_assistance: dict[str, Any] = field(default_factory=dict)
     reviewed_at: str = field(default_factory=utc_now)
 
 

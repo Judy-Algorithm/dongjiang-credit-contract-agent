@@ -29,12 +29,38 @@ REQUIRED = (
 )
 
 
+def _env_file_keys(path: Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    keys: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key = line.split("=", 1)[0].strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
 def main() -> int:
+    process_keys = {name for name in REQUIRED if os.getenv(name)}
     loaded = load_local_env()
+    file_keys = _env_file_keys(loaded) if loaded else set()
     missing = [name for name in REQUIRED if not os.getenv(name)]
     result: dict[str, object] = {
         "env_file_loaded": bool(loaded),
         "configured": {name: bool(os.getenv(name)) for name in REQUIRED},
+        "source": {
+            name: "process_environment"
+            if name in process_keys
+            else "env_file"
+            if name in file_keys
+            else "missing"
+            for name in REQUIRED
+        },
         "text_model": os.getenv("OPENAI_MODEL") or "",
     }
     if missing:
