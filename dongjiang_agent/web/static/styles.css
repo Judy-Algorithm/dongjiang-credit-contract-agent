@@ -453,11 +453,14 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .account-button:hover { box-shadow: var(--shadow); }
 .account-button > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--ink); color: var(--canvas); font-weight: 650; }
 .account-button b { font-size: 13px; font-weight: 550; white-space: nowrap; }
+.account-count { position: absolute; top: -5px; right: -4px; min-width: 19px; height: 19px; padding: 0 5px; display: grid; place-items: center; border: 2px solid var(--canvas); border-radius: 999px; background: var(--primary); color: var(--canvas); font-size: 10px; font-style: normal; font-weight: 700; line-height: 15px; }
 .account-popover { position: absolute; top: 54px; right: 0; z-index: 20; width: 224px; padding: 13px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow); }
 .account-popover strong, .account-popover small { display: block; }
 .account-popover small { margin: 3px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .account-popover a, .account-popover button { width: 100%; min-height: 42px; padding: 9px 10px; display: block; background: transparent; border: 0; border-radius: 8px; color: var(--body); cursor: pointer; text-align: left; font-weight: 550; }
 .account-popover a:hover, .account-popover button:hover { background: var(--surface-soft); color: var(--ink); }
+.account-popover a.current { background: var(--surface-soft); color: var(--ink); }
+.account-menu-count { min-width: 19px; height: 19px; padding: 0 5px; float: right; display: inline-grid; place-items: center; border-radius: 999px; background: var(--primary); color: var(--canvas); font-size: 10px; font-weight: 700; line-height: 19px; }
 
 .user-editor { margin-bottom: 16px; padding: 24px; }
 .inline-editor { max-width: 780px; }

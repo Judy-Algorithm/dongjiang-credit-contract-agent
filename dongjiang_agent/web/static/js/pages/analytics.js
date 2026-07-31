@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260731-analytics"
-import {escapeHtml} from "../format.js?v=20260731-analytics"
-import {navigate} from "../router.js?v=20260731-analytics"
+import {api} from "../api.js?v=20260731-nav"
+import {escapeHtml} from "../format.js?v=20260731-nav"
+import {navigate} from "../router.js?v=20260731-nav"
 
 const rangeOptions = [[7,"近7天"],[30,"近30天"],[90,"近90天"],[0,"全部"]]
 

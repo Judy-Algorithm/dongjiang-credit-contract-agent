@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-analytics"
-import {dateTime, escapeHtml} from "../format.js?v=20260731-analytics"
+import {api} from "../api.js?v=20260731-nav"
+import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const labels = {
   "auth.login":"登录","auth.logout":"退出登录","auth.password_changed":"修改密码","auth.password_reset":"管理员重置密码",

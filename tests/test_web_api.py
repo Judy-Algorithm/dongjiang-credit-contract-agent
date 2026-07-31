@@ -690,6 +690,17 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn("运行风险演示案例", html)
             self.assertNotIn("华南精密制造示例有限公司", html)
 
+        self.connection.request("GET", "/js/app.js?v=20260731-nav")
+        response = self.connection.getresponse()
+        javascript = response.read().decode("utf-8")
+        self.assertEqual(response.status, 200)
+        self.assertNotIn('data-nav="tasks">我的待办', javascript)
+        self.assertIn('href="/cases/new" data-link data-nav="new">发起信审', javascript)
+        self.assertNotIn('class="primary small" href="/cases/new"', javascript)
+        account_start = javascript.index('<div id="accountPopover"')
+        account_end = javascript.index('</div>', account_start)
+        self.assertIn('href="/registrations"', javascript[account_start:account_end])
+
     def test_oa_callback_requires_token_and_complete_approval_chain(self):
         _, created = self.request(
             "POST",

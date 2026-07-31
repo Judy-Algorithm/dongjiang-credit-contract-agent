@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260731-analytics"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260731-analytics"
-import {navigate} from "../router.js?v=20260731-analytics"
-import {escapeHtml} from "../format.js?v=20260731-analytics"
+import {api} from "../api.js?v=20260731-nav"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260731-nav"
+import {navigate} from "../router.js?v=20260731-nav"
+import {escapeHtml} from "../format.js?v=20260731-nav"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `
@@ -20,7 +20,7 @@ export function renderLoginPage(root) {
         password:root.querySelector("#password").value,
       })
       setAuthenticated(data)
-      navigate(data.user.must_change_password ? "/change-password" : "/cases?mine=1", {replace:true})
+      navigate(data.user.must_change_password ? "/change-password" : "/cases", {replace:true})
     })
   })
 }
@@ -158,7 +158,7 @@ export function renderSetupPage(root) {
         password,
       })
       setAuthenticated(data)
-      navigate("/cases?mine=1", {replace:true})
+      navigate("/cases", {replace:true})
     })
   })
 }

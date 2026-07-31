@@ -1,18 +1,18 @@
-import {api} from "./api.js?v=20260731-analytics"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-analytics"
-import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-analytics"
-import {renderAuditPage} from "./pages/audit.js?v=20260731-analytics"
-import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-analytics"
-import {renderCasesPage} from "./pages/cases.js?v=20260731-analytics"
-import {renderNewCasePage} from "./pages/case-new.js?v=20260731-analytics"
-import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-analytics"
-import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-analytics"
-import {renderUsersPage} from "./pages/users.js?v=20260731-analytics"
-import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-analytics"
-import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-analytics"
-import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-analytics"
-import {renderOperationsPage} from "./pages/operations.js?v=20260731-analytics"
-import {renderAnalyticsPage} from "./pages/analytics.js?v=20260731-analytics"
+import {api} from "./api.js?v=20260731-nav"
+import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-nav"
+import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-nav"
+import {renderAuditPage} from "./pages/audit.js?v=20260731-nav"
+import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-nav"
+import {renderCasesPage} from "./pages/cases.js?v=20260731-nav"
+import {renderNewCasePage} from "./pages/case-new.js?v=20260731-nav"
+import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-nav"
+import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-nav"
+import {renderUsersPage} from "./pages/users.js?v=20260731-nav"
+import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-nav"
+import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-nav"
+import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-nav"
+import {renderOperationsPage} from "./pages/operations.js?v=20260731-nav"
+import {renderAnalyticsPage} from "./pages/analytics.js?v=20260731-nav"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -28,7 +28,7 @@ async function render() {
     if (auth.setupRequired && route.name !== "setup") return navigate("/setup", {replace:true})
     if (!auth.setupRequired && route.name === "setup") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
     if (!auth.authenticated && !["login","register","forgot-password","setup"].includes(route.name)) return navigate("/login", {replace:true})
-    if (auth.authenticated && route.name === "login") return navigate("/cases?mine=1", {replace:true})
+    if (auth.authenticated && route.name === "login") return navigate("/cases", {replace:true})
     if (auth.authenticated && auth.user.must_change_password && route.name !== "change-password") return navigate("/change-password", {replace:true})
     if (route.name === "not-found") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
 
@@ -100,14 +100,14 @@ async function renderHeader(auth, route) {
     <a class="identity" href="/cases" data-link><span class="brand-mark">东江</span><span>信审与合同评审</span></a>
     <nav>
       <a href="/cases" data-link data-nav="cases">案件</a>
-      <a href="/cases?mine=1" data-link data-nav="tasks">我的待办</a>
-      ${hasRole("sales") ? `<a class="primary small" href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
+      ${hasRole("sales") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
       <a href="/notifications" data-link data-nav="notifications">通知${unread ? `<span class="nav-count">${Math.min(unread, 99)}</span>` : ""}</a>
-      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/registrations" data-link data-nav="registrations">注册审核${pendingRegistrations ? `<span class="nav-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
+      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
-        <button id="accountButton" class="account-button" type="button"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b></button>
+        <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b>${pendingRegistrations ? `<em class="account-count">${Math.min(pendingRegistrations, 99)}</em>` : ""}</button>
         <div id="accountPopover" class="account-popover hidden">
           <strong>${escapeText(user.display_name)}</strong><small>${escapeText(user.role_labels.join(" · "))}</small>
+          ${hasRole("admin") ? `<a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link>注册审核${pendingRegistrations ? `<span class="account-menu-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a>` : ""}
           <a href="/change-password" data-link>修改密码</a><button id="logoutButton" type="button">退出登录</button>
         </div>
       </div>
@@ -120,7 +120,7 @@ async function renderHeader(auth, route) {
 }
 
 function setActiveNav(route) {
-  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "registrations" ? "registrations" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "analytics" ? "analytics" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
+  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "analytics" ? "analytics" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "registrations" ? "" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
 }
 
