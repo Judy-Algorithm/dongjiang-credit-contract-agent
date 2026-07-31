@@ -7,17 +7,7 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="app-header">
-    <a class="identity" href="/cases" data-link>
-      <span class="brand-mark">东江</span>
-      <span>信审与合同评审</span>
-    </a>
-    <nav>
-      <a href="/cases" data-link data-nav="cases">案件列表</a>
-      <a href="/cases?mine=1" data-link data-nav="tasks">我的待办</a>
-      <a class="primary small" href="/cases/new" data-link data-nav="new">发起信审</a>
-    </nav>
-  </header>
+  <header id="appHeader" class="app-header hidden"></header>
 
   <main id="app" class="page-shell" aria-live="polite"></main>
   <div id="toast" class="toast hidden" role="status"></div>

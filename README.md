@@ -112,7 +112,7 @@ python3 scripts/check_hkgai_config.py
 - PDF：优先 `pypdf`，否则使用本机 `pdftotext`。
 - 图片：检测到本机 Tesseract 时执行 OCR，否则给出明确降级提示。
 
-Web页面分为案件列表、发起信审、案件详情和案件处理。系统不预置客户、金额、评级或合同；所有案件数据来自用户录入或上传。信用资料和合同使用不同入口，合同只能在授信审批生效后上传。上传限制为单文件15MB、单次请求30MB。
+Web页面包含登录、我的待办、案件列表、发起信审、六页签案件工作台、案件处理、用户管理和安全审计。首次启动需在页面创建管理员；普通账号只能由管理员创建，不开放公开注册。销售、信用管理、财务、法务、市场总监、集团管理层和管理员按照真实登录身份执行工作流权限。新案件自动归属发起销售，管理员可以改派负责人。新解析文件支持 PDF 页码、DOCX 段落、XLSX 工作表/单元格和文本行号定位，风险卡片可在受控查看器中打开对应原文。信用资料和合同使用不同入口，合同只能在授信审批生效后上传。上传限制为单文件15MB、单次请求30MB。
 
 可选安装：
 
@@ -132,11 +132,12 @@ python3 -m pip install -e '.[documents]'
 - `data/evidence/DJ-*/*`：例外审批和特别放行附件，按SHA-256归档。
 - `data/archive/DJ-*/credit|contract/*`：案件级原始信用资料和合同，按SHA-256归档。
 - `data/integrations/DJ-*/*.json`：OA、CRM、SAP每次调用的成功、失败或未配置记录。
+- `data/auth/auth.sqlite`：本地用户、密码摘要、会话和安全审计；不保存明文密码或会话令牌。
 - `output/DJ-*/audit-result.json`：机器可读结果。
 - `output/DJ-*/audit-report.html`：人工审阅报告。
 - `output/evaluation-report.json`：量化回归结果。
 
-`data/cases`、`data/vault` 和 `output` 已加入 `.gitignore`，不得提交真实企业数据。
+`data/cases`、`data/vault`、`data/auth` 和 `output` 已加入 `.gitignore`，不得提交真实企业数据或身份数据。
 
 ## 架构与交付状态
 
@@ -157,6 +158,8 @@ python3 -m pip install -e '.[documents]'
 3. 外部 AI 只读取脱敏副本。
 4. 输出建议恢复令牌时只在本地进行。
 5. 最终审批由授权人员确认，Agent 不自动签署合同或扩大授信。
+6. 密码使用 PBKDF2-SHA256 加盐摘要；连续5次失败锁定15分钟；Web写操作校验 `HttpOnly` 会话 Cookie 和 CSRF 令牌。
+7. HTTPS生产部署必须设置 `DONGJIANG_COOKIE_SECURE=true`，并由反向代理提供TLS和访问控制。
 
 ## 免责声明
 

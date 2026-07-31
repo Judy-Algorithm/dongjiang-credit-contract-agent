@@ -23,6 +23,20 @@ class WebApiTests(unittest.TestCase):
             self.server.server_port,
             timeout=8,
         )
+        self.cookie = ""
+        self.csrf_token = ""
+        status, setup, headers = self.raw_request(
+            "POST",
+            "/api/auth/setup",
+            {
+                "display_name": "测试管理员",
+                "username": "admin",
+                "password": "AdminPass123",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.cookie = headers.get("Set-Cookie", "").split(";", 1)[0]
+        self.csrf_token = setup["csrf_token"]
 
     def tearDown(self):
         self.connection.close()
@@ -32,23 +46,201 @@ class WebApiTests(unittest.TestCase):
         os.chdir(self.previous_cwd)
         self.temp.cleanup()
 
-    def request(self, method, path, payload=None):
+    def raw_request(self, method, path, payload=None, extra_headers=None):
         body = None
-        headers = {}
+        headers = dict(extra_headers or {})
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
         self.connection.request(method, path, body=body, headers=headers)
         response = self.connection.getresponse()
         data = json.loads(response.read().decode("utf-8"))
-        return response.status, data
+        return response.status, data, dict(response.getheaders())
+
+    def request(self, method, path, payload=None):
+        headers = {}
+        if self.cookie:
+            headers["Cookie"] = self.cookie
+        if method not in {"GET", "HEAD"} and self.csrf_token:
+            headers["X-CSRF-Token"] = self.csrf_token
+        status, data, _ = self.raw_request(method, path, payload, headers)
+        return status, data
 
     def request_with_headers(self, method, path, payload, headers):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        merged = {"Content-Type": "application/json", **headers}
-        self.connection.request(method, path, body=body, headers=merged)
-        response = self.connection.getresponse()
-        return response.status, json.loads(response.read().decode("utf-8"))
+        merged = dict(headers)
+        if self.cookie:
+            merged["Cookie"] = self.cookie
+        if method not in {"GET", "HEAD"} and self.csrf_token:
+            merged.setdefault("X-CSRF-Token", self.csrf_token)
+        status, data, _ = self.raw_request(method, path, payload, merged)
+        return status, data
+
+    def login(self, username, password):
+        status, data, headers = self.raw_request(
+            "POST", "/api/auth/login", {"username": username, "password": password}
+        )
+        if status == 200:
+            self.cookie = headers.get("Set-Cookie", "").split(";", 1)[0]
+            self.csrf_token = data["csrf_token"]
+        return status, data
+
+    def activate_user(self, username):
+        self.assertEqual(self.login(username, "InitialPass123")[0], 200)
+        status, _ = self.request(
+            "POST",
+            "/api/auth/change-password",
+            {"current_password": "InitialPass123", "new_password": "ActivePass456"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(self.login(username, "ActivePass456")[0], 200)
+
+    def create_user(self, username, display_name, roles):
+        status, data = self.request(
+            "POST",
+            "/api/users",
+            {
+                "username": username,
+                "display_name": display_name,
+                "password": "InitialPass123",
+                "roles": roles,
+            },
+        )
+        self.assertEqual(status, 201)
+        return data["user"]
+
+    def test_authentication_csrf_and_role_task_filtering(self):
+        sales = self.create_user("sales.a", "销售甲", ["sales"])
+        credit = self.create_user("credit.a", "信用甲", ["credit"])
+
+        self.activate_user("sales.a")
+        status, denied = self.raw_request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "CSRF测试客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                }
+            },
+            {"Cookie": self.cookie},
+        )[:2]
+        self.assertEqual(status, 403)
+        self.assertIn("安全令牌", denied["error"])
+
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "角色待办客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        self.assertEqual(created["case"]["applicant"]["user_id"], sales["user_id"])
+
+        status, sales_tasks = self.request("GET", "/api/cases?mine=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(sales_tasks["total"], 0)
+
+        status, forbidden = self.request(
+            "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("角色", forbidden["error"])
+
+        self.activate_user("credit.a")
+        status, credit_tasks = self.request("GET", "/api/cases?mine=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(credit_tasks["total"], 1)
+        self.assertEqual(credit_tasks["cases"][0]["case_id"], case_id)
+        status, approved = self.request(
+            "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(approved["case"]["credit"]["effective"])
+
+        status, detail = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertIsNone(detail["case"]["next_action"])
+        self.assertEqual(detail["case"]["pending_action"]["type"], "upload_contract")
+
+    def test_admin_user_management_and_password_change(self):
+        user = self.create_user("finance.a", "财务甲", ["finance"])
+        status, updated = self.request(
+            "PATCH", f"/api/users/{user['user_id']}", {"roles": ["finance", "legal"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["user"]["roles"], ["finance", "legal"])
+
+        self.assertEqual(self.login("finance.a", "InitialPass123")[0], 200)
+        status, changed = self.request(
+            "POST",
+            "/api/auth/change-password",
+            {"current_password": "InitialPass123", "new_password": "UpdatedPass456"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(changed["ok"])
+        status, unauthenticated = self.request("GET", "/api/cases")
+        self.assertEqual(status, 401)
+        self.assertFalse(unauthenticated["ok"])
+        self.assertEqual(self.login("finance.a", "UpdatedPass456")[0], 200)
+
+    def test_admin_can_assign_case_owner_to_sales_user(self):
+        sales = self.create_user("owner.sales", "案件销售", ["sales"])
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "负责人改派客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        status, assigned = self.request(
+            "PATCH", f"/api/cases/{case_id}", {"owner_user_id": sales["user_id"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(assigned["case"]["owner"]["user_id"], sales["user_id"])
+
+    def test_admin_password_reset_invalidates_old_password(self):
+        user = self.create_user("legal.reset", "重置法务", ["legal"])
+        status, reset = self.request(
+            "PATCH",
+            f"/api/users/{user['user_id']}",
+            {"temporary_password": "ResetPass789"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(reset["user"]["must_change_password"])
+        status, denied = self.login("legal.reset", "InitialPass123")
+        self.assertEqual(status, 401)
+        self.assertFalse(denied["ok"])
+        status, authenticated = self.login("legal.reset", "ResetPass789")
+        self.assertEqual(status, 200)
+        self.assertTrue(authenticated["user"]["must_change_password"])
+        status, blocked = self.request("GET", "/api/cases")
+        self.assertEqual(status, 403)
+        self.assertIn("首次登录", blocked["error"])
 
     def test_business_api_accepts_real_file_and_exposes_no_workflow_state(self):
         report = (
@@ -268,6 +460,68 @@ class WebApiTests(unittest.TestCase):
                 os.environ["DONGJIANG_OA_CALLBACK_TOKEN"] = previous
         self.assertEqual(status, 200)
         self.assertTrue(approved["case"]["credit"]["effective"])
+
+    def test_contract_risk_exposes_line_location_and_controlled_preview(self):
+        _, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "证据定位客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        case_id = created["case"]["case_id"]
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+            )[0],
+            200,
+        )
+        contract = """销售合同
+甲方：东江集团；乙方：证据定位客户。
+合同标的：精密组件。合同金额：100万元。信用额度：100万元。
+付款及账期：月结60天。知识产权：各自所有。保密：不得披露。
+买方可随时取消订单且不承担任何责任。
+违约责任：赔偿直接损失。解除与终止：违约催告后解除。争议解决：深圳法院。
+"""
+        encoded = base64.b64encode(contract.encode("utf-8")).decode("ascii")
+        status, submitted = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contracts",
+            {"files": [{"name": "定位合同.txt", "data_base64": encoded}]},
+        )
+        self.assertEqual(status, 200)
+        finding = next(
+            item
+            for item in submitted["case"]["findings"]
+            if item["rule_id"] == "DJ-CANCEL-WITHOUT-LIABILITY"
+        )
+        self.assertEqual(finding["location"], {"kind": "line", "line": 5})
+        self.assertEqual(finding["location_label"], "第 5 行")
+        self.assertTrue(finding["document_id"].startswith("DOC-"))
+
+        status, preview = self.request(
+            "GET",
+            f"/api/cases/{case_id}/documents/{finding['document_id']}?fragment={finding['fragment_id']}",
+        )
+        self.assertEqual(status, 200)
+        selected = next(item for item in preview["fragments"] if item["selected"])
+        self.assertIn("取消订单且不承担任何责任", selected["text"])
+        self.assertEqual(preview["selected_location_label"], "第 5 行")
+
+        status, missing = self.request(
+            "GET", f"/api/cases/{case_id}/documents/DOC-NOT-FOUND?fragment=line-1"
+        )
+        self.assertEqual(status, 404)
+        self.assertFalse(missing["ok"])
 
 
 if __name__ == "__main__":

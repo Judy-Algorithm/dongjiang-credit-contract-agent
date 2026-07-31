@@ -25,7 +25,7 @@ from ..domain.models import (
     RiskLevel,
     utc_now,
 )
-from ..ingestion import DocumentExtractor, ExtractedDocument
+from ..ingestion import DocumentExtractor, ExtractedDocument, locate_excerpt
 from ..integrations import IntegrationBundle
 from ..persistence import CaseDocumentArchive, CaseRepository
 from ..reporting import AuditReporter
@@ -199,6 +199,14 @@ class WorkflowNodes:
                         "media_type": document.media_type,
                         "extractor": document.extractor,
                         "warnings": document.warnings,
+                        "fragments": [
+                            {
+                                "fragment_id": fragment.fragment_id,
+                                "text": vault.redact(fragment.text),
+                                "location": fragment.location,
+                            }
+                            for fragment in document.fragments
+                        ],
                     }
                 )
                 if document_kind == "credit":
@@ -223,6 +231,21 @@ class WorkflowNodes:
                         customer_name=customer.customer_name,
                         business_type=customer.business_type,
                     )
+                    facts.document_id = str(archived["document_id"])
+                    raw_fragments = [
+                        {
+                            "fragment_id": fragment.fragment_id,
+                            "text": fragment.text,
+                            "location": fragment.location,
+                        }
+                        for fragment in document.fragments
+                    ]
+                    for evidence in facts.evidence:
+                        matched = locate_excerpt(evidence.excerpt, raw_fragments)
+                        evidence.document_id = facts.document_id
+                        if matched:
+                            evidence.fragment_id = str(matched["fragment_id"])
+                            evidence.location = dict(matched["location"])
                     # Checkpoints只保留脱敏后的条款文本；金额等事实已在本地脱敏前提取。
                     facts.raw_text = redacted
                     for evidence in facts.evidence:
@@ -839,7 +862,28 @@ class WorkflowNodes:
         contract_facts = list(state.get("contract_facts") or [])
         reviews = []
         for item in contract_facts:
-            review = self.contract_engine.review(contract_facts_from_dict(item), assessment)
+            facts = contract_facts_from_dict(item)
+            review = self.contract_engine.review(facts, assessment)
+            source_document = next(
+                (
+                    document
+                    for document in state.get("source_documents") or []
+                    if document.get("document_id") == facts.document_id
+                ),
+                {},
+            )
+            fragments = list(source_document.get("fragments") or [])
+            for finding in review.findings:
+                if finding.fragment_id or not finding.clause_excerpt:
+                    continue
+                matched = locate_excerpt(
+                    finding.evidence_query or finding.clause_excerpt,
+                    fragments,
+                )
+                if matched:
+                    finding.document_id = facts.document_id
+                    finding.fragment_id = str(matched["fragment_id"])
+                    finding.location = dict(matched["location"])
             reviews.append(checkpoint_dict(review))
         if not reviews:
             review = ContractReview(

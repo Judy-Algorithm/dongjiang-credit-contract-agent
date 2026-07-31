@@ -41,6 +41,9 @@ class Evidence:
     value: Any
     confidence: float = 1.0
     excerpt: str = ""
+    document_id: str = ""
+    fragment_id: str = ""
+    location: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -147,6 +150,7 @@ class ContractFacts:
     has_dispute_resolution: bool = False
     raw_text: str = ""
     evidence: list[Evidence] = field(default_factory=list)
+    document_id: str = ""
 
 
 @dataclass(slots=True)
@@ -159,6 +163,10 @@ class RiskFinding:
     clause_excerpt: str = ""
     requires_special_approval: bool = False
     hard_stop: bool = False
+    document_id: str = ""
+    fragment_id: str = ""
+    location: dict[str, Any] = field(default_factory=dict)
+    evidence_query: str = ""
 
 
 @dataclass(slots=True)
@@ -192,6 +200,8 @@ class AuditCase:
     contract_reviews: list[ContractReview] = field(default_factory=list)
     status: str = "created"
     trace: list[dict[str, Any]] = field(default_factory=list)
+    applicant: dict[str, Any] = field(default_factory=dict)
+    owner: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now)
 
     def add_trace(self, stage: str, message: str, **data: Any) -> None:

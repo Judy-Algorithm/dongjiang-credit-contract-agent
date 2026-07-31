@@ -27,6 +27,7 @@ class ActorContext:
     actor_id: str = "local-system"
     roles: tuple[str, ...] = ("system",)
     source_system: str = "local"
+    display_name: str = ""
 
 
 @dataclass(slots=True)
@@ -80,9 +81,12 @@ class DongjiangWorkflowHarness:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.inbox_dir = Path(inbox_dir)
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
+        default_layout = self.inbox_dir == Path("data/workflow/inbox")
         self.evidence_dir = (
             Path(evidence_dir)
             if evidence_dir is not None
+            else Path("data/evidence")
+            if default_layout
             else self.inbox_dir.parent / "evidence"
         )
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +97,11 @@ class DongjiangWorkflowHarness:
         self.checkpointer = SqliteSaver(self._connection)
         self.checkpointer.setup()
         integration_bundle = integrations or IntegrationBundle.from_environment(
-            audit_root=self.inbox_dir.parent / "integrations"
+            audit_root=(
+                Path("data/integrations")
+                if default_layout
+                else self.inbox_dir.parent / "integrations"
+            )
         )
         self.nodes = WorkflowNodes(
             repository=self.repository,
@@ -103,6 +111,8 @@ class DongjiangWorkflowHarness:
             archive_dir=(
                 Path(archive_dir)
                 if archive_dir is not None
+                else Path("data/archive")
+                if default_layout
                 else self.inbox_dir.parent / "archive"
             ),
             integrations=integration_bundle,
@@ -190,6 +200,14 @@ class DongjiangWorkflowHarness:
             "status": "created",
             "source_system": actor.source_system,
             "actor": asdict(actor),
+            "applicant": {
+                "user_id": actor.actor_id,
+                "display_name": actor.display_name or actor.actor_id,
+            },
+            "owner": {
+                "user_id": actor.actor_id,
+                "display_name": actor.display_name or actor.actor_id,
+            },
             "customer": checkpoint_dict(profile),
             "use_cached_credit": use_cached_credit,
             "pending_files": pending,
@@ -227,8 +245,32 @@ class DongjiangWorkflowHarness:
     def get(self, case_id: str) -> WorkflowRun:
         return self._run_result(case_id)
 
+    def assign_owner(self, case_id: str, owner: dict[str, Any]) -> WorkflowRun:
+        current = self.get(case_id)
+        normalized = {
+            "user_id": str(owner.get("user_id") or ""),
+            "display_name": str(owner.get("display_name") or ""),
+        }
+        if not normalized["user_id"] or not normalized["display_name"]:
+            raise ValueError("负责人信息不完整。")
+        self.graph.update_state(
+            self._config(case_id),
+            {
+                "owner": normalized,
+                "trace": [
+                    {
+                        "ts": utc_now(),
+                        "stage": "case.owner_assigned",
+                        "message": f"案件负责人已调整为{normalized['display_name']}。",
+                        "data": normalized,
+                    }
+                ],
+            },
+        )
+        return self._run_result(current.case_id)
+
     def _authorize(self, waiting_for: str | None, actor: ActorContext) -> None:
-        if "system" in actor.roles:
+        if "system" in actor.roles or "admin" in actor.roles:
             return
         required = self.ROLE_REQUIREMENTS.get(str(waiting_for or ""), set())
         if required and not required.intersection(actor.roles):

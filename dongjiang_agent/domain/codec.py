@@ -82,7 +82,8 @@ def assessment_from_dict(payload: dict[str, Any] | None) -> CreditAssessment | N
 
 
 def contract_facts_from_dict(payload: dict[str, Any]) -> ContractFacts:
-    clean = dict(payload)
+    allowed = {item.name for item in fields(ContractFacts)}
+    clean = {key: value for key, value in dict(payload).items() if key in allowed}
     clean["evidence"] = [
         item if isinstance(item, Evidence) else Evidence(**item)
         for item in clean.get("evidence") or []
@@ -102,6 +103,10 @@ def review_from_dict(payload: dict[str, Any]) -> ContractReview:
             clause_excerpt=str(item.get("clause_excerpt") or ""),
             requires_special_approval=bool(item.get("requires_special_approval")),
             hard_stop=bool(item.get("hard_stop")),
+            document_id=str(item.get("document_id") or ""),
+            fragment_id=str(item.get("fragment_id") or ""),
+            location=dict(item.get("location") or {}),
+            evidence_query=str(item.get("evidence_query") or ""),
         )
         for item in payload.get("findings") or []
     ]

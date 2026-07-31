@@ -42,6 +42,8 @@ class ContractReviewEngine:
         excerpt: str = "",
         approval: bool = False,
         hard_stop: bool = False,
+        evidence: Any | None = None,
+        evidence_query: str = "",
     ) -> RiskFinding:
         return RiskFinding(
             rule_id=rule_id,
@@ -52,7 +54,15 @@ class ContractReviewEngine:
             clause_excerpt=excerpt,
             requires_special_approval=approval,
             hard_stop=hard_stop,
+            document_id=str(getattr(evidence, "document_id", "") or ""),
+            fragment_id=str(getattr(evidence, "fragment_id", "") or ""),
+            location=dict(getattr(evidence, "location", {}) or {}),
+            evidence_query=evidence_query,
         )
+
+    @staticmethod
+    def _evidence(contract: ContractFacts, field: str) -> Any | None:
+        return next((item for item in contract.evidence if item.field == field), None)
 
     def review(self, contract: ContractFacts, credit: CreditAssessment) -> ContractReview:
         findings: list[RiskFinding] = []
@@ -86,6 +96,7 @@ class ContractReviewEngine:
                 f"当前可用仅 {available_credit:,.2f}。",
                 "降低赊销额度、增加预付款/担保，或发起市场总监/财务特批。",
                 approval=True,
+                evidence=self._evidence(contract, "requested_credit"),
             ))
 
         if contract.payment_term_days is not None:
@@ -97,6 +108,7 @@ class ContractReviewEngine:
                     f"合同账期 {contract.payment_term_days} 天，超过 TKP 一般不超过 Net 90 天的条件。",
                     "核验终端项目统一账期批核或上传市场总监特别账期批准材料。",
                     approval=True,
+                    evidence=self._evidence(contract, "payment_term_days"),
                 ))
             elif contract.payment_term_days > credit.recommended_term_days:
                 findings.append(self._finding(
@@ -106,6 +118,7 @@ class ContractReviewEngine:
                     f"合同账期 {contract.payment_term_days} 天，当前风险等级建议不超过 {credit.recommended_term_days} 天。",
                     "缩短账期或提交财务/市场总监特别审批。",
                     approval=True,
+                    evidence=self._evidence(contract, "payment_term_days"),
                 ))
 
         if business_type == "TKM":
@@ -124,6 +137,7 @@ class ContractReviewEngine:
                     f"尾款比例 {contract.tail_payment_ratio:.0%}，超过该TKM子类型一般走模后放账比例 {hard_ratio:.0%}。",
                     "调整走模前收款比例，或上传市场总监特别比例批准材料。",
                     approval=True,
+                    evidence=self._evidence(contract, "tail_payment_ratio"),
                 ))
             elif (
                 contract.tail_payment_ratio is not None
@@ -137,6 +151,7 @@ class ContractReviewEngine:
                     f"尾款比例 {contract.tail_payment_ratio:.0%}，建议上限 {credit.max_tail_payment_ratio:.0%}。",
                     "调整付款节点或提交特别审批。",
                     approval=True,
+                    evidence=self._evidence(contract, "tail_payment_ratio"),
                 ))
             if contract.tail_payment_term_days is not None and contract.tail_payment_term_days > hard_days:
                 findings.append(self._finding(
@@ -146,6 +161,7 @@ class ContractReviewEngine:
                     f"尾款账期 {contract.tail_payment_term_days} 天，超过该TKM子类型一般条件 {hard_days} 天。",
                     "缩短尾款期限，或上传市场总监特别账期批准材料。",
                     approval=True,
+                    evidence=self._evidence(contract, "tail_payment_term_days"),
                 ))
             if contract.uses_purchase_exemption and not credit.purchase_exemption_approved:
                 findings.append(self._finding(
@@ -168,6 +184,7 @@ class ContractReviewEngine:
                     f"尾款账期 {contract.tail_payment_term_days} 天，建议上限 {credit.max_tail_term_days} 天。",
                     "缩短尾款期限或提交特别审批。",
                     approval=True,
+                    evidence=self._evidence(contract, "tail_payment_term_days"),
                 ))
 
         if contract.contract_term_years is not None and contract.contract_term_years > 5:
@@ -177,6 +194,7 @@ class ContractReviewEngine:
                 RiskLevel.MEDIUM,
                 f"识别到合同有效期约 {contract.contract_term_years:g} 年。",
                 "将合同有效期调整至5年以内，或由法务核验续期和退出机制。",
+                evidence=self._evidence(contract, "contract_term_years"),
             ))
 
         if contract.max_penalty_ratio is not None and contract.max_penalty_ratio > 0.5:
@@ -187,6 +205,7 @@ class ContractReviewEngine:
                 f"识别到最高违约金比例 {contract.max_penalty_ratio:.0%}。",
                 "核对违约金与损失赔偿的合计口径并调整至合同金额50%以内。",
                 approval=True,
+                evidence=self._evidence(contract, "max_penalty_ratio"),
             ))
 
         for rule in self.contract_policy["legal_patterns"]:
@@ -209,6 +228,7 @@ class ContractReviewEngine:
                 f"合同文本命中法律风险模式：{match.group(0)}",
                 rule["suggestion"],
                 excerpt=excerpt,
+                evidence_query=match.group(0),
                 approval=level == RiskLevel.HIGH,
                 hard_stop=str(rule.get("route") or "") == "block",
             ))

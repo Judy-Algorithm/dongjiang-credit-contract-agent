@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..ingestion import location_label
+
 
 STATUS_LABELS = {
     "created": "草稿",
@@ -83,6 +85,7 @@ RECORD_LABELS = {
     "manual.revision_requested": "已要求修改合同",
     "workflow.closed": "案件已关闭",
     "workflow.finalized": "案件处理已完成",
+    "case.owner_assigned": "案件负责人已调整",
 }
 
 
@@ -194,6 +197,7 @@ def case_view(
     case: dict[str, Any],
     *,
     waiting_for: str | None = None,
+    actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     customer = dict(case.get("customer") or {})
     credit_status = str(case.get("credit_status") or "draft")
@@ -210,14 +214,45 @@ def case_view(
     reviews = list(case.get("contract_reviews") or [])
     contracts = list(case.get("contract_facts") or case.get("contracts") or [])
     resolved_waiting = _waiting_for(case, waiting_for)
+    next_action = _next_action(resolved_waiting)
+    applicant = dict(case.get("applicant") or {})
+    owner = dict(case.get("owner") or applicant)
+    can_act = True
+    if actor is not None and next_action:
+        actor_roles = set(actor.get("roles") or [])
+        required = {
+            "credit_approval": {"credit", "finance"},
+            "credit_supplement": {"sales", "finance"},
+            "special_release": {"director"},
+            "contract_upload": {"sales"},
+            "sales_revision": {"sales"},
+            "manager_approval": {"director", "ceo"},
+            "finance_legal_review": {"finance", "legal"},
+        }.get(str(resolved_waiting or ""), set())
+        can_act = bool("admin" in actor_roles or required.intersection(actor_roles))
+        if can_act and resolved_waiting in {
+            "credit_supplement",
+            "contract_upload",
+            "sales_revision",
+        } and "admin" not in actor_roles:
+            owner_id = str(owner.get("user_id") or "")
+            can_act = not owner_id or owner_id == str(actor.get("user_id") or "")
     records = _records(list(case.get("trace") or []))
     status = str(case.get("status") or "created")
     findings = [
         {
+            "rule_id": item.get("rule_id"),
             "title": item.get("title"),
             "level": item.get("level"),
             "message": item.get("message"),
             "suggestion": item.get("suggestion"),
+            "clause_excerpt": item.get("clause_excerpt"),
+            "document_id": item.get("document_id"),
+            "fragment_id": item.get("fragment_id"),
+            "location": dict(item.get("location") or {}),
+            "location_label": location_label(item.get("location"))
+            if item.get("document_id")
+            else "",
         }
         for review in reviews
         for item in review.get("findings") or []
@@ -233,16 +268,22 @@ def case_view(
         "risk_level": displayed_credit.get("risk_level"),
         "risk_label": RISK_LABELS.get(str(displayed_credit.get("risk_level") or ""), "待评估"),
         "decision": _decision(reviews),
-        "next_action": _next_action(resolved_waiting),
+        "next_action": next_action if can_act else None,
+        "pending_action": next_action,
+        "is_my_task": bool(next_action and can_act),
+        "applicant": applicant,
+        "owner": owner,
         "phase": "contract" if credit_status == "effective" else "credit",
         "permissions": {
+            "can_assign_owner": bool(actor and "admin" in set(actor.get("roles") or [])),
             "can_upload_contract": bool(
                 credit_status == "effective"
                 and resolved_waiting in {"contract_upload", "sales_revision"}
+                and can_act
             ),
-            "can_approve_credit": resolved_waiting == "credit_approval",
-            "can_upload_credit_documents": resolved_waiting == "credit_supplement",
-            "can_approve_special_release": resolved_waiting == "special_release",
+            "can_approve_credit": resolved_waiting == "credit_approval" and can_act,
+            "can_upload_credit_documents": resolved_waiting == "credit_supplement" and can_act,
+            "can_approve_special_release": resolved_waiting == "special_release" and can_act,
         },
         "credit": {
             "status": credit_status,
@@ -336,6 +377,19 @@ def case_view(
                 "payment_term_days": item.get("payment_term_days"),
                 "tail_payment_ratio": item.get("tail_payment_ratio"),
                 "tail_payment_term_days": item.get("tail_payment_term_days"),
+                "document_id": item.get("document_id"),
+                "evidence": [
+                    {
+                        "field": evidence.get("field"),
+                        "value": evidence.get("value"),
+                        "excerpt": evidence.get("excerpt"),
+                        "document_id": evidence.get("document_id"),
+                        "fragment_id": evidence.get("fragment_id"),
+                        "location": dict(evidence.get("location") or {}),
+                        "location_label": location_label(evidence.get("location")),
+                    }
+                    for evidence in item.get("evidence") or []
+                ],
             }
             for item in contracts
         ],
@@ -345,10 +399,16 @@ def case_view(
         "source_documents": [
             {
                 "document_kind": item.get("document_kind"),
+                "document_id": item.get("document_id"),
                 "name": item.get("name"),
                 "sha256": item.get("sha256"),
                 "size_bytes": item.get("size_bytes"),
                 "archived_at": item.get("archived_at"),
+                "parse_status": item.get("parse_status"),
+                "media_type": item.get("media_type"),
+                "extractor": item.get("extractor"),
+                "warnings": list(item.get("warnings") or []),
+                "fragment_count": len(item.get("fragments") or []),
             }
             for item in case.get("source_documents") or []
         ],
@@ -357,8 +417,10 @@ def case_view(
     }
 
 
-def case_summary(case: dict[str, Any]) -> dict[str, Any]:
-    view = case_view(case)
+def case_summary(
+    case: dict[str, Any], *, actor: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    view = case_view(case, actor=actor)
     customer = view["customer"]
     return {
         "case_id": view["case_id"],
@@ -372,6 +434,10 @@ def case_summary(case: dict[str, Any]) -> dict[str, Any]:
         "risk_label": view["risk_label"],
         "decision": view["decision"],
         "next_action": view["next_action"],
+        "pending_action": view["pending_action"],
+        "is_my_task": view["is_my_task"],
+        "applicant": view["applicant"],
+        "owner": view["owner"],
         "created_at": view["created_at"],
         "updated_at": view["updated_at"],
     }

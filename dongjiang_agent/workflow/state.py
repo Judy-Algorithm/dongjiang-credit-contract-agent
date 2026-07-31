@@ -13,6 +13,8 @@ class WorkflowState(TypedDict, total=False):
     status: str
     source_system: str
     actor: dict[str, Any]
+    applicant: dict[str, Any]
+    owner: dict[str, Any]
 
     customer: dict[str, Any]
     use_cached_credit: bool

@@ -10,9 +10,9 @@ const approvalStatuses = new Set([
 ])
 
 export async function renderCasesPage(root, route) {
-  const data = await api.listCases()
-  const cases = data.cases || []
   const mineOnly = route.params.get("mine") === "1"
+  const data = await api.listCases({mine:mineOnly})
+  const cases = data.cases || []
   root.innerHTML = `
     <header class="page-header">
       <div>
@@ -22,7 +22,7 @@ export async function renderCasesPage(root, route) {
     </header>
     <section class="metric-grid">
       ${metric("全部", cases.length, "", !mineOnly)}
-      ${metric("待我处理", cases.filter((item) => pendingStatuses.has(item.status)).length, "pending", mineOnly)}
+      ${metric("待我处理", cases.filter((item) => item.is_my_task).length, "pending", mineOnly)}
       ${metric("审批中", cases.filter((item) => approvalStatuses.has(item.status)).length, "approval")}
       ${metric("已完成", cases.filter((item) => ["approved","approved_by_exception","approved_after_manual_review","completed"].includes(item.status)).length, "done")}
       ${metric("已退回", cases.filter((item) => ["blocked","rejected"].includes(item.status)).length, "returned")}
@@ -67,10 +67,10 @@ export async function renderCasesPage(root, route) {
   const renderRows = () => {
     const query = search.value.trim().toLowerCase()
     const filtered = cases.filter((item) => {
-      if (mineOnly && !pendingStatuses.has(item.status)) return false
+      if (mineOnly && !item.is_my_task) return false
       if (query && !`${item.case_id} ${item.customer_name}`.toLowerCase().includes(query)) return false
       if (business.value && item.business_type !== business.value) return false
-      if (status.value === "pending" && !pendingStatuses.has(item.status)) return false
+      if (status.value === "pending" && !item.is_my_task) return false
       if (status.value === "approval" && !approvalStatuses.has(item.status)) return false
       if (status.value === "done" && !["approved","approved_by_exception","approved_after_manual_review","completed"].includes(item.status)) return false
       if (status.value && !["pending","approval","done"].includes(status.value) && item.status !== status.value) return false
@@ -109,7 +109,7 @@ function caseRow(item) {
   return `
     <tr>
       <td><a class="case-id" href="/cases/${encodeURIComponent(item.case_id)}" data-link>${escapeHtml(item.case_id)}</a></td>
-      <td><a class="case-name" href="/cases/${encodeURIComponent(item.case_id)}" data-link>${escapeHtml(item.customer_name || "未命名客户")}</a><small>${customerType(item.customer_type)}</small></td>
+      <td><a class="case-name" href="/cases/${encodeURIComponent(item.case_id)}" data-link>${escapeHtml(item.customer_name || "未命名客户")}</a><small>${customerType(item.customer_type)} · ${escapeHtml(item.owner?.display_name || "未分配")}</small></td>
       <td>${escapeHtml(item.business_type || "—")}</td>
       <td><span class="badge ${statusClass(item.status)}">${escapeHtml(item.status_label)}</span></td>
       <td><span class="badge ${escapeHtml(item.risk_level || "")}">${escapeHtml(item.risk_label)}</span></td>

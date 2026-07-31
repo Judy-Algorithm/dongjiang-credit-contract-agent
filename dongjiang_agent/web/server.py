@@ -6,18 +6,25 @@ import json
 import mimetypes
 import os
 import tempfile
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ..persistence import CaseRepository
+from ..security import AuthStore
 from .presentation import case_summary, case_view
 
 
 STATIC_ROOT = Path(__file__).with_name("static")
 MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_REQUEST_BYTES = 30 * 1024 * 1024
+SESSION_COOKIE = "dongjiang_session"
+
+
+class AuthenticationError(PermissionError):
+    pass
 
 
 def _validate_customer(customer: dict[str, Any]) -> None:
@@ -48,13 +55,22 @@ def _stage_uploads(files: list[dict[str, Any]], target_dir: str | Path) -> list[
 
 
 class AuditRequestHandler(BaseHTTPRequestHandler):
-    server_version = "DongjiangAudit/0.2"
+    server_version = "DongjiangAudit/0.3"
 
-    def _json(self, status: int, payload: dict[str, Any] | list[Any]) -> None:
+    def _json(
+        self,
+        status: int,
+        payload: dict[str, Any] | list[Any],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -64,17 +80,73 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("单次请求不能超过30MB。")
         return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
+    def _cookie_token(self) -> str:
+        cookie = SimpleCookie()
+        cookie.load(self.headers.get("Cookie", ""))
+        item = cookie.get(SESSION_COOKIE)
+        return item.value if item else ""
+
+    def _session(
+        self, *, require: bool = True
+    ) -> tuple[dict[str, Any], str, str] | None:
+        token = self._cookie_token()
+        with AuthStore() as store:
+            resolved = store.session_user(token)
+        if not resolved:
+            if require:
+                raise AuthenticationError("请先登录。")
+            return None
+        user, csrf_token = resolved
+        return user, csrf_token, token
+
+    def _require_csrf(self, expected: str) -> None:
+        supplied = self.headers.get("X-CSRF-Token", "")
+        if not supplied or not hmac.compare_digest(expected, supplied):
+            raise PermissionError("安全令牌无效，请刷新页面后重试。")
+
     @staticmethod
-    def _workflow_view(run: Any) -> dict[str, Any]:
-        return case_view(dict(run.state), waiting_for=run.waiting_for)
+    def _require_roles(user: dict[str, Any], *roles: str) -> None:
+        current = set(user.get("roles") or [])
+        if "admin" not in current and not current.intersection(roles):
+            raise PermissionError("当前账号没有执行该操作的权限。")
+
+    @staticmethod
+    def _actor(user: dict[str, Any]) -> Any:
+        from ..workflow import ActorContext
+
+        return ActorContext(
+            str(user["user_id"]),
+            tuple(user.get("roles") or ()),
+            "web",
+            str(user.get("display_name") or user.get("username") or ""),
+        )
+
+    @staticmethod
+    def _session_cookie(token: str, *, clear: bool = False) -> str:
+        secure = os.getenv("DONGJIANG_COOKIE_SECURE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        parts = [
+            f"{SESSION_COOKIE}={'' if clear else token}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if secure:
+            parts.append("Secure")
+        parts.append("Max-Age=0" if clear else "Max-Age=28800")
+        return "; ".join(parts)
+
+    def _workflow_view(self, run: Any, user: dict[str, Any]) -> dict[str, Any]:
+        return case_view(dict(run.state), waiting_for=run.waiting_for, actor=user)
 
     def _static(self, relative: str) -> None:
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested == "cases"
-            or requested == "cases/new"
-            or requested == "rules"
+            or requested in {"login", "setup", "change-password", "cases", "cases/new", "users", "audit"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -89,78 +161,341 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             f"{mimetypes.guess_type(target.name)[0] or 'application/octet-stream'}; charset=utf-8",
         )
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
 
-    def _case_detail(self, case_id: str) -> dict[str, Any] | None:
+    def _case_detail(
+        self, case_id: str, user: dict[str, Any]
+    ) -> dict[str, Any] | None:
         from ..workflow import DongjiangWorkflowHarness
 
         try:
             with DongjiangWorkflowHarness() as harness:
                 run = harness.get(case_id)
-            return self._workflow_view(run)
+            return self._workflow_view(run, user)
         except KeyError:
             stored = CaseRepository().get_case(case_id)
-            return case_view(stored) if stored else None
+            return case_view(stored, actor=user) if stored else None
+
+    def _document_fragment(
+        self,
+        case_id: str,
+        document_id: str,
+        fragment_id: str,
+    ) -> dict[str, Any]:
+        from ..ingestion import DocumentExtractor, location_label
+        from ..workflow import DongjiangWorkflowHarness
+
+        try:
+            with DongjiangWorkflowHarness() as harness:
+                state = dict(harness.get(case_id).state)
+        except KeyError:
+            state = CaseRepository().get_case(case_id) or {}
+        record = next(
+            (
+                item
+                for item in state.get("source_documents") or []
+                if item.get("document_id") == document_id
+            ),
+            None,
+        )
+        if not record:
+            raise KeyError("文档不存在。")
+        target = Path(str(record.get("archived_path") or "")).resolve()
+        expected_root = (Path("data/archive") / case_id).resolve()
+        if expected_root not in target.parents or not target.is_file():
+            raise PermissionError("文档归档路径无效。")
+        document = DocumentExtractor().extract(target)
+        fragments = document.fragments
+        if fragment_id:
+            index = next(
+                (
+                    number
+                    for number, item in enumerate(fragments)
+                    if item.fragment_id == fragment_id
+                ),
+                -1,
+            )
+        else:
+            index = 0 if fragments else -1
+        if index < 0:
+            raise ValueError("文档片段不存在或没有可预览文本。")
+        selected = fragments[index]
+        context = fragments[max(0, index - 1): min(len(fragments), index + 2)]
+        return {
+            "document": {
+                "document_id": document_id,
+                "name": record.get("name"),
+                "media_type": document.media_type,
+                "extractor": document.extractor,
+                "warnings": document.warnings,
+            },
+            "selected_fragment_id": selected.fragment_id,
+            "selected_location": selected.location,
+            "selected_location_label": location_label(selected.location),
+            "fragments": [
+                {
+                    "fragment_id": item.fragment_id,
+                    "text": item.text,
+                    "location": item.location,
+                    "location_label": location_label(item.location),
+                    "selected": item.fragment_id == selected.fragment_id,
+                }
+                for item in context
+            ],
+        }
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
-        if path == "/api/health":
-            self._json(200, {"ok": True, "service": "dongjiang-credit-contract-agent"})
-            return
-        if path == "/api/cases":
-            cases = CaseRepository().list_cases()
-            self._json(
-                200,
-                {
-                    "ok": True,
-                    "cases": [case_summary(item) for item in cases[:100]],
-                    "total": len(cases),
-                },
-            )
-            return
-        if path.startswith("/api/cases/"):
-            case_id = path.rsplit("/", 1)[-1]
-            case = self._case_detail(case_id)
-            if case is None:
-                self._json(404, {"ok": False, "error": "案件不存在"})
-            else:
-                self._json(200, {"ok": True, "case": case})
-            return
-        self._static(path)
+        parsed = urlparse(self.path)
+        path = parsed.path
+        try:
+            if path == "/api/health":
+                self._json(200, {"ok": True, "service": "dongjiang-credit-contract-agent"})
+                return
+            if path == "/api/auth/status":
+                with AuthStore() as store:
+                    setup_required = store.setup_required()
+                session = self._session(require=False)
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "setup_required": setup_required,
+                        "authenticated": bool(session),
+                        "user": session[0] if session else None,
+                        "csrf_token": session[1] if session else None,
+                    },
+                )
+                return
+            if not path.startswith("/api/"):
+                self._static(path)
+                return
+            session = self._session()
+            assert session is not None
+            user = session[0]
+            if user.get("must_change_password"):
+                raise PermissionError("首次登录必须先修改初始密码。")
+            if path == "/api/users":
+                self._require_roles(user, "admin")
+                with AuthStore() as store:
+                    users = store.list_users()
+                self._json(200, {"ok": True, "users": users})
+                return
+            if path == "/api/audit":
+                self._require_roles(user, "admin")
+                with AuthStore() as store:
+                    events = store.list_audit()
+                self._json(200, {"ok": True, "events": events})
+                return
+            if path == "/api/cases":
+                cases = CaseRepository().list_cases()
+                rows = [case_summary(item, actor=user) for item in cases[:100]]
+                mine = parse_qs(parsed.query).get("mine", [""])[0] == "1"
+                if mine:
+                    rows = [item for item in rows if item["is_my_task"]]
+                self._json(200, {"ok": True, "cases": rows, "total": len(rows)})
+                return
+            parts = [item for item in path.split("/") if item]
+            if (
+                len(parts) == 5
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "documents"
+            ):
+                fragment_id = parse_qs(parsed.query).get("fragment", [""])[0]
+                payload = self._document_fragment(parts[2], parts[4], fragment_id)
+                self._json(200, {"ok": True, **payload})
+                return
+            if path.startswith("/api/cases/"):
+                case_id = path.rsplit("/", 1)[-1]
+                case = self._case_detail(case_id, user)
+                if case is None:
+                    self._json(404, {"ok": False, "error": "案件不存在"})
+                else:
+                    self._json(200, {"ok": True, "case": case})
+                return
+            self._json(404, {"ok": False, "error": "API 不存在"})
+        except AuthenticationError as exc:
+            self._json(401, {"ok": False, "error": str(exc)})
+        except KeyError as exc:
+            self._json(404, {"ok": False, "error": str(exc).strip("'")})
+        except PermissionError as exc:
+            self._json(403, {"ok": False, "error": str(exc)})
+        except Exception as exc:
+            self._json(400, {"ok": False, "error": str(exc), "error_type": type(exc).__name__})
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         try:
             payload = self._read_json()
-            if path == "/api/cases":
-                self._create_case(payload)
+            if path == "/api/auth/setup":
+                with AuthStore() as store:
+                    user = store.bootstrap_admin(
+                        str(payload.get("username") or ""),
+                        str(payload.get("display_name") or ""),
+                        str(payload.get("password") or ""),
+                        self.client_address[0],
+                    )
+                    session = store.create_session(str(user["user_id"]))
+                self._json(
+                    201,
+                    {"ok": True, "user": user, "csrf_token": session["csrf_token"]},
+                    headers={"Set-Cookie": self._session_cookie(session["token"])},
+                )
+                return
+            if path == "/api/auth/login":
+                with AuthStore() as store:
+                    user = store.authenticate(
+                        str(payload.get("username") or ""),
+                        str(payload.get("password") or ""),
+                        self.client_address[0],
+                    )
+                    if not user:
+                        raise AuthenticationError("用户名或密码不正确。")
+                    session = store.create_session(str(user["user_id"]))
+                self._json(
+                    200,
+                    {"ok": True, "user": user, "csrf_token": session["csrf_token"]},
+                    headers={"Set-Cookie": self._session_cookie(session["token"])},
+                )
                 return
             if path.startswith("/api/integrations/oa/callback/"):
                 self._oa_callback(path.rsplit("/", 1)[-1], payload)
                 return
-
+            session = self._session()
+            assert session is not None
+            user, csrf_token, token = session
+            self._require_csrf(csrf_token)
+            if path == "/api/auth/logout":
+                with AuthStore() as store:
+                    store.delete_session(token)
+                    store.audit("auth.logout", actor=user, remote_address=self.client_address[0])
+                self._json(
+                    200,
+                    {"ok": True},
+                    headers={"Set-Cookie": self._session_cookie("", clear=True)},
+                )
+                return
+            if path == "/api/auth/change-password":
+                with AuthStore() as store:
+                    store.change_password(
+                        str(user["user_id"]),
+                        str(payload.get("current_password") or ""),
+                        str(payload.get("new_password") or ""),
+                        user,
+                        self.client_address[0],
+                    )
+                self._json(
+                    200,
+                    {"ok": True},
+                    headers={"Set-Cookie": self._session_cookie("", clear=True)},
+                )
+                return
+            if user.get("must_change_password"):
+                raise PermissionError("首次登录必须先修改初始密码。")
+            if path == "/api/users":
+                self._require_roles(user, "admin")
+                with AuthStore() as store:
+                    created = store.create_user(
+                        username=str(payload.get("username") or ""),
+                        display_name=str(payload.get("display_name") or ""),
+                        password=str(payload.get("password") or ""),
+                        roles=list(payload.get("roles") or []),
+                        must_change_password=True,
+                        actor=user,
+                        remote_address=self.client_address[0],
+                    )
+                self._json(201, {"ok": True, "user": created})
+                return
+            if path == "/api/cases":
+                self._create_case(payload, user)
+                return
             parts = [item for item in path.split("/") if item]
             if len(parts) == 4 and parts[:2] == ["api", "cases"]:
                 case_id, resource = parts[2], parts[3]
-                if resource in {
-                    "credit-documents",
-                    "credit-actions",
-                    "contracts",
-                    "contract-actions",
-                }:
-                    self._handle_case_action(case_id, resource, payload)
+                if resource in {"credit-documents", "credit-actions", "contracts", "contract-actions"}:
+                    self._handle_case_action(case_id, resource, payload, user)
                     return
             self._json(404, {"ok": False, "error": "API 不存在"})
-        except KeyError:
-            self._json(404, {"ok": False, "error": "案件不存在"})
+        except AuthenticationError as exc:
+            self._json(401, {"ok": False, "error": str(exc)})
+        except KeyError as exc:
+            self._json(404, {"ok": False, "error": str(exc).strip("'") or "资源不存在"})
         except PermissionError as exc:
             self._json(403, {"ok": False, "error": str(exc)})
         except Exception as exc:
-            self._json(
-                400,
-                {"ok": False, "error": str(exc), "error_type": type(exc).__name__},
-            )
+            self._json(400, {"ok": False, "error": str(exc), "error_type": type(exc).__name__})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        try:
+            payload = self._read_json()
+            session = self._session()
+            assert session is not None
+            user, csrf_token, _ = session
+            self._require_csrf(csrf_token)
+            if user.get("must_change_password"):
+                raise PermissionError("首次登录必须先修改初始密码。")
+            parts = [item for item in path.split("/") if item]
+            if len(parts) == 3 and parts[:2] == ["api", "users"]:
+                self._require_roles(user, "admin")
+                with AuthStore() as store:
+                    if "temporary_password" in payload:
+                        store.reset_password(
+                            parts[2],
+                            str(payload.get("temporary_password") or ""),
+                            actor=user,
+                            remote_address=self.client_address[0],
+                        )
+                    updated = store.update_user(
+                        parts[2],
+                        roles=list(payload["roles"]) if "roles" in payload else None,
+                        active=bool(payload["active"]) if "active" in payload else None,
+                        actor=user,
+                        remote_address=self.client_address[0],
+                    )
+                self._json(200, {"ok": True, "user": updated})
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "cases"]:
+                self._require_roles(user, "admin")
+                owner_id = str(payload.get("owner_user_id") or "")
+                with AuthStore() as store:
+                    owner = store.get_user(owner_id)
+                    if not owner or not owner.get("active"):
+                        raise ValueError("请选择启用的销售用户。")
+                    if "sales" not in set(owner.get("roles") or []):
+                        raise ValueError("案件负责人必须具有销售角色。")
+                    from ..workflow import DongjiangWorkflowHarness
+
+                    with DongjiangWorkflowHarness() as harness:
+                        run = harness.assign_owner(
+                            parts[2],
+                            {
+                                "user_id": owner["user_id"],
+                                "display_name": owner["display_name"],
+                            },
+                        )
+                    store.audit(
+                        "case.owner_assigned",
+                        actor=user,
+                        target_type="case",
+                        target_id=parts[2],
+                        detail={"owner_user_id": owner["user_id"]},
+                        remote_address=self.client_address[0],
+                    )
+                self._json(200, {"ok": True, "case": self._workflow_view(run, user)})
+                return
+            self._json(404, {"ok": False, "error": "API 不存在"})
+        except AuthenticationError as exc:
+            self._json(401, {"ok": False, "error": str(exc)})
+        except KeyError as exc:
+            self._json(404, {"ok": False, "error": str(exc).strip("'")})
+        except PermissionError as exc:
+            self._json(403, {"ok": False, "error": str(exc)})
+        except Exception as exc:
+            self._json(400, {"ok": False, "error": str(exc), "error_type": type(exc).__name__})
 
     def _oa_callback(self, case_id: str, payload: dict[str, Any]) -> None:
         from ..workflow import ActorContext, DongjiangWorkflowHarness
@@ -175,9 +510,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             "action": payload.get("action"),
             "approved_credit_limit": payload.get("approved_credit_limit"),
             "approved_term_days": payload.get("approved_term_days"),
-            "purchase_exemption_approved": payload.get(
-                "purchase_exemption_approved"
-            ),
+            "purchase_exemption_approved": payload.get("purchase_exemption_approved"),
             "approval_scope": payload.get("approval_scope"),
             "validity_days": payload.get("validity_days"),
             "oa_evidence_id": payload.get("oa_evidence_id"),
@@ -188,17 +521,14 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             run = harness.resume(
                 case_id,
                 decision,
-                actor=ActorContext(
-                    str(payload.get("actor_id") or "oa-callback"),
-                    ("finance",),
-                    "oa",
-                ),
+                actor=ActorContext(str(payload.get("actor_id") or "oa-callback"), ("finance",), "oa", "OA审批"),
             )
-        self._json(200, {"ok": True, "case": self._workflow_view(run)})
+        self._json(200, {"ok": True, "case": case_view(dict(run.state), waiting_for=run.waiting_for)})
 
-    def _create_case(self, payload: dict[str, Any]) -> None:
-        from ..workflow import ActorContext, DongjiangWorkflowHarness
+    def _create_case(self, payload: dict[str, Any], user: dict[str, Any]) -> None:
+        from ..workflow import DongjiangWorkflowHarness
 
+        self._require_roles(user, "sales")
         customer = dict(payload.get("customer") or {})
         _validate_customer(customer)
         with tempfile.TemporaryDirectory(prefix="dongjiang-case-upload-") as temp_dir:
@@ -208,79 +538,76 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     customer,
                     file_paths=paths,
                     use_cached_credit=bool(payload.get("use_cached_credit", True)),
-                    actor=ActorContext("web-sales", ("sales",), "web"),
+                    actor=self._actor(user),
                 )
-        self._json(201, {"ok": True, "case": self._workflow_view(run)})
+        with AuthStore() as store:
+            store.audit(
+                "case.created",
+                actor=user,
+                target_type="case",
+                target_id=run.case_id,
+                remote_address=self.client_address[0],
+            )
+        self._json(201, {"ok": True, "case": self._workflow_view(run, user)})
+
+    @staticmethod
+    def _assert_owner(current: Any, user: dict[str, Any]) -> None:
+        if "admin" in set(user.get("roles") or []):
+            return
+        if current.waiting_for not in {"credit_supplement", "contract_upload", "sales_revision"}:
+            return
+        owner = dict(current.state.get("owner") or current.state.get("applicant") or {})
+        if owner.get("user_id") and owner.get("user_id") != user.get("user_id"):
+            raise PermissionError("该销售任务已分配给其他负责人。")
 
     def _handle_case_action(
         self,
         case_id: str,
         resource: str,
         payload: dict[str, Any],
+        user: dict[str, Any],
     ) -> None:
-        from ..workflow import ActorContext, DongjiangWorkflowHarness
+        from ..workflow import DongjiangWorkflowHarness
 
         with tempfile.TemporaryDirectory(prefix="dongjiang-case-action-") as temp_dir:
             paths = _stage_uploads(payload.get("files") or [], temp_dir)
             with DongjiangWorkflowHarness() as harness:
                 current = harness.get(case_id)
+                self._assert_owner(current, user)
                 if resource == "credit-documents":
                     if current.waiting_for != "credit_supplement":
                         raise ValueError("当前案件不需要补充信用资料。")
                     if not paths:
                         raise ValueError("请至少上传一份信用资料。")
                     action = "submit_supplement"
-                    actor = ActorContext("web-sales", ("sales",), "web")
                 elif resource == "credit-actions":
                     requested = str(payload.get("action") or "")
                     if current.waiting_for == "credit_approval":
-                        if requested not in {
-                            "approve",
-                            "adjust_and_approve",
-                            "request_supplement",
-                            "reject",
-                        }:
+                        if requested not in {"approve", "adjust_and_approve", "request_supplement", "reject"}:
                             raise ValueError("不支持的信用审批操作。")
                         action = requested
-                        actor = ActorContext("web-credit", ("credit",), "web")
-                    elif (
-                        current.waiting_for == "credit_supplement"
-                        and requested == "close_case"
-                    ):
+                    elif current.waiting_for == "credit_supplement" and requested == "close_case":
                         action = requested
-                        actor = ActorContext("web-sales", ("sales",), "web")
                     else:
                         raise ValueError("当前案件不支持该信用操作。")
                 elif resource == "contracts":
-                    if (
-                        current.state.get("credit_status") != "effective"
-                        or not current.state.get("effective_credit_assessment")
-                    ):
+                    if current.state.get("credit_status") != "effective" or not current.state.get("effective_credit_assessment"):
                         raise PermissionError("信审结果尚未审批生效，不能上传合同。")
                     if current.waiting_for not in {"contract_upload", "sales_revision"}:
                         raise ValueError("当前案件不需要上传或修改合同。")
                     if not paths and not payload.get("contract_texts"):
                         raise ValueError("请上传合同文件或粘贴合同正文。")
-                    action = (
-                        "submit_revision"
-                        if current.waiting_for == "sales_revision"
-                        else "submit_contract"
-                    )
-                    actor = ActorContext("web-sales", ("sales",), "web")
+                    action = "submit_revision" if current.waiting_for == "sales_revision" else "submit_contract"
                 else:
-                    action, actor = self._resolve_business_action(
-                        current.waiting_for,
-                        str(payload.get("action") or ""),
-                        paths,
+                    action = self._resolve_business_action(
+                        current.waiting_for, str(payload.get("action") or ""), paths
                     )
                 decision = {
                     "action": action,
                     "comment": str(payload.get("comment") or ""),
                     "approved_credit_limit": payload.get("approved_credit_limit"),
                     "approved_term_days": payload.get("approved_term_days"),
-                    "purchase_exemption_approved": payload.get(
-                        "purchase_exemption_approved"
-                    ),
+                    "purchase_exemption_approved": payload.get("purchase_exemption_approved"),
                     "approval_scope": payload.get("approval_scope"),
                     "validity_days": payload.get("validity_days"),
                     "oa_evidence_id": payload.get("oa_evidence_id"),
@@ -288,41 +615,39 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     "file_paths": paths,
                     "contract_texts": payload.get("contract_texts") or [],
                 }
-                run = harness.resume(case_id, decision, actor=actor)
-        self._json(200, {"ok": True, "case": self._workflow_view(run)})
+                run = harness.resume(case_id, decision, actor=self._actor(user))
+        with AuthStore() as store:
+            store.audit(
+                "case.action",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={"resource": resource, "action": action},
+                remote_address=self.client_address[0],
+            )
+        self._json(200, {"ok": True, "case": self._workflow_view(run, user)})
 
     @staticmethod
     def _resolve_business_action(
-        waiting_for: str | None,
-        requested: str,
-        file_paths: list[str],
-    ) -> tuple[str, Any]:
-        from ..workflow import ActorContext
-
+        waiting_for: str | None, requested: str, file_paths: list[str]
+    ) -> str:
         action_map = {
-            "contract_upload": {"close_case": ("close_case", "sales")},
-            "sales_revision": {"close_case": ("close_case", "sales")},
-            "manager_approval": {
-                "approve": ("approve", "director"),
-                "reject": ("reject", "director"),
-            },
-            "special_release": {
-                "approve": ("approve", "director"),
-                "reject": ("reject", "director"),
-            },
+            "contract_upload": {"close_case": "close_case"},
+            "sales_revision": {"close_case": "close_case"},
+            "manager_approval": {"approve": "approve", "reject": "reject"},
+            "special_release": {"approve": "approve", "reject": "reject"},
             "finance_legal_review": {
-                "approve": ("approve", "finance"),
-                "supplement": ("supplement", "finance"),
-                "request_revision": ("revise_contract", "finance"),
+                "approve": "approve",
+                "supplement": "supplement",
+                "request_revision": "revise_contract",
             },
         }
-        translated = action_map.get(str(waiting_for), {}).get(requested)
-        if translated is None:
+        action = action_map.get(str(waiting_for), {}).get(requested)
+        if action is None:
             raise ValueError("当前案件不支持该操作。")
-        action, role = translated
         if action == "supplement" and not file_paths:
             raise ValueError("补充资料时请至少上传一个文件。")
-        return action, ActorContext(f"web-{role}", (role,), "web")
+        return action
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[web] {self.address_string()} {fmt % args}")

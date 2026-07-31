@@ -44,6 +44,8 @@ def case_from_state(state: dict[str, Any]) -> AuditCase:
         ],
         status=str(state.get("status") or "processing"),
         trace=list(state.get("trace") or []),
+        applicant=dict(state.get("applicant") or {}),
+        owner=dict(state.get("owner") or {}),
         created_at=str(state.get("created_at") or ""),
     )
     return case

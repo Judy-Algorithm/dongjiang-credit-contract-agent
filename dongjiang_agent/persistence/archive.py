@@ -36,6 +36,7 @@ class CaseDocumentArchive:
         if not target.exists():
             shutil.copy2(source, target)
         return {
+            "document_id": f"DOC-{digest[:16].upper()}",
             "document_kind": document_kind,
             "name": source.name,
             "sha256": digest,

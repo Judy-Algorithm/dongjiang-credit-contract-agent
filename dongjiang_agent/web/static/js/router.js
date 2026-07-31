@@ -7,6 +7,11 @@ export function navigate(path, {replace = false} = {}) {
 export function currentRoute() {
   const path = window.location.pathname.replace(/\/+$/, "") || "/"
   const params = new URLSearchParams(window.location.search)
+  if (path === "/login") return {name:"login", params}
+  if (path === "/setup") return {name:"setup", params}
+  if (path === "/change-password") return {name:"change-password", params}
+  if (path === "/users") return {name:"users", params}
+  if (path === "/audit") return {name:"audit", params}
   if (path === "/" || path === "/cases") return {name:"cases", params}
   if (path === "/cases/new") return {name:"case-new", params}
   const action = path.match(/^\/cases\/([^/]+)\/action$/)
