@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-notify"
-import {dateTime, escapeHtml} from "../format.js?v=20260731-notify"
+import {api} from "../api.js?v=20260731-sla"
+import {dateTime, escapeHtml} from "../format.js?v=20260731-sla"
 
 export async function renderWritebacksPage(root) {
   const data = await api.listWritebackFailures()

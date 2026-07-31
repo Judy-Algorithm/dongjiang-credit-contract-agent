@@ -11,6 +11,7 @@ from typing import Any
 
 from ..contract.revisions import suggested_replacement
 from ..ingestion import location_label
+from ..operations.sla import case_sla
 
 
 STATUS_LABELS = {
@@ -240,6 +241,7 @@ def case_view(
             owner_id = str(owner.get("user_id") or "")
             can_act = not owner_id or owner_id == str(actor.get("user_id") or "")
     records = _records(list(case.get("trace") or []))
+    sla = case_sla(case)
     status = str(case.get("status") or "created")
     findings = [
         {
@@ -300,6 +302,7 @@ def case_view(
         "next_action": next_action if can_act else None,
         "pending_action": next_action,
         "is_my_task": bool(next_action and can_act),
+        "sla": sla,
         "applicant": applicant,
         "owner": owner,
         "phase": "contract" if credit_status == "effective" else "credit",
@@ -467,6 +470,7 @@ def case_summary(
         "next_action": view["next_action"],
         "pending_action": view["pending_action"],
         "is_my_task": view["is_my_task"],
+        "sla": view["sla"],
         "applicant": view["applicant"],
         "owner": view["owner"],
         "created_at": view["created_at"],

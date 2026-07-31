@@ -681,7 +681,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
-        for route in ("/cases/new", "/registrations", "/notifications"):
+        for route in ("/cases/new", "/registrations", "/notifications", "/operations"):
             self.connection.request("GET", route)
             response = self.connection.getresponse()
             html = response.read().decode("utf-8")
@@ -982,6 +982,39 @@ class WebApiTests(unittest.TestCase):
         status, failures = self.request("GET", "/api/operations/writebacks")
         self.assertEqual(status, 200)
         self.assertEqual(failures["total"], 0)
+
+    @patch("dongjiang_agent.web.server.SLAService")
+    def test_sla_operations_are_admin_only_and_sweep_is_audited(self, service_class):
+        service = service_class.return_value
+        service.dashboard.return_value = {
+            "items": [],
+            "metrics": {"total": 0, "on_track": 0, "due_soon": 0, "overdue": 0},
+            "by_task": [],
+            "policy_version": "test-v1",
+            "generated_at": "2026-07-31T00:00:00+00:00",
+        }
+        service.sweep.return_value = {
+            "ok": True,
+            "examined": 1,
+            "due_soon": 0,
+            "overdue": 1,
+            "notifications_created": 1,
+            "emails_sent": 0,
+        }
+        status, dashboard = self.request("GET", "/api/operations/sla")
+        self.assertEqual(status, 200)
+        self.assertEqual(dashboard["metrics"]["total"], 0)
+        status, swept = self.request("POST", "/api/operations/sla/sweep", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(swept["notifications_created"], 1)
+        with AuthStore() as store:
+            events = store.list_audit()
+        self.assertTrue(any(item["event_type"] == "operations.sla_sweep" for item in events))
+
+        self.create_user("sla.sales", "时效普通销售", ["sales"])
+        self.activate_user("sla.sales")
+        self.assertEqual(self.request("GET", "/api/operations/sla")[0], 403)
+        self.assertEqual(self.request("POST", "/api/operations/sla/sweep", {})[0], 403)
 
 
 if __name__ == "__main__":

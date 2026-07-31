@@ -1,0 +1,14 @@
+{
+  "version": "competition-sla-v1",
+  "status": "PROPOSED_NOT_OFFICIAL",
+  "description": "比赛演示用审批时效建议，需按东江正式制度确认后调整。",
+  "tasks": {
+    "credit_approval": {"label": "信用审批", "target_hours": 24, "warning_before_hours": 6},
+    "credit_supplement": {"label": "补充信用资料", "target_hours": 48, "warning_before_hours": 12},
+    "special_release": {"label": "特别放行", "target_hours": 12, "warning_before_hours": 3},
+    "contract_upload": {"label": "上传合同", "target_hours": 72, "warning_before_hours": 12},
+    "sales_revision": {"label": "修改合同", "target_hours": 48, "warning_before_hours": 12},
+    "manager_approval": {"label": "管理层审批", "target_hours": 24, "warning_before_hours": 6},
+    "finance_legal_review": {"label": "财务法务复核", "target_hours": 24, "warning_before_hours": 6}
+  }
+}

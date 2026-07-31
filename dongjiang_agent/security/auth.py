@@ -186,6 +186,7 @@ class AuthStore:
                 link TEXT,
                 created_at TEXT NOT NULL,
                 read_at TEXT,
+                dedupe_key TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user_created
@@ -196,6 +197,23 @@ class AuthStore:
             self.connection.execute(
                 "ALTER TABLE users ADD COLUMN registration_status TEXT NOT NULL DEFAULT 'approved'"
             )
+        notification_columns = {
+            str(row["name"])
+            for row in self.connection.execute(
+                "PRAGMA table_info(notifications)"
+            ).fetchall()
+        }
+        if "dedupe_key" not in notification_columns:
+            self.connection.execute(
+                "ALTER TABLE notifications ADD COLUMN dedupe_key TEXT"
+            )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_dedupe
+            ON notifications(user_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL AND dedupe_key != ''
+            """
+        )
         self.connection.commit()
 
     @staticmethod
@@ -1024,27 +1042,35 @@ class AuthStore:
         title: str,
         body: str,
         link: str = "",
-    ) -> dict[str, Any]:
+        dedupe_key: str = "",
+    ) -> dict[str, Any] | None:
         if not self.get_user(user_id):
             raise KeyError("通知接收人不存在。")
         notification_id = f"NTF-{uuid4().hex[:16].upper()}"
         created_at = _iso()
-        self.connection.execute(
-            """
-            INSERT INTO notifications (
-                notification_id, user_id, category, title, body, link, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                notification_id,
-                user_id,
-                str(category or "system")[:40],
-                str(title).strip()[:160],
-                str(body).strip()[:1000],
-                str(link).strip()[:500] or None,
-                created_at,
-            ),
-        )
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO notifications (
+                    notification_id, user_id, category, title, body, link,
+                    created_at, dedupe_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notification_id,
+                    user_id,
+                    str(category or "system")[:40],
+                    str(title).strip()[:160],
+                    str(body).strip()[:1000],
+                    str(link).strip()[:500] or None,
+                    created_at,
+                    str(dedupe_key).strip()[:300] or None,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            if dedupe_key:
+                return None
+            raise
         self.connection.commit()
         return {
             "notification_id": notification_id,

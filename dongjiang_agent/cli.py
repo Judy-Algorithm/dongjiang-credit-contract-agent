@@ -57,6 +57,7 @@ def main() -> int:
     lifecycle = subparsers.add_parser(
         "lifecycle-sweep", help="执行一年无订单且无欠款客户的授信清零"
     )
+    subparsers.add_parser("sla-sweep", help="扫描临期和逾期待办并发送去重提醒")
     args = parser.parse_args()
     if args.command in {"audit", "workflow-start"}:
         return _run(_load_case(args.case), args.output, args.no_cache)
@@ -82,6 +83,11 @@ def main() -> int:
             integrations=IntegrationBundle.from_environment()
         )
         print(json.dumps({"inactivated_case_ids": changed}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "sla-sweep":
+        from .operations import SLAService
+
+        print(json.dumps(SLAService().sweep(), ensure_ascii=False, indent=2))
         return 0
     return 2
 

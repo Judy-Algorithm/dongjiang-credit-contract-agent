@@ -1,16 +1,17 @@
-import {api} from "./api.js?v=20260731-notify"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-notify"
-import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-notify"
-import {renderAuditPage} from "./pages/audit.js?v=20260731-notify"
-import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-notify"
-import {renderCasesPage} from "./pages/cases.js?v=20260731-notify"
-import {renderNewCasePage} from "./pages/case-new.js?v=20260731-notify"
-import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-notify"
-import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-notify"
-import {renderUsersPage} from "./pages/users.js?v=20260731-notify"
-import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-notify"
-import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-notify"
-import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-notify"
+import {api} from "./api.js?v=20260731-sla"
+import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-sla"
+import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-sla"
+import {renderAuditPage} from "./pages/audit.js?v=20260731-sla"
+import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-sla"
+import {renderCasesPage} from "./pages/cases.js?v=20260731-sla"
+import {renderNewCasePage} from "./pages/case-new.js?v=20260731-sla"
+import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-sla"
+import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-sla"
+import {renderUsersPage} from "./pages/users.js?v=20260731-sla"
+import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-sla"
+import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-sla"
+import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-sla"
+import {renderOperationsPage} from "./pages/operations.js?v=20260731-sla"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -61,6 +62,10 @@ async function render() {
       await renderRegistrationsPage(root)
     }
     if (route.name === "notifications") await renderNotificationsPage(root)
+    if (route.name === "operations") {
+      if (!hasRole("admin")) throw new Error("只有管理员可以查看时效运营。")
+      await renderOperationsPage(root)
+    }
   } catch (error) {
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
   } finally {
@@ -93,7 +98,7 @@ async function renderHeader(auth, route) {
       <a href="/cases?mine=1" data-link data-nav="tasks">我的待办</a>
       ${hasRole("sales") ? `<a class="primary small" href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
       <a href="/notifications" data-link data-nav="notifications">通知${unread ? `<span class="nav-count">${Math.min(unread, 99)}</span>` : ""}</a>
-      ${hasRole("admin") ? `<a href="/registrations" data-link data-nav="registrations">注册审核${pendingRegistrations ? `<span class="nav-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
+      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/registrations" data-link data-nav="registrations">注册审核${pendingRegistrations ? `<span class="nav-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b></button>
         <div id="accountPopover" class="account-popover hidden">
@@ -110,7 +115,7 @@ async function renderHeader(auth, route) {
 }
 
 function setActiveNav(route) {
-  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "registrations" ? "registrations" : route.name === "notifications" ? "notifications" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
+  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "registrations" ? "registrations" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
 }
 

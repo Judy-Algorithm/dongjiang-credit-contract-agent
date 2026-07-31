@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260731-notify"
-import {escapeHtml, money} from "../format.js?v=20260731-notify"
-import {navigate} from "../router.js?v=20260731-notify"
+import {api, encodeFiles} from "../api.js?v=20260731-sla"
+import {escapeHtml, money} from "../format.js?v=20260731-sla"
+import {navigate} from "../router.js?v=20260731-sla"
 
 export async function renderCaseActionPage(root, route) {
   const {case:item} = await api.getCase(route.caseId)

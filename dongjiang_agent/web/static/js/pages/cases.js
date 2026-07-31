@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-notify"
-import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260731-notify"
+import {api} from "../api.js?v=20260731-sla"
+import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260731-sla"
 
 const pendingStatuses = new Set([
   "credit_pending_approval","credit_supplement_required",
@@ -47,7 +47,7 @@ export async function renderCasesPage(root, route) {
     <section class="panel">
       <div class="table-scroll">
         <table>
-          <thead><tr><th>案件号</th><th>客户</th><th>业务</th><th>当前状态</th><th>风险等级</th><th>更新时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>案件号</th><th>客户</th><th>业务</th><th>当前状态</th><th>处理时效</th><th>风险等级</th><th>更新时间</th><th>操作</th></tr></thead>
           <tbody id="caseRows"></tbody>
         </table>
       </div>
@@ -112,10 +112,18 @@ function caseRow(item) {
       <td><a class="case-name" href="/cases/${encodeURIComponent(item.case_id)}" data-link>${escapeHtml(item.customer_name || "未命名客户")}</a><small>${customerType(item.customer_type)} · ${escapeHtml(item.owner?.display_name || "未分配")}</small></td>
       <td>${escapeHtml(item.business_type || "—")}</td>
       <td><span class="badge ${statusClass(item.status)}">${escapeHtml(item.status_label)}</span></td>
+      <td>${slaBadge(item.sla)}</td>
       <td><span class="badge ${escapeHtml(item.risk_level || "")}">${escapeHtml(item.risk_label)}</span></td>
       <td>${dateTime(item.updated_at)}</td>
       <td>${action
         ? `<a class="primary small" href="/cases/${encodeURIComponent(item.case_id)}/action" data-link>${escapeHtml(action.label)}</a>`
         : `<a class="text-button" href="/cases/${encodeURIComponent(item.case_id)}" data-link>查看</a>`}</td>
     </tr>`
+}
+
+function slaBadge(sla) {
+  if (!sla || sla.state === "not_applicable") return "—"
+  const hours = Number(sla.remaining_hours || 0)
+  const label = sla.state === "overdue" ? `逾期 ${Math.abs(hours).toFixed(1)} 小时` : `剩余 ${hours.toFixed(1)} 小时`
+  return `<span class="badge sla-${escapeHtml(sla.state)}">${escapeHtml(label)}</span>`
 }

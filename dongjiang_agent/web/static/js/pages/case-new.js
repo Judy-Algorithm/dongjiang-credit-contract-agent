@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260731-notify"
-import {escapeHtml} from "../format.js?v=20260731-notify"
-import {navigate} from "../router.js?v=20260731-notify"
+import {api, encodeFiles} from "../api.js?v=20260731-sla"
+import {escapeHtml} from "../format.js?v=20260731-sla"
+import {navigate} from "../router.js?v=20260731-sla"
 
 const draftKey = "dongjiang:new-case-draft"
 

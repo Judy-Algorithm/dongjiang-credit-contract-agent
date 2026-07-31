@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
+from ..operations import SLAMonitor, SLAService
 from ..persistence import CaseRepository
 from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
@@ -266,7 +267,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -465,6 +466,10 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 failures.sort(key=lambda item: str(item.get("attempted_at") or ""), reverse=True)
                 self._json(200, {"ok": True, "failures": failures, "total": len(failures)})
                 return
+            if path == "/api/operations/sla":
+                self._require_roles(user, "admin")
+                self._json(200, {"ok": True, **SLAService().dashboard()})
+                return
             if path == "/api/cases":
                 cases = CaseRepository().list_cases()
                 rows = [case_summary(item, actor=user) for item in cases[:100]]
@@ -656,6 +661,19 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 with AuthStore() as store:
                     store.mark_all_notifications_read(str(user["user_id"]))
                 self._json(200, {"ok": True})
+                return
+            if path == "/api/operations/sla/sweep":
+                self._require_roles(user, "admin")
+                result = SLAService().sweep()
+                with AuthStore() as store:
+                    store.audit(
+                        "operations.sla_sweep",
+                        actor=user,
+                        target_type="operations",
+                        detail=result,
+                        remote_address=self._remote_address(),
+                    )
+                self._json(200, result)
                 return
             parts = [item for item in path.split("/") if item]
             if len(parts) == 4 and parts[:2] == ["api", "notifications"] and parts[3] == "read":
@@ -1144,12 +1162,24 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
 
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
     server = ThreadingHTTPServer((host, port), AuditRequestHandler)
+    monitor = None
+    if os.getenv("DONGJIANG_SLA_MONITOR_ENABLED", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        monitor = SLAMonitor()
+        monitor.start()
     print(f"东江一体化信审与合同评审：http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if monitor:
+            monitor.stop()
+            monitor.join(timeout=3)
         server.server_close()
 
 

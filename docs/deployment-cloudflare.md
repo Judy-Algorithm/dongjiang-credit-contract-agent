@@ -52,9 +52,13 @@ DONGJIANG_SMTP_FROM=你的163邮箱
 DONGJIANG_SMTP_USE_SSL=true
 DONGJIANG_SMTP_STARTTLS=false
 DONGJIANG_PUBLIC_URL=https://credit.1832104.xyz
+DONGJIANG_SLA_MONITOR_ENABLED=true
+DONGJIANG_SLA_SCAN_INTERVAL_SECONDS=900
 ```
 
 `DONGJIANG_SMTP_PASSWORD` 不是邮箱网页登录密码。`DONGJIANG_PUBLIC_URL` 用于生成通知邮件中的案件处理链接，应填写实际 HTTPS 域名。修改 `.env` 后必须重启本地 Python 服务，不能把授权密码提交到 Git。
+
+时效扫描默认每900秒执行一次。也可以通过管理员“时效运营”页面手动扫描，或执行 `python -m dongjiang_agent.cli sla-sweep`。正式上线前应先根据东江制度调整 `dongjiang_agent/config/sla_policy.json`。
 
 ### Cloudflare Access
 

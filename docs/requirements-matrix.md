@@ -30,6 +30,7 @@
 | 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
 | 安全自助注册与审核 | 注册前邮箱验证码；账号待审核停用；管理员批准/拒绝并分配角色；审核结果站内信和邮件通知 | `test_verified_registration_requires_admin_review`、注册审核页 |
 | 业务通知中心 | 注册申请、审核结果、案件流转和失败回写通知；按用户隔离，支持单条/全部已读与业务跳转 | `test_notifications_are_scoped_to_recipient_and_support_read_all`、通知中心页 |
+| 审批时效运营 | 节点级可配置 SLA、临期/逾期展示、去重站内信/邮件提醒、管理员瓶颈看板 | `test_sla_operations.py`、时效运营页 |
 | 固定演示路径 | 幂等生成资料补件、TKP 120天特批、无责取消修订三条合成案件 | `python scripts/prepare_demo_cases.py` |
 | 结果可量化 | 决策回归准确率、平均/P95耗时 | `python3 scripts/evaluate.py` |
 | 可审计 | 案件 Trace、政策版本、证据和规则 ID | `audit-result.json` |

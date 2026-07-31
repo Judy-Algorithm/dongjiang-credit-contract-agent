@@ -65,6 +65,8 @@ export const api = {
   assignCaseOwner:(caseId, ownerUserId) => patch(`/api/cases/${encodeURIComponent(caseId)}`, {owner_user_id:ownerUserId}),
   listAudit:() => request("/api/audit"),
   listWritebackFailures:() => request("/api/operations/writebacks"),
+  getSlaDashboard:() => request("/api/operations/sla"),
+  runSlaSweep:() => post("/api/operations/sla/sweep", {}),
   listCases:({mine = false} = {}) => request(`/api/cases${mine ? "?mine=1" : ""}`),
   getCase:(caseId) => request(`/api/cases/${encodeURIComponent(caseId)}`),
   getDocumentFragment:(caseId, documentId, fragmentId = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}`),

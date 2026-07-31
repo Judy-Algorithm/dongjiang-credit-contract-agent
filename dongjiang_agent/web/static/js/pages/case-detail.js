@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260731-notify"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-notify"
+import {api} from "../api.js?v=20260731-sla"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-sla"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],
@@ -21,7 +21,7 @@ export async function renderCaseDetailPage(root, route) {
         ${item.next_action ? `<a href="/cases/${encodeURIComponent(item.case_id)}/action" data-link class="primary">${escapeHtml(item.next_action.label)}</a>` : ""}
       </div>
     </header>
-    ${item.next_action ? `<section class="action-banner"><div><h2>${escapeHtml(item.status_label)}</h2><p>${actionMessage(item.next_action.type)}</p></div><a href="/cases/${encodeURIComponent(item.case_id)}/action" data-link class="primary">${escapeHtml(item.next_action.label)}</a></section>` : ""}
+    ${item.next_action ? `<section class="action-banner"><div><h2>${escapeHtml(item.status_label)}</h2><p>${actionMessage(item.next_action.type)}</p>${slaLine(item.sla)}</div><a href="/cases/${encodeURIComponent(item.case_id)}/action" data-link class="primary">${escapeHtml(item.next_action.label)}</a></section>` : ""}
     <section class="summary-grid">
       ${summary("模型信用分", model.score == null ? "—" : Number(model.score).toFixed(1))}
       ${summary("风险等级", item.risk_label)}
@@ -72,9 +72,16 @@ function overviewTab(item) {
       ${item.findings?.length ? `<div class="form-section"><div class="section-heading"><h3>风险摘要</h3><span>${item.findings.length} 项</span></div>${item.findings.slice(0,3).map(findingCard).join("")}</div>` : `<div class="empty-note">当前没有合同风险事项。</div>`}
     </section>
     <aside class="case-rail"><div class="section-heading"><h3>案件信息</h3></div>
-      ${rail("案件号", item.case_id)}${rail("创建时间", dateTime(item.created_at))}${rail("最近更新", dateTime(item.updated_at))}${rail("原始资料", `${item.source_documents?.length || 0} 份`)}${rail("审批证据", `${item.approval_evidence?.length || 0} 份`)}
+      ${rail("案件号", item.case_id)}${rail("创建时间", dateTime(item.created_at))}${rail("最近更新", dateTime(item.updated_at))}${item.sla?.due_at ? rail("当前待办截止", dateTime(item.sla.due_at)) : ""}${rail("原始资料", `${item.source_documents?.length || 0} 份`)}${rail("审批证据", `${item.approval_evidence?.length || 0} 份`)}
     </aside>
   </div>`
+}
+
+function slaLine(sla) {
+  if (!sla || sla.state === "not_applicable") return ""
+  const hours = Number(sla.remaining_hours || 0)
+  const timing = sla.state === "overdue" ? `已逾期 ${Math.abs(hours).toFixed(1)} 小时` : `距离截止还有 ${hours.toFixed(1)} 小时`
+  return `<small class="sla-line ${escapeHtml(sla.state)}">${escapeHtml(timing)} · 截止 ${dateTime(sla.due_at)}</small>`
 }
 
 function creditTab(item) {

@@ -1,8 +1,8 @@
-import {api} from "../api.js?v=20260731-notify"
-import {navigate} from "../router.js?v=20260731-notify"
-import {escapeHtml, dateTime} from "../format.js?v=20260731-notify"
+import {api} from "../api.js?v=20260731-sla"
+import {navigate} from "../router.js?v=20260731-sla"
+import {escapeHtml, dateTime} from "../format.js?v=20260731-sla"
 
-const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", system:"系统"}
+const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", sla:"时效", system:"系统"}
 
 export async function renderNotificationsPage(root) {
   const data = await api.listNotifications()
