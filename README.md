@@ -166,6 +166,8 @@ python3 -m pip install -e '.[documents]'
 
 项目提供基于 Docker Compose 与 Cloudflare Tunnel 的部署配置，推荐使用 `credit.1832104.xyz`，不需要向公网开放应用端口。完整的 Tunnel、Cloudflare Access、启动、备份和故障排查步骤见 [Cloudflare 公网部署说明](docs/deployment-cloudflare.md)。
 
+暂不使用 VPS 时，可直接采用“本机应用 + Cloudflare Tunnel”模式；运行 `scripts/run-local-cloudflare-tunnel.ps1` 即可把本机 `127.0.0.1:8765` 映射到自定义域名。GitHub Pages 仅适合静态站点，不能替代本项目的 Python 后端和本地数据存储。
+
 ## 架构与交付状态
 
 - [业务操作说明书](docs/user-manual.md)

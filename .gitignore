@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .env
 deploy/.env.production
+deploy/.env.local-tunnel
 .idea/
 .vscode/
 .DS_Store

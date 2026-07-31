@@ -2,6 +2,49 @@
 
 本文将应用发布到 `https://credit.1832104.xyz`。使用子域名可以保留根域名 `1832104.xyz` 的现有网站和配置。
 
+## 当前推荐：本机部署 + Tunnel
+
+如果暂时不使用 VPS，最简单的公网演示方式是让项目继续运行在本机，再由 Cloudflare Tunnel 建立出站连接。电脑需要持续开机、联网且不能进入睡眠；电脑关机或网络断开时，网站会暂时不可用。
+
+本机 Windows 的服务地址是 `http://127.0.0.1:8765`。仓库提供 `scripts/run-local-cloudflare-tunnel.ps1`，直接启动本机的 Cloudflared，不需要向路由器开放端口或使用 Docker。
+
+### 本机配置步骤
+
+1. 在 Cloudflare Dashboard 进入 **Zero Trust → Networks → Tunnels → Create a tunnel**，选择 Docker，名称填写 `dongjiang-local`。
+2. 在 Tunnel 的 **Public Hostname** 添加：
+   - Subdomain：`credit`
+   - Domain：`1832104.xyz`
+   - Type：`HTTP`
+   - URL：`http://127.0.0.1:8765`
+3. 复制 Tunnel Token，并在仓库根目录执行：
+
+```powershell
+Copy-Item deploy/.env.local-tunnel.example deploy/.env.local-tunnel
+notepad deploy/.env.local-tunnel
+```
+
+4. 确认本地应用正在运行：
+
+```powershell
+python -m dongjiang_agent.cli serve --host 127.0.0.1 --port 8765
+```
+
+5. 另开一个 PowerShell 窗口启动公网入口：
+
+```powershell
+.\scripts\run-local-cloudflare-tunnel.ps1
+```
+
+6. 访问 `https://credit.1832104.xyz/api/health`，应返回 `ok: true`，再打开首页完成登录。
+
+`deploy/.env.local-tunnel` 只保存 Tunnel Token，并已加入 `.gitignore`。不要把 Token 写进脚本、截图或 GitHub。
+
+### Cloudflare Access
+
+建议在 **Zero Trust → Access → Applications → Add an application → Self-hosted** 中保护 `credit.1832104.xyz`，只允许你和队员的邮箱访问。这样公网入口不会暴露给陌生人，即使应用本身还有登录页，也多一层身份验证。
+
+GitHub Pages 不适合直接部署本项目。它只能托管静态 HTML/CSS/JavaScript，不能运行 Python Web 服务、SQLite 工作流、案件归档和模型调用；GitHub 仓库继续作为代码版本库即可。
+
 ## 1. 部署架构与前提
 
 ```text
