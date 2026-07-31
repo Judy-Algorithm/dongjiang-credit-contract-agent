@@ -1,14 +1,14 @@
-import {api} from "./api.js"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js"
-import {currentRoute, installRouter, navigate} from "./router.js"
-import {renderAuditPage} from "./pages/audit.js"
-import {renderChangePasswordPage, renderLoginPage, renderSetupPage} from "./pages/auth.js"
-import {renderCasesPage} from "./pages/cases.js"
-import {renderNewCasePage} from "./pages/case-new.js"
-import {renderCaseDetailPage} from "./pages/case-detail.js"
-import {renderCaseActionPage} from "./pages/case-action.js"
-import {renderUsersPage} from "./pages/users.js"
-import {renderWritebacksPage} from "./pages/writebacks.js"
+import {api} from "./api.js?v=20260731-auth"
+import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-auth"
+import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-auth"
+import {renderAuditPage} from "./pages/audit.js?v=20260731-auth"
+import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-auth"
+import {renderCasesPage} from "./pages/cases.js?v=20260731-auth"
+import {renderNewCasePage} from "./pages/case-new.js?v=20260731-auth"
+import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260731-auth"
+import {renderCaseActionPage} from "./pages/case-action.js?v=20260731-auth"
+import {renderUsersPage} from "./pages/users.js?v=20260731-auth"
+import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-auth"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -23,7 +23,7 @@ async function render() {
     const auth = await loadAuth()
     if (auth.setupRequired && route.name !== "setup") return navigate("/setup", {replace:true})
     if (!auth.setupRequired && route.name === "setup") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
-    if (!auth.authenticated && !["login","setup"].includes(route.name)) return navigate("/login", {replace:true})
+    if (!auth.authenticated && !["login","register","forgot-password","setup"].includes(route.name)) return navigate("/login", {replace:true})
     if (auth.authenticated && route.name === "login") return navigate("/cases?mine=1", {replace:true})
     if (auth.authenticated && auth.user.must_change_password && route.name !== "change-password") return navigate("/change-password", {replace:true})
     if (route.name === "not-found") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
@@ -31,6 +31,8 @@ async function render() {
     renderHeader(auth, route)
     setActiveNav(route)
     if (route.name === "login") renderLoginPage(root)
+    if (route.name === "register") renderRegisterPage(root)
+    if (route.name === "forgot-password") renderForgotPasswordPage(root)
     if (route.name === "setup") renderSetupPage(root)
     if (route.name === "change-password") renderChangePasswordPage(root)
     if (route.name === "cases") await renderCasesPage(root, route)
@@ -61,7 +63,7 @@ async function render() {
 }
 
 function renderHeader(auth, route) {
-  const publicPage = ["login","setup"].includes(route.name)
+  const publicPage = ["login","register","forgot-password","setup"].includes(route.name)
   shellHeader.classList.toggle("hidden", publicPage)
   root.classList.toggle("auth-shell", publicPage)
   if (publicPage || !auth.authenticated) return

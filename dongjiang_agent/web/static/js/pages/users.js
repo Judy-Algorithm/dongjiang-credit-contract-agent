@@ -1,5 +1,5 @@
-import {api} from "../api.js"
-import {escapeHtml, dateTime} from "../format.js"
+import {api} from "../api.js?v=20260731-auth"
+import {escapeHtml, dateTime} from "../format.js?v=20260731-auth"
 
 const roles = [
   ["sales","销售"],["credit","信用管理"],["finance","财务"],["legal","法务"],
@@ -23,6 +23,7 @@ export async function renderUsersPage(root) {
     if (!user) return
     if (button.dataset.userAction === "roles") showRoleForm(root, user)
     if (button.dataset.userAction === "password") showPasswordForm(root, user)
+    if (button.dataset.userAction === "email") showEmailForm(root, user)
     if (button.dataset.userAction === "toggle") {
       await api.updateUser(user.user_id, {active:!user.active})
       await renderUsersPage(root)
@@ -32,11 +33,11 @@ export async function renderUsersPage(root) {
 
 function userRow(user) {
   return `<tr>
-    <td><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.username)}</small></td>
+    <td><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.username)}</small><small>${escapeHtml(user.email || "未绑定邮箱")}</small></td>
     <td><div class="role-list">${user.role_labels.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div></td>
     <td><span class="badge ${user.active ? "approved" : ""}">${user.active ? "启用" : "已停用"}</span>${user.must_change_password ? `<small>等待修改初始密码</small>` : ""}</td>
     <td>${dateTime(user.last_login_at)}</td>
-    <td><button class="text-button" data-user-action="roles" data-user-id="${escapeHtml(user.user_id)}">角色</button><button class="text-button" data-user-action="password" data-user-id="${escapeHtml(user.user_id)}">重置密码</button><button class="text-button ${user.active ? "danger-text" : ""}" data-user-action="toggle" data-user-id="${escapeHtml(user.user_id)}">${user.active ? "停用" : "启用"}</button></td>
+    <td><button class="text-button" data-user-action="roles" data-user-id="${escapeHtml(user.user_id)}">角色</button><button class="text-button" data-user-action="email" data-user-id="${escapeHtml(user.user_id)}">邮箱</button><button class="text-button" data-user-action="password" data-user-id="${escapeHtml(user.user_id)}">重置密码</button><button class="text-button ${user.active ? "danger-text" : ""}" data-user-action="toggle" data-user-id="${escapeHtml(user.user_id)}">${user.active ? "停用" : "启用"}</button></td>
   </tr>`
 }
 
@@ -45,7 +46,7 @@ function showCreateForm(root) {
   editor.classList.remove("hidden")
   editor.innerHTML = `<form id="createUserForm" class="inline-editor">
     <div class="form-section-title"><h3>创建内部用户</h3><button type="button" class="text-button" data-close>关闭</button></div>
-    <div class="form-grid two"><label>姓名<input id="displayName" required></label><label>用户名<input id="username" minlength="3" required></label><label class="full">初始密码<input id="password" type="password" minlength="10" required></label></div>
+    <div class="form-grid two"><label>姓名<input id="displayName" required></label><label>用户名<input id="username" minlength="3" required></label><label>邮箱<input id="email" type="email" required></label><label class="full">初始密码<input id="password" type="password" minlength="10" required></label></div>
     ${roleOptions([])}<div id="editorError" class="error-box hidden"></div>
     <div class="form-actions"><span class="field-hint">用户首次登录后必须修改密码。</span><button class="primary" type="submit">创建用户</button></div>
   </form>`
@@ -56,9 +57,31 @@ function showCreateForm(root) {
       await api.createUser({
         display_name:editor.querySelector("#displayName").value,
         username:editor.querySelector("#username").value,
+        email:editor.querySelector("#email").value,
         password:editor.querySelector("#password").value,
         roles:selectedRoles(editor),
       })
+      await renderUsersPage(root)
+    })
+  })
+}
+
+function showEmailForm(root, user) {
+  const editor = root.querySelector("#userEditor")
+  editor.classList.remove("hidden")
+  editor.innerHTML = `<form class="inline-editor">
+    <div class="form-section-title"><h3>绑定 ${escapeHtml(user.display_name)} 的邮箱</h3><button type="button" class="text-button" data-close>关闭</button></div>
+    <div class="form-grid two"><label class="full">邮箱<input id="email" type="email" value="${escapeHtml(user.email || "")}" required></label></div>
+    <p class="field-hint">绑定后，该账号可以通过邮箱验证码找回密码。</p>
+    <div id="editorError" class="error-box hidden"></div>
+    <div class="form-actions"><span></span><button class="primary" type="submit">保存邮箱</button></div>
+  </form>`
+  editor.querySelector("[data-close]").addEventListener("click", () => editor.classList.add("hidden"))
+  editor.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    await editorSubmit(editor, async () => {
+      await api.updateUser(user.user_id, {email:editor.querySelector("#email").value})
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"邮箱已保存"}))
       await renderUsersPage(root)
     })
   })

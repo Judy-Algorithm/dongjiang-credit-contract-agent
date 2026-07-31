@@ -1,5 +1,5 @@
-import {api} from "../api.js"
-import {dateTime, escapeHtml} from "../format.js"
+import {api} from "../api.js?v=20260731-auth"
+import {dateTime, escapeHtml} from "../format.js?v=20260731-auth"
 
 export async function renderWritebacksPage(root) {
   const data = await api.listWritebackFailures()

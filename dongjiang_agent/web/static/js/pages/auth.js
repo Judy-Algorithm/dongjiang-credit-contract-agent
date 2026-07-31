@@ -1,7 +1,7 @@
-import {api} from "../api.js"
-import {clearAuth, setAuthenticated} from "../auth.js"
-import {navigate} from "../router.js"
-import {escapeHtml} from "../format.js"
+import {api} from "../api.js?v=20260731-auth"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260731-auth"
+import {navigate} from "../router.js?v=20260731-auth"
+import {escapeHtml} from "../format.js?v=20260731-auth"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `
@@ -10,6 +10,7 @@ export function renderLoginPage(root) {
       <label>密码<input id="password" type="password" autocomplete="current-password" required></label>
       <div id="authError" class="error-box hidden"></div>
       <button class="primary auth-submit" type="submit">登录</button>
+      <div class="auth-links"><a href="/register" data-link>注册账号</a><a href="/forgot-password" data-link>忘记密码</a></div>
     </form>`)
   root.querySelector("#loginForm").addEventListener("submit", async (event) => {
     event.preventDefault()
@@ -24,11 +25,94 @@ export function renderLoginPage(root) {
   })
 }
 
+export function renderRegisterPage(root) {
+  root.innerHTML = authLayout("注册账号", "新账号默认获得销售角色", `
+    <form id="registerForm" class="auth-form">
+      <label>姓名<input id="displayName" autocomplete="name" required autofocus></label>
+      <label>用户名<input id="username" autocomplete="username" minlength="3" maxlength="40" required></label>
+      <label>邮箱<input id="email" type="email" autocomplete="email" required></label>
+      <label>密码<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>确认密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required></label>
+      <p class="field-hint">密码至少10个字符，同时包含字母和数字。其他审批角色由管理员分配。</p>
+      <div id="authError" class="error-box hidden"></div>
+      <button class="primary auth-submit" type="submit">提交注册申请</button>
+      <div class="auth-links single"><a href="/login" data-link>返回登录</a></div>
+    </form>`)
+  root.querySelector("#registerForm").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    await submitAuth(root, async () => {
+      const password = root.querySelector("#password").value
+      if (password !== root.querySelector("#confirmPassword").value) throw new Error("两次输入的密码不一致。")
+      const data = await api.register({
+        display_name:root.querySelector("#displayName").value,
+        username:root.querySelector("#username").value,
+        email:root.querySelector("#email").value,
+        password,
+      })
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:data.message}))
+      navigate("/login", {replace:true})
+    })
+  })
+}
+
+export function renderForgotPasswordPage(root) {
+  root.innerHTML = authLayout("找回密码", "使用账号绑定邮箱接收验证码", `
+    <form id="resetRequestForm" class="auth-form">
+      <label>邮箱<input id="email" type="email" autocomplete="email" required autofocus></label>
+      <div id="authError" class="error-box hidden"></div>
+      <button class="primary auth-submit" type="submit">发送验证码</button>
+      <div class="auth-links single"><a href="/login" data-link>返回登录</a></div>
+    </form>
+    <form id="resetConfirmForm" class="auth-form hidden">
+      <div class="auth-success" id="resetMessage"></div>
+      <label>邮箱<input id="confirmEmail" type="email" autocomplete="email" required readonly></label>
+      <label>6位验证码<input id="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+      <label>新密码<input id="newPassword" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label>确认新密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required></label>
+      <div id="authError" class="error-box hidden"></div>
+      <button class="primary auth-submit" type="submit">重置密码</button>
+      <div class="auth-links"><button id="resendCode" class="link-button" type="button">重新发送</button><a href="/login" data-link>返回登录</a></div>
+    </form>`)
+  const requestForm = root.querySelector("#resetRequestForm")
+  const confirmForm = root.querySelector("#resetConfirmForm")
+  requestForm.addEventListener("submit", async (event) => {
+    event.preventDefault()
+    await submitAuth(requestForm, async () => {
+      const email = requestForm.querySelector("#email").value.trim()
+      const data = await api.requestPasswordReset({email})
+      confirmForm.querySelector("#confirmEmail").value = email
+      confirmForm.querySelector("#resetMessage").textContent = data.message
+      requestForm.classList.add("hidden")
+      confirmForm.classList.remove("hidden")
+      confirmForm.querySelector("#code").focus()
+    })
+  })
+  confirmForm.addEventListener("submit", async (event) => {
+    event.preventDefault()
+    await submitAuth(confirmForm, async () => {
+      const newPassword = confirmForm.querySelector("#newPassword").value
+      if (newPassword !== confirmForm.querySelector("#confirmPassword").value) throw new Error("两次输入的新密码不一致。")
+      await api.confirmPasswordReset({
+        email:confirmForm.querySelector("#confirmEmail").value,
+        code:confirmForm.querySelector("#code").value,
+        new_password:newPassword,
+      })
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"密码已重置，请重新登录"}))
+      navigate("/login", {replace:true})
+    })
+  })
+  confirmForm.querySelector("#resendCode").addEventListener("click", () => {
+    confirmForm.classList.add("hidden")
+    requestForm.classList.remove("hidden")
+  })
+}
+
 export function renderSetupPage(root) {
   root.innerHTML = authLayout("初始化管理员", "首次启动只需完成一次", `
     <form id="setupForm" class="auth-form">
       <label>姓名<input id="displayName" autocomplete="name" required autofocus></label>
       <label>管理员用户名<input id="username" autocomplete="username" minlength="3" required></label>
+      <label>管理员邮箱<input id="email" type="email" autocomplete="email" required></label>
       <label>密码<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>
       <label>确认密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required></label>
       <p class="field-hint">至少10个字符，同时包含字母和数字。</p>
@@ -43,6 +127,7 @@ export function renderSetupPage(root) {
       const data = await api.setup({
         display_name:root.querySelector("#displayName").value,
         username:root.querySelector("#username").value,
+        email:root.querySelector("#email").value,
         password,
       })
       setAuthenticated(data)

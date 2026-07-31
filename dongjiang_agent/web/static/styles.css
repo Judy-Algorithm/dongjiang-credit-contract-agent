@@ -434,6 +434,10 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .auth-panel header p { margin: 0; color: var(--muted); }
 .auth-form { display: grid; gap: 18px; }
 .auth-submit { width: 100%; margin-top: 3px; }
+.auth-links { min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.auth-links.single { justify-content: center; }
+.auth-links a, .link-button { padding: 2px 0; background: transparent; border: 0; color: var(--primary); font-size: 13px; font-weight: 600; cursor: pointer; }
+.auth-success { padding: 13px 14px; background: var(--green-bg); border: 1px solid #a9d5bb; border-radius: 8px; color: var(--green); font-size: 13px; line-height: 1.5; }
 .auth-footer { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
 .field-hint { margin: 0; color: var(--muted); font-size: 12px; font-weight: 400; }
 

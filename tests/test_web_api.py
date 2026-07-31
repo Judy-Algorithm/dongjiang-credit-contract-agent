@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dongjiang_agent.integrations import IntegrationBundle
+from dongjiang_agent.security import AuthStore
 from dongjiang_agent.web.server import AuditRequestHandler
 
 
@@ -252,6 +253,129 @@ class WebApiTests(unittest.TestCase):
         status, blocked = self.request("GET", "/api/cases")
         self.assertEqual(status, 403)
         self.assertIn("首次登录", blocked["error"])
+
+    def test_public_registration_creates_disabled_sales_account(self):
+        status, registered, _ = self.raw_request(
+            "POST",
+            "/api/auth/register",
+            {
+                "display_name": "注册销售",
+                "username": "registered.sales",
+                "email": "sales@example.com",
+                "password": "Registered123",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(registered["user"]["roles"], ["sales"])
+        self.assertFalse(registered["user"]["active"])
+        self.assertNotIn("csrf_token", registered)
+        self.assertEqual(self.login("registered.sales", "Registered123")[0], 401)
+
+        status, duplicate, _ = self.raw_request(
+            "POST",
+            "/api/auth/register",
+            {
+                "display_name": "重复邮箱",
+                "username": "registered.other",
+                "email": "SALES@example.com",
+                "password": "Registered456",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(duplicate["ok"])
+
+    @patch("dongjiang_agent.web.server.SecurityEmailSender")
+    def test_email_code_resets_password_and_invalidates_session(self, sender_class):
+        user = self.create_user("email.reset", "邮箱重置", ["sales"])
+        status, updated = self.request(
+            "PATCH",
+            f"/api/users/{user['user_id']}",
+            {"email": "reset@example.com"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["user"]["email"], "reset@example.com")
+        self.activate_user("email.reset")
+
+        sender = sender_class.return_value
+        sender.configured = True
+        captured = {}
+
+        def capture_email(recipient, code):
+            captured.update(recipient=recipient, code=code)
+
+        sender.send_password_reset_code.side_effect = capture_email
+        status, requested, _ = self.raw_request(
+            "POST", "/api/auth/password-reset/request", {"email": "reset@example.com"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(requested["ok"])
+        self.assertEqual(captured["recipient"], "reset@example.com")
+        self.assertRegex(captured["code"], r"^\d{6}$")
+
+        with AuthStore() as store:
+            reset = store.connection.execute(
+                "SELECT code_hash FROM password_reset_codes ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            self.assertNotEqual(reset["code_hash"], captured["code"])
+
+        status, invalid, _ = self.raw_request(
+            "POST",
+            "/api/auth/password-reset/confirm",
+            {
+                "email": "reset@example.com",
+                "code": "000000",
+                "new_password": "RecoveredPass123",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(invalid["ok"])
+
+        status, confirmed, _ = self.raw_request(
+            "POST",
+            "/api/auth/password-reset/confirm",
+            {
+                "email": "reset@example.com",
+                "code": captured["code"],
+                "new_password": "RecoveredPass123",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(confirmed["ok"])
+        status, unauthenticated = self.request("GET", "/api/cases")
+        self.assertEqual(status, 401)
+        self.assertEqual(self.login("email.reset", "ActivePass456")[0], 401)
+        self.assertEqual(self.login("email.reset", "RecoveredPass123")[0], 200)
+
+        status, reused, _ = self.raw_request(
+            "POST",
+            "/api/auth/password-reset/confirm",
+            {
+                "email": "reset@example.com",
+                "code": captured["code"],
+                "new_password": "AnotherPass123",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(reused["ok"])
+
+    def test_password_reset_requires_smtp_configuration(self):
+        user = self.create_user("smtp.missing", "邮件未配置", ["sales"])
+        status, _ = self.request(
+            "PATCH", f"/api/users/{user['user_id']}", {"email": "smtp@example.com"}
+        )
+        self.assertEqual(status, 200)
+        with patch.dict(os.environ, {}, clear=False):
+            for name in (
+                "DONGJIANG_SMTP_HOST",
+                "DONGJIANG_SMTP_FROM",
+                "DONGJIANG_SMTP_USERNAME",
+            ):
+                os.environ.pop(name, None)
+            status, response, _ = self.raw_request(
+                "POST", "/api/auth/password-reset/request", {"email": "smtp@example.com"}
+            )
+        self.assertEqual(status, 400)
+        self.assertIn("邮件服务尚未配置", response["error"])
 
     def test_business_api_accepts_real_file_and_exposes_no_workflow_state(self):
         report = (

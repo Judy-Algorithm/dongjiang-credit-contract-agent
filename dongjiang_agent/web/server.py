@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
@@ -15,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..integrations import IntegrationBundle
 from ..persistence import CaseRepository
-from ..security import AuthStore
+from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
 
 
@@ -123,6 +124,16 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         if "admin" not in current and not current.intersection(roles):
             raise PermissionError("当前账号没有执行该操作的权限。")
 
+    def _remote_address(self) -> str:
+        direct = str(self.client_address[0])
+        if ipaddress.ip_address(direct).is_loopback:
+            forwarded = self.headers.get("CF-Connecting-IP", "").strip()
+            try:
+                return str(ipaddress.ip_address(forwarded)) if forwarded else direct
+            except ValueError:
+                return direct
+        return direct
+
     @staticmethod
     def _actor(user: dict[str, Any]) -> Any:
         from ..workflow import ActorContext
@@ -161,7 +172,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "setup", "change-password", "cases", "cases/new", "users", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -178,6 +189,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Cache-Control", "no-store, max-age=0")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
@@ -404,7 +416,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         str(payload.get("username") or ""),
                         str(payload.get("display_name") or ""),
                         str(payload.get("password") or ""),
-                        self.client_address[0],
+                        self._remote_address(),
+                        str(payload.get("email") or ""),
                     )
                     session = store.create_session(str(user["user_id"]))
                 self._json(
@@ -413,12 +426,58 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     headers={"Set-Cookie": self._session_cookie(session["token"])},
                 )
                 return
+            if path == "/api/auth/register":
+                with AuthStore() as store:
+                    user = store.register_user(
+                        username=str(payload.get("username") or ""),
+                        display_name=str(payload.get("display_name") or ""),
+                        email=str(payload.get("email") or ""),
+                        password=str(payload.get("password") or ""),
+                        remote_address=self._remote_address(),
+                    )
+                self._json(
+                    201,
+                    {"ok": True, "user": user, "message": "注册申请已提交，请等待管理员启用账号。"},
+                )
+                return
+            if path == "/api/auth/password-reset/request":
+                email = str(payload.get("email") or "")
+                sender = SecurityEmailSender()
+                if not sender.configured:
+                    raise RuntimeError("邮件服务尚未配置，请联系管理员重置密码。")
+                with AuthStore() as store:
+                    normalized = store.normalize_email(email)
+                    issued = store.issue_password_reset_code(
+                        normalized, self._remote_address()
+                    )
+                if issued:
+                    try:
+                        sender.send_password_reset_code(*issued)
+                    except Exception:
+                        with AuthStore() as store:
+                            store.invalidate_latest_password_reset_code(issued[0])
+                        raise
+                self._json(
+                    200,
+                    {"ok": True, "message": "如果该邮箱已绑定账号，验证码邮件将在几分钟内送达。"},
+                )
+                return
+            if path == "/api/auth/password-reset/confirm":
+                with AuthStore() as store:
+                    store.reset_password_with_code(
+                        str(payload.get("email") or ""),
+                        str(payload.get("code") or ""),
+                        str(payload.get("new_password") or ""),
+                        self._remote_address(),
+                    )
+                self._json(200, {"ok": True})
+                return
             if path == "/api/auth/login":
                 with AuthStore() as store:
                     user = store.authenticate(
                         str(payload.get("username") or ""),
                         str(payload.get("password") or ""),
-                        self.client_address[0],
+                        self._remote_address(),
                     )
                     if not user:
                         raise AuthenticationError("用户名或密码不正确。")
@@ -439,7 +498,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/auth/logout":
                 with AuthStore() as store:
                     store.delete_session(token)
-                    store.audit("auth.logout", actor=user, remote_address=self.client_address[0])
+                    store.audit("auth.logout", actor=user, remote_address=self._remote_address())
                 self._json(
                     200,
                     {"ok": True},
@@ -453,7 +512,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         str(payload.get("current_password") or ""),
                         str(payload.get("new_password") or ""),
                         user,
-                        self.client_address[0],
+                        self._remote_address(),
                     )
                 self._json(
                     200,
@@ -470,10 +529,11 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         username=str(payload.get("username") or ""),
                         display_name=str(payload.get("display_name") or ""),
                         password=str(payload.get("password") or ""),
+                        email=str(payload.get("email") or ""),
                         roles=list(payload.get("roles") or []),
                         must_change_password=True,
                         actor=user,
-                        remote_address=self.client_address[0],
+                        remote_address=self._remote_address(),
                     )
                 self._json(201, {"ok": True, "user": created})
                 return
@@ -529,14 +589,15 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                             parts[2],
                             str(payload.get("temporary_password") or ""),
                             actor=user,
-                            remote_address=self.client_address[0],
+                            remote_address=self._remote_address(),
                         )
                     updated = store.update_user(
                         parts[2],
                         roles=list(payload["roles"]) if "roles" in payload else None,
                         active=bool(payload["active"]) if "active" in payload else None,
+                        email=str(payload["email"]) if "email" in payload else None,
                         actor=user,
-                        remote_address=self.client_address[0],
+                        remote_address=self._remote_address(),
                     )
                 self._json(200, {"ok": True, "user": updated})
                 return
@@ -565,7 +626,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         target_type="case",
                         target_id=parts[2],
                         detail={"owner_user_id": owner["user_id"]},
-                        remote_address=self.client_address[0],
+                        remote_address=self._remote_address(),
                     )
                 self._json(200, {"ok": True, "case": self._workflow_view(run, user)})
                 return
@@ -628,7 +689,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 actor=user,
                 target_type="case",
                 target_id=run.case_id,
-                remote_address=self.client_address[0],
+                remote_address=self._remote_address(),
             )
         self._json(201, {"ok": True, "case": self._workflow_view(run, user)})
 
@@ -662,7 +723,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     "revision_id": revision["revision_id"],
                     "decision_count": len(revision.get("decisions") or []),
                 },
-                remote_address=self.client_address[0],
+                remote_address=self._remote_address(),
             )
         self._json(201, {"ok": True, "revision": revision})
 
@@ -752,7 +813,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 target_type="case",
                 target_id=case_id,
                 detail={"phase": phase, "system": system, "status": result.get("status")},
-                remote_address=self.client_address[0],
+                remote_address=self._remote_address(),
             )
         self._json(200, {"ok": True, "result": result, "case": view})
 
@@ -797,7 +858,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 target_type="case",
                 target_id=case_id,
                 detail={"revision_id": revision_id, **result},
-                remote_address=self.client_address[0],
+                remote_address=self._remote_address(),
             )
         self._json(
             200,
@@ -881,7 +942,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 target_type="case",
                 target_id=case_id,
                 detail={"resource": resource, "action": action},
-                remote_address=self.client_address[0],
+                remote_address=self._remote_address(),
             )
         self._json(200, {"ok": True, "case": self._workflow_view(run, user)})
 

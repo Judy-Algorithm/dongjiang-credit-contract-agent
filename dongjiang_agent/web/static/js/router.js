@@ -8,6 +8,8 @@ export function currentRoute() {
   const path = window.location.pathname.replace(/\/+$/, "") || "/"
   const params = new URLSearchParams(window.location.search)
   if (path === "/login") return {name:"login", params}
+  if (path === "/register") return {name:"register", params}
+  if (path === "/forgot-password") return {name:"forgot-password", params}
   if (path === "/setup") return {name:"setup", params}
   if (path === "/change-password") return {name:"change-password", params}
   if (path === "/users") return {name:"users", params}

@@ -1,5 +1,5 @@
-import {api} from "../api.js"
-import {customerType, dateTime, escapeHtml, statusClass} from "../format.js"
+import {api} from "../api.js?v=20260731-auth"
+import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260731-auth"
 
 const pendingStatuses = new Set([
   "credit_pending_approval","credit_supplement_required",
