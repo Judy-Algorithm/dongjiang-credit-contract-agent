@@ -8,6 +8,7 @@ import {renderNewCasePage} from "./pages/case-new.js"
 import {renderCaseDetailPage} from "./pages/case-detail.js"
 import {renderCaseActionPage} from "./pages/case-action.js"
 import {renderUsersPage} from "./pages/users.js"
+import {renderWritebacksPage} from "./pages/writebacks.js"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -47,6 +48,10 @@ async function render() {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看安全审计。")
       await renderAuditPage(root)
     }
+    if (route.name === "writebacks") {
+      if (!hasRole("admin")) throw new Error("只有管理员可以处理系统回写。")
+      await renderWritebacksPage(root)
+    }
   } catch (error) {
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
   } finally {
@@ -67,7 +72,7 @@ function renderHeader(auth, route) {
       <a href="/cases" data-link data-nav="cases">案件</a>
       <a href="/cases?mine=1" data-link data-nav="tasks">我的待办</a>
       ${hasRole("sales") ? `<a class="primary small" href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
-      ${hasRole("admin") ? `<a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a>` : ""}
+      ${hasRole("admin") ? `<a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b></button>
         <div id="accountPopover" class="account-popover hidden">
@@ -84,7 +89,7 @@ function renderHeader(auth, route) {
 }
 
 function setActiveNav(route) {
-  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "audit" ? "audit" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
+  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "cases" && route.params.get("mine") === "1" ? "tasks" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
 }
 

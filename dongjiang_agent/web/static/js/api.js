@@ -55,6 +55,7 @@ export const api = {
   updateUser:(userId, payload) => patch(`/api/users/${encodeURIComponent(userId)}`, payload),
   assignCaseOwner:(caseId, ownerUserId) => patch(`/api/cases/${encodeURIComponent(caseId)}`, {owner_user_id:ownerUserId}),
   listAudit:() => request("/api/audit"),
+  listWritebackFailures:() => request("/api/operations/writebacks"),
   listCases:({mine = false} = {}) => request(`/api/cases${mine ? "?mine=1" : ""}`),
   getCase:(caseId) => request(`/api/cases/${encodeURIComponent(caseId)}`),
   getDocumentFragment:(caseId, documentId, fragmentId = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}`),
@@ -66,4 +67,5 @@ export const api = {
   submitCreditAction:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/credit-actions`, payload),
   submitContract:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/contracts`, payload),
   submitContractAction:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/contract-actions`, payload),
+  retryWriteback:(caseId, phase, system) => post(`/api/cases/${encodeURIComponent(caseId)}/writeback-retries`, {phase, system}),
 }

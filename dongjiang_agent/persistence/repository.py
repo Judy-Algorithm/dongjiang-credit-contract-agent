@@ -22,6 +22,15 @@ class CaseRepository:
         target.write_text(json.dumps(case.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return target
 
+    def save_dict(self, case: dict[str, Any]) -> Path:
+        case_id = str(case.get("case_id") or "")
+        if not case_id.startswith("DJ-") or "/" in case_id or "\\" in case_id:
+            raise ValueError("案件号无效。")
+        self.root.mkdir(parents=True, exist_ok=True)
+        target = self.root / f"{case_id}.json"
+        target.write_text(json.dumps(case, ensure_ascii=False, indent=2), encoding="utf-8")
+        return target
+
     def _read_cases(self) -> list[dict[str, Any]]:
         if not self.root.exists():
             return []

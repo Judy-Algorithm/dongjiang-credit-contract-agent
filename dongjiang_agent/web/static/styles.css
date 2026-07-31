@@ -392,6 +392,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .ai-finding p { margin: 7px 0; color: var(--body); }
 .ai-finding small { color: var(--muted); }
 .ai-location { display: block; margin-top: 9px; }
+.ai-finding-meta { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
 
 .record-list { position: relative; margin-left: 6px; }
 .record { position: relative; padding: 0 0 22px 22px; border-left: 1px solid var(--hairline); }
@@ -518,6 +519,13 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .integration-card h3 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 600; }
 .integration-row { padding: 11px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--hairline-soft); }
 .integration-row:first-of-type { margin-top: 12px; }
+.integration-row > div:first-child { min-width: 0; }
+.integration-inline-error { display: block; max-width: 220px; margin-top: 3px; color: var(--red); font-size: 11px; overflow-wrap: anywhere; }
+.integration-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
+.writeback-metrics { grid-template-columns: repeat(4, 1fr); }
+.writeback-metrics .metric-card { cursor: default; }
+.writeback-metrics .metric-card:hover { transform: none; box-shadow: none; }
+.integration-error { max-width: 360px; color: var(--red); overflow-wrap: anywhere; }
 
 .revision-findings, .revision-list { display: grid; gap: 12px; margin-top: 14px; }
 .revision-finding { padding: 17px; background: var(--canvas); border: 1px solid var(--hairline); border-left: 3px solid var(--orange); border-radius: 0 12px 12px 0; }

@@ -85,6 +85,8 @@ python3 scripts/check_hkgai_config.py
 - `POST /api/cases/{case_id}/revisions`
 - `GET /api/cases/{case_id}/revisions/{revision_id}/redline|clean`
 - `POST /api/cases/{case_id}/revisions/{revision_id}/submit`
+- `GET /api/operations/writebacks`（管理员）
+- `POST /api/cases/{case_id}/writeback-retries`（管理员，仅重试失败目标）
 
 详细设计见[LangGraph与Harness落地设计](docs/langgraph-harness-design.md)。
 
@@ -123,6 +125,8 @@ python3 scripts/check_hkgai_config.py
 Web页面包含登录、我的待办、案件列表、发起信审、六页签案件工作台、案件处理、用户管理和安全审计。首次启动需在页面创建管理员；普通账号只能由管理员创建，不开放公开注册。销售、信用管理、财务、法务、市场总监、集团管理层和管理员按照真实登录身份执行工作流权限。新案件自动归属发起销售，管理员可以改派负责人。新解析文件支持 PDF 页码、DOCX 段落、XLSX 工作表/单元格和文本行号定位，风险卡片可在受控查看器中打开对应原文。信用资料和合同使用不同入口，合同只能在授信审批生效后上传。上传限制为单文件15MB、单次请求30MB。
 
 合同处于“等待修改”时，销售可以逐项采用标准建议、人工修改或保留并填写理由。系统不会覆盖原合同，而是生成带 Word 修订痕迹版和清洁版；清洁版可以直接重新送入既有规则审查，修订决策、文件摘要和复审结果按案件保留。当前自动修订支持具有行号或段落号定位的 TXT、Markdown 和 DOCX；PDF 及复杂版式合同保留人工上传新版本通道。
+
+AI 辅助发现引用到原文片段时，可点击证据位置，在受控查看器中打开相应页码、段落、单元格或文本行；模型结果仍不参与制度规则裁决。管理员导航中的“回写运维”集中显示 OA、CRM 和 SAP 的失败回写。重试只调用失败的目标系统，沿用原案件和阶段的幂等键，不会再次调用已经成功的系统；每次尝试写入案件 Trace、安全审计和集成调用历史。
 
 比赛演示可用合成数据一键准备三条固定路径：
 

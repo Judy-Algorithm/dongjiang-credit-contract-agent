@@ -8,7 +8,10 @@ import threading
 import unittest
 import zipfile
 from http.server import ThreadingHTTPServer
+from pathlib import Path
+from unittest.mock import patch
 
+from dongjiang_agent.integrations import IntegrationBundle
 from dongjiang_agent.web.server import AuditRequestHandler
 
 
@@ -624,6 +627,88 @@ class WebApiTests(unittest.TestCase):
         status, detail = self.request("GET", f"/api/cases/{case_id}")
         self.assertEqual(status, 200)
         self.assertEqual(detail["case"]["contract_revisions"][0]["status"], "submitted")
+
+    def test_admin_can_list_and_retry_failed_writeback(self):
+        case_id = "DJ-WRITEBACK1"
+        case_dir = Path("data/cases")
+        case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / f"{case_id}.json").write_text(
+            json.dumps(
+                {
+                    "case_id": case_id,
+                    "status": "completed",
+                    "credit_status": "effective",
+                    "customer": {
+                        "customer_name": "回写失败客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                    },
+                    "credit_assessment": {
+                        "score": 80,
+                        "risk_level": "low",
+                        "approved_credit_limit": 1000000,
+                        "recommended_term_days": 60,
+                    },
+                    "writeback": {
+                        "final": {
+                            "phase": "final",
+                            "oa": {
+                                "status": "failed",
+                                "error": "temporary outage",
+                                "attempted_at": "2026-07-31T01:00:00+00:00",
+                            },
+                            "crm": {"status": "not_configured"},
+                            "sap": {"status": "not_configured"},
+                        }
+                    },
+                    "contract_reviews": [],
+                    "trace": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        status, failures = self.request("GET", "/api/operations/writebacks")
+        self.assertEqual(status, 200)
+        self.assertEqual(failures["total"], 1)
+        self.assertEqual(failures["failures"][0]["system"], "oa")
+
+        self.create_user("ops.sales", "普通销售", ["sales"])
+        self.activate_user("ops.sales")
+        self.assertEqual(self.request("GET", "/api/operations/writebacks")[0], 403)
+        self.assertEqual(
+            self.request(
+                "POST",
+                f"/api/cases/{case_id}/writeback-retries",
+                {"phase": "final", "system": "oa"},
+            )[0],
+            403,
+        )
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
+
+        class OAAdapter:
+            def write_result(self, case_id, payload):
+                return {"ok": True, "case_id": case_id}
+
+        bundle = IntegrationBundle(oa=OAAdapter(), audit_root=Path("data/integration-audit"))
+        with patch(
+            "dongjiang_agent.web.server.IntegrationBundle.from_environment",
+            return_value=bundle,
+        ):
+            status, retried = self.request(
+                "POST",
+                f"/api/cases/{case_id}/writeback-retries",
+                {"phase": "final", "system": "oa"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(retried["result"]["status"], "succeeded")
+        self.assertEqual(len(retried["result"]["retry_history"]), 1)
+        stored = json.loads((case_dir / f"{case_id}.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["writeback"]["final"]["oa"]["status"], "succeeded")
+        self.assertEqual(stored["trace"][-1]["stage"], "integration.writeback_retried")
+        status, failures = self.request("GET", "/api/operations/writebacks")
+        self.assertEqual(status, 200)
+        self.assertEqual(failures["total"], 0)
 
 
 if __name__ == "__main__":

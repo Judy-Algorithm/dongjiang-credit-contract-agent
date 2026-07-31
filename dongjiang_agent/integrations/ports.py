@@ -201,6 +201,53 @@ class IntegrationBundle:
         }
         return results
 
+    def retry_writeback(
+        self,
+        case_id: str,
+        system: str,
+        customer_id: str,
+        payload: dict[str, Any],
+        *,
+        phase: str,
+    ) -> dict[str, Any]:
+        """Retry exactly one failed destination with the original idempotency scope."""
+        normalized = str(system or "").lower()
+        if normalized not in {"oa", "crm", "sap"}:
+            raise ValueError("回写系统必须是 oa、crm 或 sap。")
+        request_payload = {**payload, "writeback_phase": phase}
+        if normalized == "oa":
+            return self._call(
+                case_id,
+                f"oa_result_{phase}",
+                self.oa,
+                "write_result",
+                case_id,
+                request_payload,
+            )
+        if not customer_id:
+            return {
+                "status": "skipped",
+                "reason": "missing_customer_id",
+                "attempted_at": utc_now(),
+            }
+        if normalized == "crm":
+            return self._call(
+                case_id,
+                f"crm_credit_{phase}",
+                self.crm,
+                "write_credit_decision",
+                customer_id,
+                request_payload,
+            )
+        return self._call(
+            case_id,
+            f"sap_credit_{phase}",
+            self.sap,
+            "write_credit_control",
+            customer_id,
+            request_payload,
+        )
+
     def _call(
         self,
         case_id: str,
@@ -230,3 +277,17 @@ class IntegrationBundle:
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"{operation}.json"
         target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        history_target = target_dir / f"{operation}.history.json"
+        history: list[dict[str, Any]] = []
+        if history_target.is_file():
+            try:
+                previous = json.loads(history_target.read_text(encoding="utf-8"))
+                if isinstance(previous, list):
+                    history = [dict(item) for item in previous if isinstance(item, dict)]
+            except (OSError, json.JSONDecodeError):
+                history = []
+        history.append(dict(result))
+        history_target.write_text(
+            json.dumps(history[-100:], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )

@@ -47,7 +47,7 @@ class ContractAIAssistantTests(unittest.TestCase):
             }],
         })
         result = ContractAIAssistant(FakeGateway(payload), enabled=True).review(
-            ContractFacts(),
+            ContractFacts(document_id="DOC-AI"),
             redacted_text="⟦REDACTED_TEXT⟧付款应在验收后30日支付",
             fragments=[{
                 "fragment_id": "line-2",
@@ -57,6 +57,7 @@ class ContractAIAssistantTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["findings"][0]["finding_id"], "AI-PAYMENT-1")
+        self.assertEqual(result["findings"][0]["document_id"], "DOC-AI")
         self.assertEqual(result["findings"][0]["fragment_id"], "line-2")
         self.assertEqual(result["findings"][0]["confidence"], 0.91)
 

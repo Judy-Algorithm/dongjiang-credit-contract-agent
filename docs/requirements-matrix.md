@@ -26,6 +26,8 @@
 | 文件证据定位 | PDF页码、DOCX段落、XLSX工作表/单元格、文本行号；风险卡片联动受控原文预览 | `test_document_locations.py`、`test_contract_risk_exposes_line_location_and_controlled_preview` |
 | 合同修订闭环 | 风险逐项采用建议/人工修改/保留说明；生成Word修订稿与清洁稿；清洁稿重新审查并保留版本链 | `test_contract_revisions.py`、`test_contract_revision_generates_downloads_and_resubmits_clean_version` |
 | 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
+| AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
+| 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
 | 固定演示路径 | 幂等生成资料补件、TKP 120天特批、无责取消修订三条合成案件 | `python scripts/prepare_demo_cases.py` |
 | 结果可量化 | 决策回归准确率、平均/P95耗时 | `python3 scripts/evaluate.py` |
 | 可审计 | 案件 Trace、政策版本、证据和规则 ID | `audit-result.json` |

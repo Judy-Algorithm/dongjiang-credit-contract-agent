@@ -269,6 +269,111 @@ class DongjiangWorkflowHarness:
         )
         return self._run_result(current.case_id)
 
+    @staticmethod
+    def _writeback_payload(state: dict[str, Any], phase: str) -> tuple[str, dict[str, Any]]:
+        customer = dict(state.get("customer") or {})
+        credit = dict(state.get("effective_credit_assessment") or {})
+        approval = dict(state.get("credit_approval") or {})
+        customer_id = str(
+            customer.get("crm_customer_id")
+            or customer.get("unified_social_credit_code")
+            or ""
+        )
+        status = (
+            "credit_effective"
+            if phase == "credit_activation"
+            else "inactive"
+            if phase == "inactivation"
+            else str(state.get("status") or "completed")
+        )
+        payload = {
+            "case_id": state.get("case_id"),
+            "status": status,
+            "customer_status": customer.get("customer_status") or "Active",
+            "business_type": customer.get("business_type"),
+            "tkm_business_subtype": customer.get("tkm_business_subtype"),
+            "approved_total_credit_limit": credit.get("approved_credit_limit"),
+            "approved_term_days": credit.get("recommended_term_days"),
+            "purchase_exemption_approved": credit.get(
+                "purchase_exemption_approved", False
+            ),
+            "max_tail_payment_ratio": credit.get("max_tail_payment_ratio"),
+            "max_tail_term_days": credit.get("max_tail_term_days"),
+            "approval_scope": approval.get("approval_scope"),
+            "effective_at": approval.get("effective_at"),
+            "expires_at": approval.get("expires_at"),
+            "oa_evidence_id": approval.get("oa_evidence_id"),
+            "approval_chain": list(state.get("approval_chain") or []),
+        }
+        if phase == "inactivation":
+            payload.update(
+                {
+                    "customer_status": "Inactive",
+                    "approved_total_credit_limit": 0,
+                    "approved_term_days": 0,
+                    "inactivation_reason": approval.get("inactivation_reason"),
+                    "inactivated_at": approval.get("inactivated_at"),
+                }
+            )
+        return customer_id, payload
+
+    def retry_writeback(
+        self,
+        case_id: str,
+        *,
+        phase: str,
+        system: str,
+        actor: ActorContext | None = None,
+    ) -> WorkflowRun:
+        current = self.get(case_id)
+        state = dict(current.state)
+        writeback = dict(state.get("writeback") or {})
+        phase_result = dict(writeback.get(phase) or {})
+        existing = dict(phase_result.get(system) or {})
+        if not phase_result:
+            raise KeyError("回写阶段不存在。")
+        if str(existing.get("status") or "") != "failed":
+            raise ValueError("只有失败的回写记录可以重试。")
+        customer_id, payload = self._writeback_payload(state, phase)
+        result = self.nodes.integrations.retry_writeback(
+            case_id,
+            system,
+            customer_id,
+            payload,
+            phase=phase,
+        )
+        actor = actor or ActorContext()
+        retry_history = list(existing.get("retry_history") or [])
+        retry_history.append(
+            {
+                **dict(result),
+                "actor_id": actor.actor_id,
+                "actor_name": actor.display_name or actor.actor_id,
+            }
+        )
+        phase_result[system] = {**dict(result), "retry_history": retry_history}
+        writeback[phase] = phase_result
+        self.graph.update_state(
+            self._config(case_id),
+            {
+                "writeback": writeback,
+                "trace": [
+                    {
+                        "ts": utc_now(),
+                        "stage": "integration.writeback_retried",
+                        "message": f"{system.upper()} {phase} 回写已人工重试。",
+                        "data": {
+                            "phase": phase,
+                            "system": system,
+                            "status": result.get("status"),
+                            "actor_id": actor.actor_id,
+                        },
+                    }
+                ],
+            },
+        )
+        return self._run_result(case_id)
+
     def _authorize(self, waiting_for: str | None, actor: ActorContext) -> None:
         if "system" in actor.roles or "admin" in actor.roles:
             return

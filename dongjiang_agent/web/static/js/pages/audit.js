@@ -5,6 +5,7 @@ const labels = {
   "auth.login":"登录","auth.logout":"退出登录","auth.password_changed":"修改密码","auth.password_reset":"重置密码",
   "user.created":"创建用户","user.updated":"调整用户","case.created":"发起信审","case.action":"处理案件",
   "case.owner_assigned":"调整负责人",
+  "integration.writeback_retried":"重试系统回写",
 }
 
 export async function renderAuditPage(root) {

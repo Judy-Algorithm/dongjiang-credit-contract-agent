@@ -41,6 +41,7 @@ export async function renderCaseDetailPage(root, route) {
     })[tab]
     if (tab === "contract") installEvidenceViewer(root, item)
     if (tab === "documents") installDocumentViewer(root, item)
+    if (tab === "writeback") installWritebackRetry(root, item, renderTab)
   }
   root.querySelector(".tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-tab]")
@@ -112,12 +113,13 @@ function aiAssistance(item) {
   const statusLabel = ({succeeded:"已完成", failed:"调用失败，已回退规则", not_configured:"未配置，当前使用规则审查", not_applicable:"不适用"})[status] || status
   return `<section class="ai-assistance form-section"><div class="section-heading"><div><h3>AI 辅助发现</h3><span class="ai-disclaimer">仅供辅助，不改变制度规则和审批结论</span></div><span class="badge ${status === "succeeded" ? "approved" : status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span></div>
     ${groups.map((group) => group.summary ? `<p class="ai-summary">${escapeHtml(group.summary)}</p>` : "").join("")}
-    ${findings.length ? `<div class="ai-finding-list">${findings.map(aiFindingCard).join("")}</div>` : `<div class="empty-note">当前没有额外的 AI 辅助发现。</div>`}
+    ${findings.length ? `<div class="ai-finding-list">${findings.map((finding, index) => aiFindingCard(finding, index)).join("")}</div>` : `<div class="empty-note">当前没有额外的 AI 辅助发现。</div>`}
   </section>`
 }
 
-function aiFindingCard(finding) {
-  return `<article class="ai-finding"><div class="finding-head"><div><small>${escapeHtml(finding.finding_id || "AI")}</small><h3>${escapeHtml(finding.title)}</h3></div><span class="badge ${escapeHtml(finding.level || "medium")}">${Math.round(Number(finding.confidence || 0) * 100)}% 置信</span></div><p>${escapeHtml(finding.message)}</p><div class="finding-suggestion"><b>建议</b><span>${escapeHtml(finding.suggestion || "人工复核")}</span></div>${finding.location_label ? `<small class="ai-location">证据位置：${escapeHtml(finding.location_label)}</small>` : ""}</article>`
+function aiFindingCard(finding, index) {
+  const locatable = finding.document_id && finding.fragment_id
+  return `<article class="ai-finding"><div class="finding-head"><div><small>${escapeHtml(finding.finding_id || "AI")}</small><h3>${escapeHtml(finding.title)}</h3></div><div class="ai-finding-meta"><span class="badge ${escapeHtml(finding.level || "medium")}">${Math.round(Number(finding.confidence || 0) * 100)}% 置信</span>${locatable ? `<button class="text-button evidence-link" data-ai-finding-index="${index}">${escapeHtml(finding.location_label || "查看原文")}</button>` : ""}</div></div><p>${escapeHtml(finding.message)}</p><div class="finding-suggestion"><b>建议</b><span>${escapeHtml(finding.suggestion || "人工复核")}</span></div></article>`
 }
 
 function revisionArchive(item) {
@@ -153,7 +155,24 @@ function documentsTab(item) {
 function writebackTab(item) {
   const writeback = item.writeback || {}, entries = Object.entries(writeback)
   return `<div class="section-heading"><h3>企业系统回写</h3><span>${entries.length ? "已记录调用结果" : "尚未执行"}</span></div>
-    ${entries.length ? `<div class="integration-grid">${entries.map(([phase, result]) => integrationCard(phase, result)).join("")}</div>` : emptyState("暂无回写记录", "OA、CRM、SAP 调用结果会集中显示在这里。")}`
+    ${entries.length ? `<div class="integration-grid">${entries.map(([phase, result]) => integrationCard(phase, result, item.permissions?.can_retry_writeback)).join("")}</div>` : emptyState("暂无回写记录", "OA、CRM、SAP 调用结果会集中显示在这里。")}`
+}
+
+function installWritebackRetry(root, item, renderTab) {
+  root.querySelector(".integration-grid")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-writeback-retry]")
+    if (!button) return
+    button.disabled = true
+    try {
+      const data = await api.retryWriteback(item.case_id, button.dataset.phase, button.dataset.system)
+      Object.assign(item, data.case)
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:data.result.status === "succeeded" ? "回写重试成功" : "重试仍失败，请查看错误原因"}))
+      renderTab("writeback")
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+    }
+  })
 }
 
 async function loadEvidence(viewer, item, documentId, fragmentId) {
@@ -172,6 +191,16 @@ function installEvidenceViewer(root, item) {
     if (!button) return
     const finding = item.findings[Number(button.dataset.findingIndex)]
     if (finding) loadEvidence(root.querySelector("#evidenceViewer"), item, finding.document_id, finding.fragment_id)
+  })
+  const aiFindings = (item.ai_assistance || []).flatMap((group) => group.findings || [])
+  root.querySelector(".ai-assistance")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-ai-finding-index]")
+    if (!button) return
+    const finding = aiFindings[Number(button.dataset.aiFindingIndex)]
+    if (!finding) return
+    const viewer = root.querySelector("#evidenceViewer")
+    loadEvidence(viewer, item, finding.document_id, finding.fragment_id)
+    if (window.innerWidth <= 900) viewer.scrollIntoView({behavior:"smooth", block:"start"})
   })
 }
 
@@ -206,15 +235,16 @@ function emptyState(title, text) { return `<div class="empty-state"><h2>${escape
 function parseStatus(value) { return ({parsed:"已解析",pending:"等待解析",failed:"解析失败"})[value] || "状态未知" }
 function approvalStage(stage) { return ({applicant:"申请人",marketing_director:"所属市场总监",credit_control:"信用管理",senior_finance_manager:"高级财务经理",group_finance_director:"集团财务总监"})[stage] || stage || "审批节点" }
 function actionMessage(type) { return ({credit_approval:"模型评估已完成，等待信用审批后生效。",credit_supplement:"请补充信审人员要求的信用资料。",upload_contract:"信用审核已经完成，请提交合同。",submit_revision:"合同需要修改后重新提交。",manager_review:"该案件需要管理层确认。",manual_review:"该案件需要财务或法务复核。"})[type] || "请完成当前待办事项。" }
-function integrationCard(phase, value) {
+function integrationCard(phase, value, canRetry = false) {
   const rows = value && typeof value === "object"
-    ? Object.entries(value).filter(([system]) => system !== "phase")
+    ? Object.entries(value).filter(([system]) => ["oa","crm","sap"].includes(system))
     : []
   const phaseLabel = ({credit_activation:"授信生效",contract_approval:"合同审批",case_completion:"案件完成"})[phase] || phase
   return `<article class="integration-card"><header><h3>${escapeHtml(phaseLabel)}</h3></header>${rows.length ? rows.map(([system,result]) => {
     const status = result?.status || "unknown"
     const systemLabel = ({oa:"OA 审批",crm:"CRM 客户",sap:"SAP 信用"})[system] || system.toUpperCase()
-    const statusLabel = ({success:"成功",failed:"失败",skipped:"已跳过",not_configured:"未配置",pending:"处理中",unknown:"未知"})[status] || status
-    return `<div class="integration-row"><span>${escapeHtml(systemLabel)}</span><b class="badge ${status === "success" ? "approved" : status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</b></div>`
+    const statusLabel = ({succeeded:"成功",success:"成功",failed:"失败",skipped:"已跳过",not_configured:"未配置",pending:"处理中",unknown:"未知"})[status] || status
+    const retryCount = result?.retry_history?.length || 0
+    return `<div class="integration-row"><div><span>${escapeHtml(systemLabel)}</span>${result?.error ? `<small class="integration-inline-error">${escapeHtml(result.error)}</small>` : ""}${retryCount ? `<small>已人工重试 ${retryCount} 次</small>` : ""}</div><div class="integration-row-actions"><b class="badge ${["success","succeeded"].includes(status) ? "approved" : status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</b>${status === "failed" && canRetry ? `<button class="text-button" data-writeback-retry data-phase="${escapeHtml(phase)}" data-system="${escapeHtml(system)}">重试</button>` : ""}</div></div>`
   }).join("") : `<p>${escapeHtml(String(value || "无记录"))}</p>`}</article>`
 }

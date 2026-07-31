@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
+from ..integrations import IntegrationBundle
 from ..persistence import CaseRepository
 from ..security import AuthStore
 from .presentation import case_summary, case_view
@@ -160,7 +161,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "setup", "change-password", "cases", "cases/new", "users", "audit"}
+            or requested in {"login", "setup", "change-password", "cases", "cases/new", "users", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -321,6 +322,32 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     events = store.list_audit()
                 self._json(200, {"ok": True, "events": events})
                 return
+            if path == "/api/operations/writebacks":
+                self._require_roles(user, "admin")
+                failures: list[dict[str, Any]] = []
+                for case in CaseRepository().list_cases():
+                    for phase, phase_result in (case.get("writeback") or {}).items():
+                        if not isinstance(phase_result, dict):
+                            continue
+                        for system in ("oa", "crm", "sap"):
+                            result = phase_result.get(system) or {}
+                            if not isinstance(result, dict) or result.get("status") != "failed":
+                                continue
+                            failures.append(
+                                {
+                                    "case_id": case.get("case_id"),
+                                    "customer_name": (case.get("customer") or {}).get("customer_name"),
+                                    "phase": phase,
+                                    "system": system,
+                                    "attempted_at": result.get("attempted_at"),
+                                    "error": result.get("error"),
+                                    "error_type": result.get("error_type"),
+                                    "retry_count": len(result.get("retry_history") or []),
+                                }
+                            )
+                failures.sort(key=lambda item: str(item.get("attempted_at") or ""), reverse=True)
+                self._json(200, {"ok": True, "failures": failures, "total": len(failures)})
+                return
             if path == "/api/cases":
                 cases = CaseRepository().list_cases()
                 rows = [case_summary(item, actor=user) for item in cases[:100]]
@@ -461,6 +488,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     return
                 if resource == "revisions":
                     self._create_contract_revision(case_id, payload, user)
+                    return
+                if resource == "writeback-retries":
+                    self._retry_writeback(case_id, payload, user)
                     return
             if (
                 len(parts) == 6
@@ -635,6 +665,96 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 remote_address=self.client_address[0],
             )
         self._json(201, {"ok": True, "revision": revision})
+
+    def _retry_writeback(
+        self,
+        case_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "admin")
+        phase = str(payload.get("phase") or "").strip()
+        system = str(payload.get("system") or "").strip().lower()
+        if not phase or system not in {"oa", "crm", "sap"}:
+            raise ValueError("请选择有效的回写阶段和目标系统。")
+        actor = self._actor(user)
+        run = None
+        with DongjiangWorkflowHarness() as harness:
+            try:
+                harness.get(case_id)
+            except KeyError:
+                pass
+            else:
+                run = harness.retry_writeback(
+                    case_id,
+                    phase=phase,
+                    system=system,
+                    actor=actor,
+                )
+        if run is not None:
+            result = dict((run.state.get("writeback") or {}).get(phase, {}).get(system) or {})
+            view = self._workflow_view(run, user)
+        else:
+            repository = CaseRepository()
+            state = repository.get_case(case_id)
+            if not state:
+                raise KeyError("案件不存在。")
+            writeback = dict(state.get("writeback") or {})
+            phase_result = dict(writeback.get(phase) or {})
+            existing = dict(phase_result.get(system) or {})
+            if not phase_result:
+                raise KeyError("回写阶段不存在。")
+            if str(existing.get("status") or "") != "failed":
+                raise ValueError("只有失败的回写记录可以重试。")
+            customer_id, request_payload = DongjiangWorkflowHarness._writeback_payload(
+                state, phase
+            )
+            result = IntegrationBundle.from_environment().retry_writeback(
+                case_id,
+                system,
+                customer_id,
+                request_payload,
+                phase=phase,
+            )
+            retry_history = list(existing.get("retry_history") or [])
+            retry_history.append(
+                {
+                    **dict(result),
+                    "actor_id": actor.actor_id,
+                    "actor_name": actor.display_name or actor.actor_id,
+                }
+            )
+            phase_result[system] = {**dict(result), "retry_history": retry_history}
+            result = dict(phase_result[system])
+            writeback[phase] = phase_result
+            state["writeback"] = writeback
+            state.setdefault("trace", []).append(
+                {
+                    "ts": result.get("attempted_at"),
+                    "stage": "integration.writeback_retried",
+                    "message": f"{system.upper()} {phase} 回写已人工重试。",
+                    "data": {
+                        "phase": phase,
+                        "system": system,
+                        "status": result.get("status"),
+                        "actor_id": actor.actor_id,
+                    },
+                }
+            )
+            repository.save_dict(state)
+            view = case_view(state, actor=user)
+        with AuthStore() as store:
+            store.audit(
+                "integration.writeback_retried",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={"phase": phase, "system": system, "status": result.get("status")},
+                remote_address=self.client_address[0],
+            )
+        self._json(200, {"ok": True, "result": result, "case": view})
 
     def _submit_contract_revision(
         self,

@@ -76,6 +76,7 @@ RECORD_LABELS = {
     "workflow.interrupt": "等待上传合同",
     "workflow.resumed": "合同已提交",
     "contract.completed": "合同审核已完成",
+    "integration.writeback_retried": "企业系统回写已人工重试",
     "decision.routed": "审核结果已确定",
     "sales.revised": "修订合同已提交",
     "sales.closed": "案件已关闭",
@@ -312,6 +313,7 @@ def case_view(
             "can_approve_credit": resolved_waiting == "credit_approval" and can_act,
             "can_upload_credit_documents": resolved_waiting == "credit_supplement" and can_act,
             "can_approve_special_release": resolved_waiting == "special_release" and can_act,
+            "can_retry_writeback": bool(actor and "admin" in set(actor.get("roles") or [])),
         },
         "credit": {
             "status": credit_status,
