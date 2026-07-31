@@ -185,6 +185,44 @@ class TaskExecutionStoreTests(unittest.TestCase):
                 reopened.load("DJ-CACHE-1", plan["plan_id"], "f" * 64)
             )
 
+    def test_reused_result_keeps_its_evidence_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = build_contract_plan(
+                "DJ-CACHE-GATE",
+                [{"document_id": "DOC-CACHE"}],
+                ai_available=True,
+            )
+            task = plan_task(plan, "contract_ai_review", input_ref="DOC-CACHE")
+            key = task_idempotency_key(plan, task)
+            store = TaskExecutionStore(root)
+            store.save(
+                "DJ-CACHE-GATE",
+                plan["plan_id"],
+                key,
+                result={
+                    "plan_id": plan["plan_id"],
+                    "task_id": task["task_id"],
+                    "idempotency_key": key,
+                    "evidence_gate": "degraded",
+                    "payload": {},
+                },
+                run={"status": "degraded"},
+            )
+            nodes = WorkflowNodes.__new__(WorkflowNodes)
+            nodes.executions = TaskExecutionStore(root)
+            update = nodes.run_contract_analysis(
+                {
+                    "case_id": "DJ-CACHE-GATE",
+                    "active_workflow_plan": plan,
+                    "active_agent_task": task,
+                    "agent_task_results": [],
+                }
+            )
+
+        self.assertEqual(update["agent_runs"][0]["status"], "reused")
+        self.assertEqual(update["agent_runs"][0]["evidence_gate"], "degraded")
+
 
 class SequencedAssistant:
     enabled = True

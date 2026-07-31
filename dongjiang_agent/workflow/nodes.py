@@ -158,6 +158,7 @@ def cached_task_update(
                 output_summary="复用已完成任务结果，未重复执行",
                 status="reused",
                 model="idempotency-cache",
+                evidence_gate=str(cached.get("evidence_gate") or "not_applicable"),
             )
         ],
         "trace": [
