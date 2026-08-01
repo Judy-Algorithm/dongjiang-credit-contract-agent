@@ -101,7 +101,7 @@ export const api = {
   benchmarkExportUrl:(format) => `/api/operations/benchmarks/export.${encodeURIComponent(format)}`,
   listCases:({mine = false} = {}) => cached(`/api/cases${mine ? "?mine=1" : ""}`, 10000),
   getCase:(caseId) => cached(`/api/cases/${encodeURIComponent(caseId)}`, 10000),
-  getDocumentFragment:(caseId, documentId, fragmentId = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}`),
+  getDocumentFragment:(caseId, documentId, fragmentId = "", highlight = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}&highlight=${encodeURIComponent(highlight)}`),
   createContractRevision:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/revisions`, payload),
   submitContractRevision:(caseId, revisionId) => post(`/api/cases/${encodeURIComponent(caseId)}/revisions/${encodeURIComponent(revisionId)}/submit`, {}),
   revisionDownloadUrl:(caseId, revisionId, kind) => `/api/cases/${encodeURIComponent(caseId)}/revisions/${encodeURIComponent(revisionId)}/${encodeURIComponent(kind)}`,

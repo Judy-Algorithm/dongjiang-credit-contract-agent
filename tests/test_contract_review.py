@@ -126,6 +126,101 @@ class ContractReviewTests(unittest.TestCase):
         self.assertEqual(result.decision, AuditDecision.BLOCK)
         self.assertTrue(any(item.rule_id == "DJ-CANCEL-WITHOUT-LIABILITY" for item in result.findings))
 
+    def test_combined_penalty_and_damages_over_half_is_blocked(self):
+        facts = complete_contract(
+            "合同金额：100万元。违约金为合同金额30%，损失赔偿金上限为合同金额25%。"
+        )
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertEqual(facts.combined_liability_ratio, 0.55)
+        self.assertEqual(result.decision, AuditDecision.BLOCK)
+        self.assertTrue(any(
+            item.rule_id == "DJ-COMBINED-LIABILITY-OVER-50PCT"
+            for item in result.findings
+        ))
+
+    def test_explicit_combined_liability_at_half_is_not_double_counted(self):
+        facts = complete_contract(
+            "合同金额：100万元。违约金与损失赔偿金合计不得超过合同金额的50%。"
+        )
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertEqual(facts.combined_liability_ratio, 0.5)
+        self.assertFalse(any(
+            item.rule_id == "DJ-COMBINED-LIABILITY-OVER-50PCT"
+            for item in result.findings
+        ))
+
+    def test_shared_penalty_and_damages_percentage_is_only_counted_once(self):
+        facts = complete_contract(
+            "合同金额：100万元。违约金包括损失赔偿，累计上限为合同金额的30%。"
+        )
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertEqual(facts.combined_liability_ratio, 0.3)
+        self.assertFalse(any(
+            item.rule_id == "DJ-COMBINED-LIABILITY-OVER-50PCT"
+            for item in result.findings
+        ))
+
+    def test_no_transaction_contract_hkd_one_million_cap_is_blocked(self):
+        facts = complete_contract("累计赔偿责任上限为港币100万元。")
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertIsNone(facts.amount)
+        self.assertEqual(facts.liability_cap_hkd, 1_000_000)
+        self.assertEqual(result.decision, AuditDecision.BLOCK)
+        self.assertTrue(any(
+            item.rule_id == "DJ-NO-AMOUNT-LIABILITY-OVER-HKD-1M"
+            for item in result.findings
+        ))
+
+    def test_warranty_requires_shots_term_and_first_expiry(self):
+        incomplete = complete_contract("模具质保期为交付后12个月。")
+        result = ContractReviewEngine().review(incomplete, credit())
+        self.assertTrue(any(
+            item.rule_id == "DJ-WARRANTY-DUAL-LIMIT-INCOMPLETE"
+            for item in result.findings
+        ))
+        complete = complete_contract("模具质保期为100万啤或交付后12个月，两者先到为准。")
+        result = ContractReviewEngine().review(complete, credit())
+        self.assertFalse(any(
+            item.rule_id == "DJ-WARRANTY-DUAL-LIMIT-INCOMPLETE"
+            for item in result.findings
+        ))
+
+    def test_replacement_warranty_reset_is_blocked(self):
+        facts = complete_contract("替代品的质保期应自替换之日起重新起算。")
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertEqual(result.decision, AuditDecision.BLOCK)
+        self.assertTrue(any(
+            item.rule_id == "DJ-REPLACEMENT-WARRANTY-RESET"
+            for item in result.findings
+        ))
+
+    def test_sales_country_compliance_cannot_be_shifted_entirely(self):
+        facts = complete_contract(
+            "产品销售国的法律法规识别及合规义务全部由供应商承担。"
+        )
+        result = ContractReviewEngine().review(facts, credit())
+        self.assertEqual(result.decision, AuditDecision.BLOCK)
+        self.assertTrue(any(
+            item.rule_id == "DJ-SALES-COUNTRY-COMPLIANCE-SHIFT"
+            for item in result.findings
+        ))
+
+    def test_ip_license_requires_all_four_boundaries(self):
+        incomplete = complete_contract("知识产权由东江所有，并许可客户使用。")
+        result = ContractReviewEngine().review(incomplete, credit())
+        self.assertTrue(any(
+            item.rule_id == "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE"
+            for item in result.findings
+        ))
+        complete = complete_contract(
+            "知识产权由东江所有，仅许可客户为履行本合同目的使用，许可期限为本合同有效期，免费且不可转让。"
+        )
+        result = ContractReviewEngine().review(complete, credit())
+        self.assertFalse(any(
+            item.rule_id == "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE"
+            for item in result.findings
+        ))
+
     def test_exclusive_jurisdiction_is_not_misclassified_as_business_exclusivity(self):
         facts = complete_contract(
             "The courts of Hong Kong have exclusive jurisdiction. "

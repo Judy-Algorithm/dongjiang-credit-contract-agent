@@ -1,6 +1,10 @@
 {
-  "version": "dongjiang-material-baseline-v2",
+  "version": "dongjiang-material-baseline-v3",
   "source": "销售合同底限条款.xlsx；东江客户信用管理制度（节选）.docx",
+  "bottom_line_thresholds": {
+    "max_combined_liability_ratio": 0.5,
+    "max_no_transaction_liability_hkd": 1000000
+  },
   "required_clauses": {
     "has_parties": "合同主体",
     "has_subject": "合同标的/技术要求",
@@ -73,13 +77,6 @@
       "suggestion": "删除间接损失责任，并设置直接损失及累计赔偿责任上限。"
     },
     {
-      "rule_id": "DJ-WARRANTY-DUAL-LIMIT",
-      "title": "模具质保条款需核验啤数和期限双限",
-      "pattern": "质保期|质量保证期|warranty period",
-      "level": "medium",
-      "suggestion": "人工确认质保条款同时约定啤数和期限，并以先到者为准。"
-    },
-    {
       "rule_id": "DJ-PRICE-FREEZE-CONTINUED-SUPPLY",
       "title": "不可提价或持续供货义务",
       "pattern": "不得提价|不可提价|价格不得调整|持续供货|continue.{0,30}supply|price.{0,20}(?:shall not|may not).{0,20}(?:increase|adjust)",
@@ -111,7 +108,7 @@
     {
       "rule_id": "LEGAL-HIGH-PENALTY",
       "title": "高额违约金",
-      "pattern": "违约金[^。；\\n]{0,30}(?:30|40|50|100)\\s*%",
+      "pattern": "违约金[^。；\\n]{0,30}(?:5[1-9]|[6-9]\\d|100)\\s*%",
       "level": "high",
       "suggestion": "核实违约金计算基数并设置合理上限。"
     }

@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260801-docai1"
-import {escapeHtml, money} from "../format.js?v=20260801-docai1"
-import {navigate} from "../router.js?v=20260801-docai1"
+import {api, encodeFiles} from "../api.js?v=20260801-core2"
+import {escapeHtml, money} from "../format.js?v=20260801-core2"
+import {navigate} from "../router.js?v=20260801-core2"
 
 export async function renderCaseActionPage(root, route) {
   const {case:item} = await api.getCase(route.caseId)
@@ -144,9 +144,9 @@ function contractForm(type, item) {
     <form id="actionForm">
       <div class="form-section">
         <label class="upload-zone" for="actionFiles">
-          <input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf">
+          <input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf,.xlsx,.png,.jpg,.jpeg,.tif,.tiff,.bmp">
           <b>${type === "submit_revision" ? "选择修改后的合同" : "选择合同文件"}</b>
-          <span>支持 TXT、DOCX、PDF</span>
+          <span>支持 TXT、DOCX、PDF、XLSX 与扫描图片</span>
         </label>
         <div id="actionFileList" class="file-list"></div>
         <label class="full">合同正文
@@ -179,7 +179,7 @@ function revisionForm(item) {
       </div>` : `<div class="supplement-notice"><strong>当前合同无法自动修订</strong><p>仅可对具有行号或段落号定位的 TXT、MD、DOCX 合同生成修订稿。请在下方上传人工修改后的版本。</p></div>`}
       ${revisionHistory(item, revisions)}
       <div class="form-section"><div class="section-heading"><h3>上传人工修订版本</h3><span>适用于 PDF 或复杂版式合同</span></div>
-        <label class="upload-zone" for="actionFiles"><input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf"><b>选择修改后的合同</b><span>支持 TXT、DOCX、PDF</span></label>
+        <label class="upload-zone" for="actionFiles"><input id="actionFiles" type="file" multiple accept=".txt,.md,.docx,.pdf,.xlsx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"><b>选择修改后的合同</b><span>支持 TXT、DOCX、PDF、XLSX 与扫描图片</span></label>
         <div id="actionFileList" class="file-list"></div>
         <label class="full">合同正文<textarea id="contractText" rows="7" placeholder="也可以在这里粘贴修改后的合同正文"></textarea></label>
         <div class="form-actions"><span></span><button type="submit" class="secondary" data-action="submit_revision">直接重新送审</button></div>

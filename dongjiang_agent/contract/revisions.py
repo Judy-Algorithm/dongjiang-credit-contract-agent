@@ -65,6 +65,24 @@ REPLACEMENT_LIBRARY = {
     ),
     "LEGAL-FOREIGN-JURISDICTION": "法律适用与争议解决：本合同适用中华人民共和国法律，争议由深圳市有管辖权的人民法院处理。",
     "LEGAL-HIGH-PENALTY": "违约金：违约金以受影响订单金额为计算基数，并以该订单金额的20%为累计上限。",
+    "DJ-COMBINED-LIABILITY-OVER-50PCT": (
+        "违约责任：违约金与损失赔偿金合计以受影响订单金额的50%为累计上限，且不包含任何间接或后果性损失。"
+    ),
+    "DJ-NO-AMOUNT-LIABILITY-OVER-HKD-1M": (
+        "违约责任：本合同无具体交易金额时，违约金与损失赔偿金合计应低于港币100万元，且不承担间接或后果性损失。"
+    ),
+    "DJ-WARRANTY-DUAL-LIMIT-INCOMPLETE": (
+        "质量保证：质保期以双方约定的啤数上限或交付后的期限上限两者先到为准。"
+    ),
+    "DJ-REPLACEMENT-WARRANTY-RESET": (
+        "替代品质量保证：替代品或替换品继续适用原产品剩余质保期，替换不导致质保期重新起算或延长。"
+    ),
+    "DJ-SALES-COUNTRY-COMPLIANCE-SHIFT": (
+        "法规合规：客户应书面告知产品销售目的国及适用的强制性要求；双方仅对各自控制范围内的法规识别和合规义务负责。"
+    ),
+    "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE": (
+        "知识产权：东江的背景知识产权仍归东江所有，仅就履行本合同之目的向客户提供有期限、免费且不可转让的许可。"
+    ),
     "CREDIT-OVER-LIMIT": "付款条件：超出当前可用授信额度的部分应在发货前以预付款方式结清。",
     "TKP-SPECIAL-TERM": "付款及账期：货款账期为月结90天，起算日和对账要求按双方书面确认的结算规则执行。",
     "CREDIT-OVER-TERM": "付款及账期：货款账期不得超过正式信用审批确定的最长账期。",

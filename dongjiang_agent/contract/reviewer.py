@@ -197,16 +197,107 @@ class ContractReviewEngine:
                 evidence=self._evidence(contract, "contract_term_years"),
             ))
 
-        if contract.max_penalty_ratio is not None and contract.max_penalty_ratio > 0.5:
+        thresholds = dict(self.contract_policy.get("bottom_line_thresholds") or {})
+        max_combined_ratio = float(
+            thresholds.get("max_combined_liability_ratio", 0.5)
+        )
+        if (
+            contract.combined_liability_ratio is not None
+            and contract.combined_liability_ratio > max_combined_ratio
+        ):
             findings.append(self._finding(
-                "DJ-PENALTY-OVER-50PCT",
-                "违约金比例超过合同金额50%",
-                RiskLevel.HIGH,
-                f"识别到最高违约金比例 {contract.max_penalty_ratio:.0%}。",
+                "DJ-COMBINED-LIABILITY-OVER-50PCT",
+                "违约金与损失赔偿合计超过合同金额50%",
+                RiskLevel.BLOCKER,
+                f"识别到违约金与损失赔偿比例合计 {contract.combined_liability_ratio:.0%}，"
+                f"超过底线 {max_combined_ratio:.0%}。",
                 "核对违约金与损失赔偿的合计口径并调整至合同金额50%以内。",
-                approval=True,
-                evidence=self._evidence(contract, "max_penalty_ratio"),
+                hard_stop=True,
+                evidence=self._evidence(contract, "combined_liability_ratio"),
             ))
+
+        max_no_transaction_hkd = float(
+            thresholds.get("max_no_transaction_liability_hkd", 1_000_000)
+        )
+        if (
+            contract.amount is None
+            and contract.liability_cap_hkd is not None
+            and contract.liability_cap_hkd >= max_no_transaction_hkd
+        ):
+            findings.append(self._finding(
+                "DJ-NO-AMOUNT-LIABILITY-OVER-HKD-1M",
+                "无交易金额合同的赔偿上限不低于港币100万元",
+                RiskLevel.BLOCKER,
+                f"合同未识别到具体交易金额，但责任上限为港币 "
+                f"{contract.liability_cap_hkd:,.2f}，不符合低于港币 "
+                f"{max_no_transaction_hkd:,.2f} 的底线。",
+                "将违约金与损失赔偿累计上限调整为低于港币100万元，并排除间接损失。",
+                hard_stop=True,
+                evidence=self._evidence(contract, "liability_cap_hkd"),
+            ))
+
+        if contract.has_warranty_clause and not all((
+            contract.warranty_has_shot_limit,
+            contract.warranty_has_time_limit,
+            contract.warranty_first_expiry_applies,
+        )):
+            missing = []
+            if not contract.warranty_has_shot_limit:
+                missing.append("啤数上限")
+            if not contract.warranty_has_time_limit:
+                missing.append("期限上限")
+            if not contract.warranty_first_expiry_applies:
+                missing.append("两者先到为准")
+            findings.append(self._finding(
+                "DJ-WARRANTY-DUAL-LIMIT-INCOMPLETE",
+                "模具质保缺少啤数、期限或先到者规则",
+                RiskLevel.MEDIUM,
+                f"质保条款缺少：{'、'.join(missing)}。",
+                "同时明确质保啤数、质保期限，并约定两者以先到者为准。",
+                evidence_query="质保期",
+            ))
+
+        if contract.replacement_warranty_resets:
+            findings.append(self._finding(
+                "DJ-REPLACEMENT-WARRANTY-RESET",
+                "替代品或替换品质保期被重新起算",
+                RiskLevel.BLOCKER,
+                "合同要求替代品、替换品的质保期重新起算或以终端成品时间起算。",
+                "删除替代品重新起算安排，约定替换不延长原质保终止日，除非双方另行书面确认。",
+                hard_stop=True,
+                evidence_query="替代品",
+            ))
+
+        if contract.sales_country_compliance_shifted:
+            findings.append(self._finding(
+                "DJ-SALES-COUNTRY-COMPLIANCE-SHIFT",
+                "销售国法律法规识别义务全部转嫁给我方",
+                RiskLevel.BLOCKER,
+                "产品销售国法律法规识别和合规义务被约定仅由东江或供应商承担。",
+                "由客户提供销售目的国和强制要求，双方分别对自身控制范围内的合规义务负责。",
+                hard_stop=True,
+                evidence_query="产品销售国",
+            ))
+
+        if contract.ip_license_present:
+            missing = []
+            if not contract.ip_license_purpose_limited:
+                missing.append("仅限履约目的")
+            if not contract.ip_license_term_limited:
+                missing.append("明确期限")
+            if not contract.ip_license_royalty_free:
+                missing.append("免费许可")
+            if not contract.ip_license_non_transferable:
+                missing.append("不可转让")
+            if missing:
+                findings.append(self._finding(
+                    "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE",
+                    "我方知识产权许可边界不完整",
+                    RiskLevel.MEDIUM,
+                    f"知识产权许可缺少：{'、'.join(missing)}。",
+                    "明确背景知识产权仍归东江所有，许可仅限履约目的、有期限、免费且不可转让。",
+                    evidence_query="知识产权",
+                ))
 
         for rule in self.contract_policy["legal_patterns"]:
             applies_to = {

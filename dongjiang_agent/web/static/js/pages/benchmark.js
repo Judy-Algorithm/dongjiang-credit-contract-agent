@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260801-docai1"
-import {escapeHtml} from "../format.js?v=20260801-docai1"
+import {api} from "../api.js?v=20260801-core2"
+import {escapeHtml} from "../format.js?v=20260801-core2"
 
 const metricDefinitions = [
   ["信用结论", "credit_conclusion_rate"],

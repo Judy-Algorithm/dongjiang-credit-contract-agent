@@ -290,9 +290,16 @@ class WorkflowNodes:
     @staticmethod
     def _is_contract(document: ExtractedDocument) -> bool:
         name = Path(document.path).name.lower()
-        if any(token in name for token in ("合同", "协议", "contract", "agreement")):
+        if any(token in name for token in (
+            "合同", "协议", "订单", "采购单", "contract", "agreement",
+            "purchase order", "sales order", "po",
+        )):
             return True
-        signals = ("甲方", "乙方", "违约责任", "争议解决", "payment terms", "party a", "party b")
+        signals = (
+            "甲方", "乙方", "买方", "卖方", "采购方", "供应商", "订单",
+            "付款", "违约责任", "争议解决", "payment terms", "buyer",
+            "seller", "supplier", "purchase order", "party a", "party b",
+        )
         return sum(signal.lower() in document.text.lower() for signal in signals) >= 2
 
     def create_case(self, state: WorkflowState) -> dict[str, Any]:

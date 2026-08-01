@@ -19,6 +19,7 @@ data/translations/
 data/tessdata/
 data/demo/
 data/runtime/
+data/logs/
 data/executions/
 data/deployment-backups/
 data/benchmarks/

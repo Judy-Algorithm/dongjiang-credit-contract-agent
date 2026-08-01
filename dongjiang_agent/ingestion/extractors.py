@@ -64,7 +64,7 @@ class DocumentExtractor:
             text, extractor, warnings, fragments = self._pdf_content(target)
             return ExtractedDocument(str(target), "pdf", text, extractor, warnings, fragments)
         if suffix in self.IMAGE_EXTENSIONS:
-            text, confidence, warnings = self._image_text(target)
+            text, confidence, warnings, regions = self._image_text(target)
             fragments = [
                 DocumentFragment(
                     "image-1",
@@ -74,6 +74,7 @@ class DocumentExtractor:
                         "image": 1,
                         "ocr": True,
                         "ocr_confidence": confidence,
+                        "ocr_regions": regions,
                     },
                 )
             ] if text.strip() else []
@@ -307,11 +308,12 @@ class DocumentExtractor:
                 for number, content in enumerate(pages, start=1)
                 if not content.strip()
             ]
-            ocr_pages: dict[int, tuple[str, float | None]] = {}
+            ocr_pages: dict[int, tuple[Any, ...]] = {}
             if empty_pages:
                 ocr_pages, ocr_warnings = cls._ocr_pdf_pages(path, empty_pages)
                 warnings.extend(ocr_warnings)
-                for number, (content, _confidence) in ocr_pages.items():
+                for number, result in ocr_pages.items():
+                    content = str(result[0])
                     pages[number - 1] = content
             text = "\n".join(pages)
             if text.strip():
@@ -325,6 +327,13 @@ class DocumentExtractor:
                             "ocr": number in ocr_pages,
                             "ocr_confidence": (
                                 ocr_pages[number][1] if number in ocr_pages else None
+                            ),
+                            **(
+                                {"ocr_regions": ocr_pages[number][2]}
+                                if number in ocr_pages
+                                and len(ocr_pages[number]) > 2
+                                and ocr_pages[number][2]
+                                else {}
                             ),
                         },
                     )
@@ -368,11 +377,11 @@ class DocumentExtractor:
         cls,
         path: Path,
         page_numbers: list[int],
-    ) -> tuple[dict[int, tuple[str, float | None]], list[str]]:
+    ) -> tuple[dict[int, tuple[Any, ...]], list[str]]:
         binary = cls._tesseract_binary()
         if not binary:
             return {}, ["扫描页需要 OCR，但当前环境未安装 Tesseract。"]
-        results: dict[int, tuple[str, float | None]] = {}
+        results: dict[int, tuple[Any, ...]] = {}
         warnings: list[str] = []
         with tempfile.TemporaryDirectory(prefix="dongjiang-pdf-ocr-") as tmp:
             root = Path(tmp)
@@ -380,14 +389,14 @@ class DocumentExtractor:
                 image_path = root / f"page-{page_number}.png"
                 try:
                     cls._render_pdf_page(path, page_number, image_path)
-                    text, confidence, page_warnings = cls._tesseract_text(
+                    text, confidence, page_warnings, regions = cls._tesseract_text(
                         image_path, binary=binary
                     )
                     warnings.extend(
                         f"第 {page_number} 页：{warning}" for warning in page_warnings
                     )
                     if text.strip():
-                        results[page_number] = (text, confidence)
+                        results[page_number] = (text, confidence, regions)
                     else:
                         warnings.append(f"第 {page_number} 页 OCR 未识别出文本。")
                 except Exception as exc:
@@ -461,10 +470,12 @@ class DocumentExtractor:
         return fragments
 
     @classmethod
-    def _image_text(cls, path: Path) -> tuple[str, float | None, list[str]]:
+    def _image_text(
+        cls, path: Path
+    ) -> tuple[str, float | None, list[str], list[dict[str, Any]]]:
         binary = cls._tesseract_binary()
         if not binary:
-            return "", None, ["未找到 Tesseract，图片已登记但未执行 OCR。"]
+            return "", None, ["未找到 Tesseract，图片已登记但未执行 OCR。"], []
         return cls._tesseract_text(path, binary=binary)
 
     @classmethod
@@ -473,7 +484,7 @@ class DocumentExtractor:
         path: Path,
         *,
         binary: str,
-    ) -> tuple[str, float | None, list[str]]:
+    ) -> tuple[str, float | None, list[str], list[dict[str, Any]]]:
         environment, tessdata_prefix = cls._tesseract_environment()
         languages, language_warnings = cls._tesseract_languages(
             binary, tessdata_prefix
@@ -502,37 +513,87 @@ class DocumentExtractor:
             )
             if fallback.returncode == 0 and fallback.stdout.strip():
                 warnings.append("OCR 置信度不可用，已回退到纯文本识别。")
-                return fallback.stdout.strip(), None, warnings
+                return fallback.stdout.strip(), None, warnings, []
             warnings.append(
                 fallback.stderr.strip()
                 or result.stderr.strip()
                 or "OCR 失败"
             )
-            return "", None, warnings
+            return "", None, warnings, []
         rows = csv.DictReader(io.StringIO(result.stdout), delimiter="\t")
-        lines: dict[tuple[str, str, str, str], list[str]] = {}
+        lines: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         confidences: list[float] = []
         for row in rows:
             value = str(row.get("text") or "").strip()
             if not value:
                 continue
             key = tuple(str(row.get(name) or "0") for name in ("page_num", "block_num", "par_num", "line_num"))
-            lines.setdefault(key, []).append(value)
+            line = lines.setdefault(
+                key,
+                {"words": [], "left": [], "top": [], "right": [], "bottom": []},
+            )
+            line["words"].append(value)
+            try:
+                left = int(row.get("left") or 0)
+                top = int(row.get("top") or 0)
+                width = int(row.get("width") or 0)
+                height = int(row.get("height") or 0)
+                line["left"].append(left)
+                line["top"].append(top)
+                line["right"].append(left + width)
+                line["bottom"].append(top + height)
+            except (TypeError, ValueError):
+                pass
             try:
                 confidence = float(row.get("conf") or -1)
                 if confidence >= 0:
                     confidences.append(confidence)
             except (TypeError, ValueError):
                 pass
-        text = cls._normalize_ocr_text(
-            "\n".join(" ".join(values) for values in lines.values())
-        )
+        try:
+            from PIL import Image  # type: ignore
+
+            with Image.open(path) as image:
+                image_width, image_height = image.size
+        except Exception:
+            image_width = max(
+                (max(item["right"], default=1) for item in lines.values()),
+                default=1,
+            )
+            image_height = max(
+                (max(item["bottom"], default=1) for item in lines.values()),
+                default=1,
+            )
+        normalized_lines: list[str] = []
+        regions: list[dict[str, Any]] = []
+        cursor = 0
+        for line in lines.values():
+            normalized = cls._normalize_ocr_text(" ".join(line["words"]))
+            if not normalized:
+                continue
+            start = cursor
+            cursor += len(re.sub(r"\s+", "", normalized))
+            normalized_lines.append(normalized)
+            if line["left"] and image_width and image_height:
+                left = min(line["left"])
+                top = min(line["top"])
+                right = max(line["right"])
+                bottom = max(line["bottom"])
+                regions.append({
+                    "start": start,
+                    "end": cursor,
+                    "x": round(left / image_width, 6),
+                    "y": round(top / image_height, 6),
+                    "width": round((right - left) / image_width, 6),
+                    "height": round((bottom - top) / image_height, 6),
+                })
+        text = "\n".join(normalized_lines)
         confidence = (
             round(sum(confidences) / len(confidences) / 100, 3)
             if confidences
             else None
         )
-        return text, confidence, warnings
+        return text, confidence, warnings, regions
 
     @staticmethod
     def _normalize_ocr_text(text: str) -> str:

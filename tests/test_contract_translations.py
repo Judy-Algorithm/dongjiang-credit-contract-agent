@@ -44,7 +44,7 @@ class ContractTranslationTests(unittest.TestCase):
 
     def _case(self):
         source = Path("data/archive/DJ-TRANS1/contract/source.docx")
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         document = Document()
         document.add_paragraph("销售合同")
         table = document.add_table(rows=2, cols=2)
@@ -204,6 +204,89 @@ class ContractTranslationTests(unittest.TestCase):
                 review_note="",
                 actor={"actor_id": "USR-LEGAL", "display_name": "法务甲"},
             )
+
+    @staticmethod
+    def _confirmed_entries(draft):
+        return [
+            {
+                "fragment_id": item["fragment_id"],
+                "translations": dict(item["translations"]),
+            }
+            for item in draft["entries"]
+        ]
+
+    def test_multilingual_export_follows_requested_language_order(self):
+        store = ContractTranslationStore(
+            translator=ContractTranslator(FakeGateway()),
+        )
+        draft = store.create(
+            self._case(),
+            document_id="DOC-TRANS1",
+            target_languages=["ja", "en", "vi"],
+            actor={"actor_id": "USR-LEGAL", "display_name": "法务甲"},
+        )
+        self.assertEqual(draft["target_languages"], ["ja", "en", "vi"])
+        self.assertEqual(draft["target_language_label"], "日语 / 英文 / 越南语")
+        confirmed = store.confirm(
+            "DJ-TRANS1",
+            draft["translation_id"],
+            entries=self._confirmed_entries(draft),
+            review_note="已按日、英、越顺序核对。",
+            actor={"actor_id": "USR-LEGAL2", "display_name": "法务乙"},
+        )
+        self.assertEqual(confirmed["status"], "confirmed")
+        target, _ = store.artifact_path("DJ-TRANS1", draft["translation_id"])
+        exported = Document(target)
+        paragraphs = [item.text for item in exported.paragraphs]
+        source_index = paragraphs.index("销售合同")
+        self.assertTrue(paragraphs[source_index + 1].startswith("[日语译文]"))
+        self.assertTrue(paragraphs[source_index + 2].startswith("[英文译文]"))
+        self.assertTrue(paragraphs[source_index + 3].startswith("[越南语译文]"))
+
+    def test_incremental_translation_only_sends_changed_fragment(self):
+        gateway = FakeGateway()
+        store = ContractTranslationStore(
+            translator=ContractTranslator(gateway),
+        )
+        case = self._case()
+        first = store.create(
+            case,
+            document_id="DOC-TRANS1",
+            target_languages=["en", "ja"],
+            actor={"actor_id": "USR-LEGAL", "display_name": "法务甲"},
+        )
+        store.confirm(
+            "DJ-TRANS1",
+            first["translation_id"],
+            entries=self._confirmed_entries(first),
+            review_note="首版译文已确认。",
+            actor={"actor_id": "USR-LEGAL2", "display_name": "法务乙"},
+        )
+        gateway.calls.clear()
+        changed = self._case()
+        changed["source_documents"][0]["fragments"][-1]["text"] = "月结90天"
+        second = store.create(
+            changed,
+            document_id="DOC-TRANS1",
+            target_languages=["en", "ja"],
+            actor={"actor_id": "USR-LEGAL", "display_name": "法务甲"},
+        )
+        self.assertEqual(second["base_translation_id"], first["translation_id"])
+        self.assertEqual(second["reused_translation_count"], 8)
+        self.assertEqual(second["translated_translation_count"], 2)
+        self.assertEqual(len(gateway.calls), 2)
+        for redacted_text, _instruction in gateway.calls:
+            payload = json.loads(redacted_text.split("\n", 1)[1])
+            self.assertEqual(len(payload["segments"]), 1)
+            self.assertEqual(
+                payload["segments"][0]["fragment_id"],
+                "table-1-row-2-column-2",
+            )
+        changed_entry = second["entries"][-1]
+        self.assertEqual(
+            changed_entry["translation_sources"],
+            {"en": "translated", "ja": "translated"},
+        )
 
 
 if __name__ == "__main__":

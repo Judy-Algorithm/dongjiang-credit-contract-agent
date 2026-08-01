@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260801-docai1"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260801-docai1"
+import {api} from "../api.js?v=20260801-core2"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260801-core2"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],
@@ -129,7 +129,7 @@ function translationWorkbench(item) {
     <div class="section-heading"><div><h3>多语言合同</h3><span>译文逐段绑定原文，人工确认后才可导出</span></div><span>${translations.length} 个版本</span></div>
     ${canManage ? `<form id="translationForm" class="translation-toolbar">
       <label>合同<select id="translationDocument">${contracts.map((doc) => `<option value="${escapeHtml(doc.document_id)}">${escapeHtml(doc.name)}</option>`).join("")}</select></label>
-      <label>目标语言<select id="translationLanguage"><option value="en">英文</option><option value="zh">中文</option><option value="vi">越南语</option><option value="ja">日语</option><option value="es">西班牙语</option></select></label>
+      <fieldset class="translation-language-order"><legend>目标语言与顺序</legend>${translationLanguageRows()}</fieldset>
       <button type="submit" class="secondary">生成对齐译稿</button>
     </form>` : ""}
     ${translations.length ? `<div class="translation-list">${translations.map((translation) => translationRow(item, translation, canManage)).join("")}</div>` : `<div class="empty-note">尚未生成合同译稿。</div>`}
@@ -138,10 +138,23 @@ function translationWorkbench(item) {
 
 function translationRow(item, translation, canManage) {
   const confirmed = translation.status === "confirmed"
-  return `<article class="translation-version"><div><b>${escapeHtml(translation.target_language_label)} · ${escapeHtml(translation.source_name)}</b><small>${escapeHtml(translation.translation_id)} · ${translation.segment_count || 0} 个对齐片段 · ${confirmed ? `已由 ${escapeHtml(translation.confirmed_by?.display_name || "人工")} 确认` : "等待人工复核"}</small></div><div class="revision-actions">${confirmed ? `<a class="secondary" href="${api.translationDownloadUrl(item.case_id, translation.translation_id)}">下载双语 Word</a>` : canManage ? `<button type="button" class="primary" data-translation-review="${escapeHtml(translation.translation_id)}">复核译稿</button>` : `<span class="badge pending">待确认</span>`}</div></article>`
+  const reuse = translation.reused_translation_count ? ` · 复用 ${translation.reused_translation_count} 条` : ""
+  const changed = translation.translated_translation_count ? ` · 重译 ${translation.translated_translation_count} 条` : ""
+  return `<article class="translation-version"><div><b>${escapeHtml(translation.target_language_label)} · ${escapeHtml(translation.source_name)}</b><small>${escapeHtml(translation.translation_id)} · ${translation.segment_count || 0} 个对齐片段${reuse}${changed} · ${confirmed ? `已由 ${escapeHtml(translation.confirmed_by?.display_name || "人工")} 确认` : "等待人工复核"}</small></div><div class="revision-actions">${confirmed ? `<a class="secondary" href="${api.translationDownloadUrl(item.case_id, translation.translation_id)}">下载多语言 Word</a>` : canManage ? `<button type="button" class="primary" data-translation-review="${escapeHtml(translation.translation_id)}">复核译稿</button>` : `<span class="badge pending">待确认</span>`}</div></article>`
+}
+
+function translationLanguageRows() {
+  const rows = [["en","英文",true],["zh","中文",false],["vi","越南语",false],["ja","日语",false],["es","西班牙语",false]]
+  return rows.map(([code,label,checked]) => `<div class="translation-language-row" data-language-row="${code}"><label><input type="checkbox" ${checked ? "checked" : ""}>${label}</label><span><button type="button" class="icon-button" data-language-up title="上移" aria-label="上移${label}">↑</button><button type="button" class="icon-button" data-language-down title="下移" aria-label="下移${label}">↓</button></span></div>`).join("")
 }
 
 function installTranslationActions(root, item, renderTab) {
+  root.querySelector(".translation-language-order")?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-language-row]")
+    if (!row) return
+    if (event.target.closest("[data-language-up]") && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling)
+    if (event.target.closest("[data-language-down]") && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row)
+  })
   root.querySelector("#translationForm")?.addEventListener("submit", async (event) => {
     event.preventDefault()
     const button = event.submitter
@@ -150,7 +163,7 @@ function installTranslationActions(root, item, renderTab) {
     try {
       const data = await api.createContractTranslation(item.case_id, {
         document_id:root.querySelector("#translationDocument").value,
-        target_language:root.querySelector("#translationLanguage").value,
+        target_languages:Array.from(root.querySelectorAll("[data-language-row]")).filter((row) => row.querySelector("input").checked).map((row) => row.dataset.languageRow),
       })
       item.contract_translations = [data.translation, ...(item.contract_translations || [])]
       showTranslationDialog(root, item, data.translation, renderTab)
@@ -176,7 +189,9 @@ function installTranslationActions(root, item, renderTab) {
 
 function showTranslationDialog(root, item, translation, renderTab) {
   root.querySelector("#translationDialog")?.remove()
-  root.insertAdjacentHTML("beforeend", `<div id="translationDialog" class="modal-backdrop"><form class="modal-panel translation-dialog"><div class="section-heading"><div><h3>${escapeHtml(translation.target_language_label)}译稿复核</h3><span>${translation.entries.length} 个原文对齐片段</span></div><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">逐段核对并修正译文。确认后生成双语 Word，原合同不会被覆盖。</p><div class="translation-segments">${translation.entries.map((entry) => `<article data-translation-fragment="${escapeHtml(entry.fragment_id)}"><small>${escapeHtml(entry.location_label)}</small><pre>${escapeHtml(entry.source_text)}</pre><label>译文<textarea rows="4" required>${escapeHtml(entry.translated_text)}</textarea></label></article>`).join("")}</div><label>人工复核说明<textarea id="translationReviewNote" rows="3" required placeholder="填写复核范围、依据或需要继续确认的事项"></textarea></label><div id="translationError" class="error-box hidden"></div><div class="form-actions"><span>机器翻译仅作辅助，法律效力以签署原文为准。</span><button type="submit" class="primary">确认并生成双语稿</button></div></form></div>`)
+  const languages = translation.target_languages || [translation.target_language]
+  const labels = Object.fromEntries(languages.map((language, index) => [language, translation.target_language_labels?.[index] || translation.target_language_label]))
+  root.insertAdjacentHTML("beforeend", `<div id="translationDialog" class="modal-backdrop"><form class="modal-panel translation-dialog"><div class="section-heading"><div><h3>${escapeHtml(translation.target_language_label)}译稿复核</h3><span>${translation.entries.length} 个原文对齐片段</span></div><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">本版本复用 ${translation.reused_translation_count || 0} 条已确认译文，重译 ${translation.translated_translation_count || translation.translation_count || 0} 条。</p><div class="translation-segments">${translation.entries.map((entry) => `<article data-translation-fragment="${escapeHtml(entry.fragment_id)}"><small>${escapeHtml(entry.location_label)}</small><pre>${escapeHtml(entry.source_text)}</pre>${languages.map((language) => `<label>${escapeHtml(labels[language])}译文${entry.translation_sources?.[language] === "reused" ? ` <span class="badge approved">已复用</span>` : ""}<textarea data-translation-language="${escapeHtml(language)}" rows="4" required>${escapeHtml(entry.translations?.[language] || (language === translation.target_language ? entry.translated_text : ""))}</textarea></label>`).join("")}</article>`).join("")}</div><label>人工复核说明<textarea id="translationReviewNote" rows="3" required placeholder="填写复核范围、依据或需要继续确认的事项"></textarea></label><div id="translationError" class="error-box hidden"></div><div class="form-actions"><span>机器翻译仅作辅助，法律效力以签署原文为准。</span><button type="submit" class="primary">确认并生成多语言稿</button></div></form></div>`)
   const dialog = root.querySelector("#translationDialog")
   dialog.querySelector("[data-close]").addEventListener("click", () => { dialog.remove(); renderTab("contract") })
   dialog.addEventListener("click", (event) => { if (event.target === dialog) { dialog.remove(); renderTab("contract") } })
@@ -189,11 +204,11 @@ function showTranslationDialog(root, item, translation, renderTab) {
     try {
       const data = await api.confirmContractTranslation(item.case_id, translation.translation_id, {
         review_note:dialog.querySelector("#translationReviewNote").value,
-        entries:Array.from(dialog.querySelectorAll("[data-translation-fragment]")).map((row) => ({fragment_id:row.dataset.translationFragment, translated_text:row.querySelector("textarea").value})),
+        entries:Array.from(dialog.querySelectorAll("[data-translation-fragment]")).map((row) => ({fragment_id:row.dataset.translationFragment, translations:Object.fromEntries(Array.from(row.querySelectorAll("[data-translation-language]")).map((field) => [field.dataset.translationLanguage, field.value]))})),
       })
       item.contract_translations = (item.contract_translations || []).map((entry) => entry.translation_id === data.translation.translation_id ? data.translation : entry)
       dialog.remove()
-      window.dispatchEvent(new CustomEvent("app:toast", {detail:"译稿已确认，双语 Word 已归档"}))
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"译稿已确认，多语言 Word 已归档"}))
       renderTab("contract")
     } catch (reason) {
       error.textContent = reason.message || String(reason)
@@ -486,11 +501,18 @@ function installWritebackRetry(root, item, renderTab) {
   })
 }
 
-async function loadEvidence(viewer, item, documentId, fragmentId) {
+async function loadEvidence(viewer, item, documentId, fragmentId, highlight = "") {
   viewer.innerHTML = `<div class="evidence-loading">正在读取原件...</div>`
   try {
-    const data = await api.getDocumentFragment(item.case_id, documentId, fragmentId)
-    viewer.innerHTML = `<header><div><strong>${escapeHtml(data.document.name)}</strong><small>${escapeHtml(data.selected_location_label)}</small></div><span>${escapeHtml(data.document.media_type.toUpperCase())}</span></header><div class="fragment-list">${data.fragments.map((fragment) => `<article class="document-fragment ${fragment.selected ? "selected" : ""}"><small>${escapeHtml(fragment.location_label)}</small><pre>${escapeHtml(fragment.text)}</pre></article>`).join("")}</div>${data.document.warnings?.length ? notice("解析提示", data.document.warnings) : ""}`
+    const data = await api.getDocumentFragment(item.case_id, documentId, fragmentId, highlight)
+    const page = Number(data.selected_location?.page || 1)
+    const boxes = (data.highlight_regions || []).map((box) => `<span class="ocr-highlight" style="left:${Number(box.x)*100}%;top:${Number(box.y)*100}%;width:${Number(box.width)*100}%;height:${Number(box.height)*100}%"></span>`).join("")
+    const asset = data.asset_kind === "pdf"
+      ? `<div class="document-asset image"><a class="asset-open-link" href="${escapeHtml(data.asset_url)}#page=${page}" target="_blank" rel="noopener">打开原始 PDF</a><div class="ocr-image-stage"><img src="${escapeHtml(data.page_asset_url)}" alt="${escapeHtml(data.document.name)}第${page}页">${boxes}</div></div>`
+      : data.asset_kind === "image"
+        ? `<div class="document-asset image"><div class="ocr-image-stage"><img src="${escapeHtml(data.asset_url)}" alt="${escapeHtml(data.document.name)}原件">${boxes}</div></div>`
+        : ""
+    viewer.innerHTML = `<header><div><strong>${escapeHtml(data.document.name)}</strong><small>${escapeHtml(data.selected_location_label)}</small></div><span>${escapeHtml(data.document.media_type.toUpperCase())}</span></header>${asset}<div class="fragment-list">${data.fragments.map((fragment) => `<article class="document-fragment ${fragment.selected ? "selected" : ""}"><small>${escapeHtml(fragment.location_label)}</small><pre>${escapeHtml(fragment.text)}</pre></article>`).join("")}</div>${data.document.warnings?.length ? notice("解析提示", data.document.warnings) : ""}`
   } catch (reason) {
     viewer.innerHTML = `<div class="error-box">${escapeHtml(reason.message || reason)}</div>`
   }
@@ -501,7 +523,7 @@ function installEvidenceViewer(root, item) {
     const button = event.target.closest("[data-finding-index]")
     if (!button) return
     const finding = item.findings[Number(button.dataset.findingIndex)]
-    if (finding) loadEvidence(root.querySelector("#evidenceViewer"), item, finding.document_id, finding.fragment_id)
+    if (finding) loadEvidence(root.querySelector("#evidenceViewer"), item, finding.document_id, finding.fragment_id, finding.evidence_query || finding.clause_excerpt || "")
   })
   const aiFindings = (item.ai_assistance || []).flatMap((group) => group.findings || [])
   root.querySelector(".ai-assistance")?.addEventListener("click", (event) => {
@@ -510,7 +532,7 @@ function installEvidenceViewer(root, item) {
     const finding = aiFindings[Number(button.dataset.aiFindingIndex)]
     if (!finding) return
     const viewer = root.querySelector("#evidenceViewer")
-    loadEvidence(viewer, item, finding.document_id, finding.fragment_id)
+    loadEvidence(viewer, item, finding.document_id, finding.fragment_id, finding.evidence_query || finding.clause_excerpt || "")
     if (window.innerWidth <= 900) viewer.scrollIntoView({behavior:"smooth", block:"start"})
   })
 }

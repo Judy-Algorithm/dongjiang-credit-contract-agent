@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import zipfile
@@ -38,6 +39,49 @@ _MAX_BATCH_FRAGMENTS = 24
 
 def _tokens(value: str) -> Counter[str]:
     return Counter(_TOKEN.findall(str(value or "")))
+
+
+def _source_hash(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _target_languages(manifest: dict[str, Any]) -> list[str]:
+    values = list(manifest.get("target_languages") or [])
+    if not values and manifest.get("target_language"):
+        values = [str(manifest["target_language"])]
+    return [str(item) for item in values if str(item) in LANGUAGES]
+
+
+def _entry_translations(
+    entry: dict[str, Any], languages: list[str]
+) -> dict[str, str]:
+    rows = {
+        str(language): str(text or "")
+        for language, text in dict(entry.get("translations") or {}).items()
+        if str(language) in LANGUAGES
+    }
+    if not rows and languages and entry.get("translated_text") is not None:
+        rows[languages[0]] = str(entry.get("translated_text") or "")
+    return rows
+
+
+def _normalize_languages(
+    target_languages: list[str] | tuple[str, ...] | None,
+    target_language: str = "",
+) -> list[str]:
+    requested = list(target_languages or [])
+    if not requested and target_language:
+        requested = [target_language]
+    languages: list[str] = []
+    for item in requested:
+        language = str(item or "").strip().lower()
+        if language not in LANGUAGES:
+            raise ValueError("目标语言必须是中文、英文、越南语、日语或西班牙语。")
+        if language not in languages:
+            languages.append(language)
+    if not languages:
+        raise ValueError("请至少选择一种目标语言。")
+    return languages
 
 
 def _artifact(path: Path) -> dict[str, Any]:
@@ -179,16 +223,26 @@ class ContractTranslationStore:
 
     @staticmethod
     def public(manifest: dict[str, Any]) -> dict[str, Any]:
+        languages = _target_languages(manifest)
+        labels = [LANGUAGES[item] for item in languages]
         return {
             "translation_id": manifest.get("translation_id"),
             "document_id": manifest.get("document_id"),
             "source_name": manifest.get("source_name"),
-            "target_language": manifest.get("target_language"),
-            "target_language_label": LANGUAGES.get(
-                str(manifest.get("target_language") or ""), ""
-            ),
+            "target_language": languages[0] if languages else "",
+            "target_languages": languages,
+            "target_language_label": " / ".join(labels),
+            "target_language_labels": labels,
             "status": manifest.get("status"),
             "segment_count": len(manifest.get("entries") or []),
+            "translation_count": len(manifest.get("entries") or []) * len(languages),
+            "base_translation_id": manifest.get("base_translation_id"),
+            "reused_translation_count": int(
+                manifest.get("reused_translation_count") or 0
+            ),
+            "translated_translation_count": int(
+                manifest.get("translated_translation_count") or 0
+            ),
             "model": manifest.get("model"),
             "prompt_version": manifest.get("prompt_version"),
             "created_at": manifest.get("created_at"),
@@ -228,6 +282,7 @@ class ContractTranslationStore:
     def detail(self, case_id: str, translation_id: str) -> dict[str, Any]:
         manifest = self.get(case_id, translation_id)
         vault = RedactionVault(case_id, self.vault_dir)
+        languages = _target_languages(manifest)
         return {
             **self.public(manifest),
             "entries": [
@@ -236,9 +291,23 @@ class ContractTranslationStore:
                     "location": dict(item.get("location") or {}),
                     "location_label": item.get("location_label"),
                     "source_text": vault.restore(str(item.get("source_text") or "")),
-                    "translated_text": vault.restore(
-                        str(item.get("translated_text") or "")
+                    "source_hash": item.get("source_hash") or _source_hash(
+                        str(item.get("source_text") or "")
                     ),
+                    "translations": {
+                        language: vault.restore(text)
+                        for language, text in _entry_translations(
+                            item, languages
+                        ).items()
+                    },
+                    "translation_sources": dict(
+                        item.get("translation_sources") or {}
+                    ),
+                    "translated_text": vault.restore(str(
+                        _entry_translations(item, languages).get(
+                            languages[0] if languages else "", ""
+                        )
+                    )),
                 }
                 for item in manifest.get("entries") or []
             ],
@@ -249,7 +318,9 @@ class ContractTranslationStore:
         case: dict[str, Any],
         *,
         document_id: str,
-        target_language: str,
+        target_language: str = "",
+        target_languages: list[str] | tuple[str, ...] | None = None,
+        base_translation_id: str = "",
         actor: dict[str, Any],
     ) -> dict[str, Any]:
         case_id = str(case.get("case_id") or "")
@@ -279,10 +350,60 @@ class ContractTranslationStore:
             raise ValueError("合同没有可翻译的文本片段。")
         if sum(len(item["source_text"]) for item in fragments) > _MAX_DOCUMENT_CHARS:
             raise ValueError("合同正文超过16万字符，请拆分文件后翻译。")
-        entries = self.translator.translate(
-            fragments,
-            target_language=target_language,
+        languages = _normalize_languages(target_languages, target_language)
+        base = self._base_translation(
+            case_id,
+            languages,
+            requested_id=base_translation_id,
         )
+        base_languages = _target_languages(base) if base else []
+        base_entries = {
+            str(item.get("fragment_id") or ""): item
+            for item in (base or {}).get("entries") or []
+        }
+        entries = []
+        reused_count = 0
+        translated_count = 0
+        for fragment in fragments:
+            prior = base_entries.get(str(fragment["fragment_id"])) or {}
+            prior_source = str(prior.get("source_text") or "")
+            prior_hash = str(prior.get("source_hash") or _source_hash(prior_source))
+            same_source = prior_hash == _source_hash(str(fragment["source_text"]))
+            prior_translations = _entry_translations(prior, base_languages)
+            translations = {
+                language: prior_translations[language]
+                for language in languages
+                if same_source and prior_translations.get(language)
+            }
+            sources = {language: "reused" for language in translations}
+            reused_count += len(translations)
+            entries.append({
+                **fragment,
+                "source_hash": _source_hash(str(fragment["source_text"])),
+                "translations": translations,
+                "translation_sources": sources,
+            })
+        for language in languages:
+            pending = [
+                entry for entry in entries if language not in entry["translations"]
+            ]
+            if not pending:
+                continue
+            translated = self.translator.translate(
+                pending,
+                target_language=language,
+            )
+            translated_by_id = {
+                str(item["fragment_id"]): str(item["translated_text"])
+                for item in translated
+            }
+            for entry in pending:
+                fragment_id = str(entry["fragment_id"])
+                entry["translations"][language] = translated_by_id[fragment_id]
+                entry["translation_sources"][language] = "translated"
+                translated_count += 1
+        for entry in entries:
+            entry["translated_text"] = entry["translations"][languages[0]]
         translation_id = f"TR-{uuid4().hex[:10].upper()}"
         root = self._case_root(case_id) / translation_id
         root.mkdir(parents=True, exist_ok=False)
@@ -294,7 +415,11 @@ class ContractTranslationStore:
             "source_media_type": document.get("media_type"),
             "source_sha256": document.get("sha256"),
             "source_path": document.get("archived_path"),
-            "target_language": target_language,
+            "target_language": languages[0],
+            "target_languages": languages,
+            "base_translation_id": (base or {}).get("translation_id"),
+            "reused_translation_count": reused_count,
+            "translated_translation_count": translated_count,
             "status": "draft",
             "model": self.translator.gateway.model,
             "prompt_version": self.translator.prompt_version,
@@ -312,6 +437,37 @@ class ContractTranslationStore:
         self._write(manifest)
         return self.detail(case_id, translation_id)
 
+    def _base_translation(
+        self,
+        case_id: str,
+        languages: list[str],
+        *,
+        requested_id: str = "",
+    ) -> dict[str, Any] | None:
+        if requested_id:
+            manifest = self.get(case_id, requested_id)
+            if manifest.get("status") != "confirmed":
+                raise ValueError("仅可复用已经人工确认的译稿。")
+            return manifest
+        case_root = self._case_root(case_id)
+        candidates: list[dict[str, Any]] = []
+        if case_root.exists():
+            for path in case_root.glob("TR-*/translation.json"):
+                try:
+                    item = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    continue
+                if item.get("status") != "confirmed":
+                    continue
+                if not set(languages).intersection(_target_languages(item)):
+                    continue
+                candidates.append(item)
+        return max(
+            candidates,
+            key=lambda item: str(item.get("confirmed_at") or item.get("created_at") or ""),
+            default=None,
+        )
+
     def confirm(
         self,
         case_id: str,
@@ -327,11 +483,22 @@ class ContractTranslationStore:
         note = str(review_note or "").strip()
         if not note:
             raise ValueError("确认译稿前必须填写人工复核说明。")
-        supplied = {
-            str(item.get("fragment_id") or ""): str(item.get("translated_text") or "").strip()
-            for item in entries
-            if isinstance(item, dict)
-        }
+        languages = _target_languages(manifest)
+        supplied: dict[str, dict[str, str]] = {}
+        for row in entries:
+            if not isinstance(row, dict):
+                continue
+            fragment_id = str(row.get("fragment_id") or "")
+            translations = {
+                str(language): str(text or "").strip()
+                for language, text in dict(row.get("translations") or {}).items()
+                if str(language) in languages
+            }
+            if not translations and languages:
+                translations[languages[0]] = str(
+                    row.get("translated_text") or ""
+                ).strip()
+            supplied[fragment_id] = translations
         expected = {
             str(item.get("fragment_id") or ""): item
             for item in manifest.get("entries") or []
@@ -340,15 +507,25 @@ class ContractTranslationStore:
             raise ValueError("必须逐段确认当前译稿的全部内容。")
         vault = RedactionVault(case_id, self.vault_dir)
         for fragment_id, item in expected.items():
-            translated = supplied[fragment_id]
-            if not translated or len(translated) > 20_000:
-                raise ValueError(f"{fragment_id} 的译文为空或过长。")
-            redacted = vault.redact(translated)
-            if _tokens(redacted) != _tokens(str(item.get("source_text") or "")):
-                raise ValueError(f"{fragment_id} 未完整保留合同敏感字段。")
-            item["translated_text"] = redacted
+            if set(supplied[fragment_id]) != set(languages):
+                raise ValueError(f"{fragment_id} 必须确认全部目标语言译文。")
+            confirmed_translations: dict[str, str] = {}
+            for language in languages:
+                translated = supplied[fragment_id][language]
+                if not translated or len(translated) > 20_000:
+                    raise ValueError(
+                        f"{fragment_id} 的{LANGUAGES[language]}译文为空或过长。"
+                    )
+                redacted = vault.redact(translated)
+                if _tokens(redacted) != _tokens(str(item.get("source_text") or "")):
+                    raise ValueError(
+                        f"{fragment_id} 的{LANGUAGES[language]}译文未完整保留合同敏感字段。"
+                    )
+                confirmed_translations[language] = redacted
+            item["translations"] = confirmed_translations
+            item["translated_text"] = confirmed_translations[languages[0]]
         vault.persist_local()
-        artifact_path = self._export_bilingual(manifest, vault)
+        artifact_path = self._export_multilingual(manifest, vault)
         manifest.update(
             {
                 "status": "confirmed",
@@ -394,15 +571,25 @@ class ContractTranslationStore:
         manifest: dict[str, Any],
         vault: RedactionVault,
     ) -> Path:
+        return self._export_multilingual(manifest, vault)
+
+    def _export_multilingual(
+        self,
+        manifest: dict[str, Any],
+        vault: RedactionVault,
+    ) -> Path:
         root = self._case_root(str(manifest["case_id"])) / str(
             manifest["translation_id"]
         )
         source_name = _safe_filename(str(manifest.get("source_name") or "contract"))
-        target = root / (
-            f"{Path(source_name).stem}-{manifest['target_language']}-bilingual.docx"
-        )
+        languages = _target_languages(manifest)
+        language_suffix = "-".join(languages)
+        target = root / f"{Path(source_name).stem}-{language_suffix}-multilingual.docx"
         translations = {
-            str(item["fragment_id"]): vault.restore(str(item["translated_text"]))
+            str(item["fragment_id"]): {
+                language: vault.restore(text)
+                for language, text in _entry_translations(item, languages).items()
+            }
             for item in manifest.get("entries") or []
         }
         source = Path(str(manifest.get("source_path") or "")).resolve()
@@ -410,7 +597,7 @@ class ContractTranslationStore:
         if expected_archive not in source.parents or not source.is_file():
             raise PermissionError("合同原件归档路径无效。")
         if source.suffix.lower() == ".docx":
-            self._export_docx(source, target, translations, str(manifest["target_language"]))
+            self._export_docx(source, target, translations, languages)
         else:
             extracted = DocumentExtractor().extract(source)
             source_by_id = {item.fragment_id: item.text for item in extracted.fragments}
@@ -420,7 +607,7 @@ class ContractTranslationStore:
                 entries=list(manifest.get("entries") or []),
                 source_by_id=source_by_id,
                 translations=translations,
-                target_language=str(manifest["target_language"]),
+                target_languages=languages,
             )
         return target
 
@@ -459,8 +646,8 @@ class ContractTranslationStore:
         cls,
         source: Path,
         target: Path,
-        translations: dict[str, str],
-        target_language: str,
+        translations: dict[str, dict[str, str]],
+        target_languages: list[str],
     ) -> None:
         with zipfile.ZipFile(source, "r") as input_archive, zipfile.ZipFile(
             target, "w", zipfile.ZIP_DEFLATED
@@ -481,11 +668,16 @@ class ContractTranslationStore:
                     continue
                 paragraph_number += 1
                 fragment_id = f"paragraph-{paragraph_number}"
-                translated = translations.get(fragment_id)
+                translated = translations.get(fragment_id) or {}
                 if translated and paragraph not in table_paragraphs:
-                    paragraph.addnext(
-                        cls._translation_paragraph(translated, target_language)
-                    )
+                    anchor = paragraph
+                    for language in target_languages:
+                        if translated.get(language):
+                            translation = cls._translation_paragraph(
+                                translated[language], language
+                            )
+                            anchor.addnext(translation)
+                            anchor = translation
             for table_number, table in enumerate(document_xml.iter(f"{W}tbl"), start=1):
                 for row_number, row in enumerate(table.findall(f"./{W}tr"), start=1):
                     column = 1
@@ -502,13 +694,12 @@ class ContractTranslationStore:
                         fragment_id = (
                             f"table-{table_number}-row-{row_number}-column-{column}"
                         )
-                        translated = translations.get(fragment_id)
-                        if translated:
-                            cell.append(
-                                cls._translation_paragraph(
-                                    translated, target_language
-                                )
-                            )
+                        translated = translations.get(fragment_id) or {}
+                        for language in target_languages:
+                            if translated.get(language):
+                                cell.append(cls._translation_paragraph(
+                                    translated[language], language
+                                ))
                         column += column_span
             body = document_xml.find(f"./{W}body")
             if body is not None:
@@ -537,12 +728,12 @@ class ContractTranslationStore:
         source_name: str,
         entries: list[dict[str, Any]],
         source_by_id: dict[str, str],
-        translations: dict[str, str],
-        target_language: str,
+        translations: dict[str, dict[str, str]],
+        target_languages: list[str],
     ) -> None:
         document = Document()
         _style_generated_document(document, author="东江集团")
-        title = document.add_heading("合同双语对照稿", level=0)
+        title = document.add_heading("合同多语言对照稿", level=0)
         title.alignment = 1
         document.add_paragraph(f"原文件：{source_name}")
         warning = document.add_paragraph(
@@ -560,11 +751,14 @@ class ContractTranslationStore:
                 source_by_id.get(str(entry.get("fragment_id") or ""), "")
             )
             source_paragraph.paragraph_format.space_after = Pt(3)
-            translated = document.add_paragraph(
-                f"[{LANGUAGES[target_language]}译文] "
-                f"{translations[str(entry['fragment_id'])]}"
-            )
-            translated.runs[0].italic = True
-            translated.runs[0].font.color.rgb = RGBColor(75, 85, 99)
+            values = translations.get(str(entry["fragment_id"])) or {}
+            for language in target_languages:
+                if not values.get(language):
+                    continue
+                translated = document.add_paragraph(
+                    f"[{LANGUAGES[language]}译文] {values[language]}"
+                )
+                translated.runs[0].italic = True
+                translated.runs[0].font.color.rgb = RGBColor(75, 85, 99)
         target.parent.mkdir(parents=True, exist_ok=True)
         document.save(target)

@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260801-docai1"
-import {escapeHtml, dateTime} from "../format.js?v=20260801-docai1"
+import {api} from "../api.js?v=20260801-core2"
+import {escapeHtml, dateTime} from "../format.js?v=20260801-core2"
 
 const roles = [
   ["sales","销售"],["credit","信用管理"],["finance","财务"],["legal","法务"],

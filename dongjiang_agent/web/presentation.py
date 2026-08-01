@@ -522,6 +522,7 @@ def case_view(
             "message": item.get("message"),
             "suggestion": item.get("suggestion"),
             "clause_excerpt": item.get("clause_excerpt"),
+            "evidence_query": item.get("evidence_query"),
             "document_id": item.get("document_id"),
             "fragment_id": item.get("fragment_id"),
             "location": dict(item.get("location") or {}),

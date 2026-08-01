@@ -10,6 +10,7 @@ import zipfile
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import ANY, patch
+from urllib.parse import quote
 
 from dongjiang_agent.integrations import IntegrationBundle
 from dongjiang_agent.security import AuthStore
@@ -691,7 +692,7 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn("运行风险演示案例", html)
             self.assertNotIn("华南精密制造示例有限公司", html)
 
-        self.connection.request("GET", "/js/app.js?v=20260801-docai1")
+        self.connection.request("GET", "/js/app.js?v=20260801-core2")
         response = self.connection.getresponse()
         javascript = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
@@ -866,6 +867,110 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
+    def test_xlsx_contract_upload_and_image_asset_preview(self):
+        import openpyxl
+
+        _, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "多格式合同客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        case_id = created["case"]["case_id"]
+        self.assertEqual(self.request(
+            "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+        )[0], 200)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "销售合同.xlsx"
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = "合同条款"
+            rows = [
+                "甲方：东江；乙方：客户。合同标的：组件。",
+                "付款：月结60天。知识产权：各自所有。保密：不得披露。",
+                "违约责任：赔偿直接损失。解除与终止：违约可解除。争议解决：深圳法院。",
+                "买方可取消订单且不承担任何责任。",
+            ]
+            for index, value in enumerate(rows, start=1):
+                sheet.cell(index, 1, value)
+            workbook.save(path)
+            workbook.close()
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        status, submitted = self.request(
+            "POST", f"/api/cases/{case_id}/contracts",
+            {"files": [{"name": "销售合同.xlsx", "data_base64": encoded}]},
+        )
+        self.assertEqual(status, 200)
+        finding = next(
+            item for item in submitted["case"]["findings"]
+            if item["rule_id"] == "DJ-CANCEL-WITHOUT-LIABILITY"
+        )
+        self.assertEqual(finding["location"]["kind"], "cell")
+        self.assertEqual(finding["location"]["cell"], "A4")
+
+        image_case = "DJ-IMAGE-ASSET"
+        image_dir = Path(f"data/archive/{image_case}/contract")
+        image_dir.mkdir(parents=True)
+        image = image_dir / "scan.png"
+        image.write_bytes(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII="
+        ))
+        Path("data/cases").mkdir(parents=True, exist_ok=True)
+        Path(f"data/cases/{image_case}.json").write_text(json.dumps({
+            "case_id": image_case,
+            "customer": {"customer_name": "图片合同客户", "customer_type": "new", "business_type": "TKP"},
+            "source_documents": [{
+                "document_id": "DOC-IMAGE", "document_kind": "contract",
+                "name": "scan.png", "archived_path": str(image.resolve()),
+                "media_type": "png", "parse_status": "parsed",
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+        state = json.loads(Path(f"data/cases/{image_case}.json").read_text(encoding="utf-8"))
+        state["source_documents"][0]["extractor"] = "tesseract"
+        state["source_documents"][0]["fragments"] = [{
+            "fragment_id": "image-1",
+            "text": "付款账期120天，买方无责任取消订单。",
+            "location": {
+                "kind": "image", "image": 1, "ocr": True,
+                "ocr_regions": [
+                    {"start": 0, "end": 8, "x": 0.1, "y": 0.1, "width": 0.4, "height": 0.1},
+                    {"start": 8, "end": 18, "x": 0.1, "y": 0.3, "width": 0.6, "height": 0.1},
+                ],
+            },
+        }]
+        Path(f"data/cases/{image_case}.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8"
+        )
+        with patch(
+            "dongjiang_agent.ingestion.DocumentExtractor.extract"
+        ) as extractor:
+            status, preview = self.request(
+                "GET",
+                f"/api/cases/{image_case}/documents/DOC-IMAGE?fragment=image-1&highlight={quote('取消订单')}",
+            )
+        extractor.assert_not_called()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(preview["highlight_regions"]), 1)
+        self.assertEqual(preview["highlight_regions"][0]["y"], 0.3)
+        status, body, headers = self.download(
+            f"/api/cases/{image_case}/documents/DOC-IMAGE/asset"
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"\x89PNG"))
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertIn("inline", headers["Content-Disposition"])
+
     def test_contract_revision_generates_downloads_and_resubmits_clean_version(self):
         _, created = self.request(
             "POST",
@@ -1019,6 +1124,8 @@ class WebApiTests(unittest.TestCase):
             ANY,
             document_id="DOC-API1",
             target_language="en",
+            target_languages=[],
+            base_translation_id="",
             actor={"actor_id": ANY, "display_name": "测试管理员"},
         )
 
@@ -1653,7 +1760,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260801-docai1", html)
+        self.assertIn(b"20260801-core2", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -1669,7 +1776,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260801-docai1"
+            "/js/app.js?v=20260801-core2"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -1687,7 +1794,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
 
         status, api_module, headers = self.download(
-            "/js/api.js?v=20260801-docai1"
+            "/js/api.js?v=20260801-core2"
         )
         self.assertEqual(status, 200)
         self.assertIn(b"responseCache", api_module)

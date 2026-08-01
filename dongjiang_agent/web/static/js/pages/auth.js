@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260801-docai1"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260801-docai1"
-import {navigate} from "../router.js?v=20260801-docai1"
-import {escapeHtml} from "../format.js?v=20260801-docai1"
+import {api} from "../api.js?v=20260801-core2"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260801-core2"
+import {navigate} from "../router.js?v=20260801-core2"
+import {escapeHtml} from "../format.js?v=20260801-core2"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `

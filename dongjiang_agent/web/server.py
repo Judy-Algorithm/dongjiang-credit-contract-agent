@@ -6,13 +6,14 @@ import ipaddress
 import json
 import mimetypes
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..contract.translations import ContractTranslationStore
@@ -112,6 +113,25 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _inline_asset(self, target: Path, filename: str) -> None:
+        body = target.read_bytes()
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        suffix = target.suffix.lower()
+        fallback = f"document{suffix}" if suffix else "document"
+        encoded_name = quote(Path(filename).name)
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header(
+            "Content-Disposition",
+            f"inline; filename={fallback}; filename*=UTF-8''{encoded_name}",
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox")
         self.end_headers()
         self.wfile.write(body)
 
@@ -357,8 +377,10 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         case_id: str,
         document_id: str,
         fragment_id: str,
+        highlight_query: str = "",
     ) -> dict[str, Any]:
-        from ..ingestion import DocumentExtractor, location_label
+        from ..ingestion import DocumentExtractor, DocumentFragment, location_label
+        from ..security import RedactionVault
         from ..workflow import DongjiangWorkflowHarness
 
         try:
@@ -380,8 +402,29 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         expected_root = (Path("data/archive") / case_id).resolve()
         if expected_root not in target.parents or not target.is_file():
             raise PermissionError("文档归档路径无效。")
-        document = DocumentExtractor().extract(target)
-        fragments = document.fragments
+        stored_fragments = list(record.get("fragments") or [])
+        if stored_fragments:
+            vault = RedactionVault(case_id, "data/vault")
+            fragments = [
+                DocumentFragment(
+                    str(item.get("fragment_id") or ""),
+                    vault.restore(str(item.get("text") or "")),
+                    dict(item.get("location") or {}),
+                )
+                for item in stored_fragments
+                if item.get("fragment_id")
+            ]
+            media_type = str(
+                record.get("media_type") or target.suffix.lstrip(".")
+            ).lower()
+            extractor = str(record.get("extractor") or "archive-index")
+            warnings = list(record.get("warnings") or [])
+        else:
+            document = DocumentExtractor().extract(target)
+            fragments = document.fragments
+            media_type = document.media_type
+            extractor = document.extractor
+            warnings = document.warnings
         if fragment_id:
             index = next(
                 (
@@ -397,13 +440,26 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("文档片段不存在或没有可预览文本。")
         selected = fragments[index]
         context = fragments[max(0, index - 1): min(len(fragments), index + 2)]
+        normalized_text = re.sub(r"\s+", "", selected.text).lower()
+        normalized_query = re.sub(r"\s+", "", str(highlight_query or "")).lower()
+        match_start = normalized_text.find(normalized_query) if normalized_query else -1
+        match_end = match_start + len(normalized_query) if match_start >= 0 else -1
+        highlight_regions = []
+        for region in selected.location.get("ocr_regions") or []:
+            start = int(region.get("start") or 0)
+            end = int(region.get("end") or 0)
+            if match_start >= 0 and end > match_start and start < match_end:
+                highlight_regions.append({
+                    key: float(region.get(key) or 0)
+                    for key in ("x", "y", "width", "height")
+                })
         return {
             "document": {
                 "document_id": document_id,
                 "name": record.get("name"),
-                "media_type": document.media_type,
-                "extractor": document.extractor,
-                "warnings": document.warnings,
+                "media_type": media_type,
+                "extractor": extractor,
+                "warnings": warnings,
             },
             "selected_fragment_id": selected.fragment_id,
             "selected_location": selected.location,
@@ -418,7 +474,65 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 }
                 for item in context
             ],
+            "asset_url": (
+                f"/api/cases/{case_id}/documents/{document_id}/asset"
+                if media_type in {
+                    "pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp"
+                }
+                else ""
+            ),
+            "asset_kind": (
+                "pdf"
+                if media_type == "pdf"
+                else "image"
+                if media_type in {"png", "jpg", "jpeg", "tif", "tiff", "bmp"}
+                else ""
+            ),
+            "page_asset_url": (
+                f"/api/cases/{case_id}/documents/{document_id}/page/"
+                f"{int(selected.location.get('page') or 1)}"
+                if media_type == "pdf"
+                else ""
+            ),
+            "highlight_regions": highlight_regions,
         }
+
+    @staticmethod
+    def _document_asset(case_id: str, document_id: str) -> tuple[Path, str]:
+        state = AuditRequestHandler._case_state(case_id)
+        record = next(
+            (
+                item
+                for item in state.get("source_documents") or []
+                if item.get("document_id") == document_id
+            ),
+            None,
+        )
+        if not record:
+            raise KeyError("文档不存在。")
+        target = Path(str(record.get("archived_path") or "")).resolve()
+        expected_root = (Path("data/archive") / case_id).resolve()
+        if expected_root not in target.parents or not target.is_file():
+            raise PermissionError("文档归档路径无效。")
+        media_type = str(record.get("media_type") or target.suffix.lstrip(".")).lower()
+        if media_type not in {"pdf", "png", "jpg", "jpeg", "tif", "tiff", "bmp"}:
+            raise ValueError("该文件格式不支持原件内嵌预览。")
+        return target, str(record.get("name") or target.name)
+
+    def _document_pdf_page(
+        self, case_id: str, document_id: str, page_number: int
+    ) -> None:
+        from ..ingestion import DocumentExtractor
+
+        target, filename = self._document_asset(case_id, document_id)
+        if target.suffix.lower() != ".pdf":
+            raise ValueError("只有PDF支持页面渲染。")
+        if page_number < 1 or page_number > 2000:
+            raise ValueError("PDF页码无效。")
+        with tempfile.TemporaryDirectory(prefix="dongjiang-pdf-preview-") as tmp:
+            preview = Path(tmp) / f"page-{page_number}.png"
+            DocumentExtractor._render_pdf_page(target, page_number, preview)
+            self._inline_asset(preview, f"{Path(filename).stem}-page-{page_number}.png")
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -594,12 +708,33 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 return
             parts = [item for item in path.split("/") if item]
             if (
+                len(parts) == 7
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "documents"
+                and parts[5] == "page"
+            ):
+                self._document_pdf_page(parts[2], parts[4], int(parts[6]))
+                return
+            if (
+                len(parts) == 6
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "documents"
+                and parts[5] == "asset"
+            ):
+                target, filename = self._document_asset(parts[2], parts[4])
+                self._inline_asset(target, filename)
+                return
+            if (
                 len(parts) == 5
                 and parts[:2] == ["api", "cases"]
                 and parts[3] == "documents"
             ):
-                fragment_id = parse_qs(parsed.query).get("fragment", [""])[0]
-                payload = self._document_fragment(parts[2], parts[4], fragment_id)
+                query = parse_qs(parsed.query)
+                fragment_id = query.get("fragment", [""])[0]
+                highlight = query.get("highlight", [""])[0][:500]
+                payload = self._document_fragment(
+                    parts[2], parts[4], fragment_id, highlight
+                )
                 self._json(200, {"ok": True, **payload})
                 return
             if (
@@ -1153,8 +1288,13 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             self._case_state(case_id),
             document_id=str(payload.get("document_id") or ""),
             target_language=str(payload.get("target_language") or ""),
+            target_languages=list(payload.get("target_languages") or []),
+            base_translation_id=str(payload.get("base_translation_id") or ""),
             actor=actor,
         )
+        target_languages = list(translation.get("target_languages") or [])
+        if not target_languages and translation.get("target_language"):
+            target_languages = [str(translation["target_language"])]
         with AuthStore() as store:
             store.audit(
                 "contract.translation_created",
@@ -1164,8 +1304,14 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 detail={
                     "translation_id": translation["translation_id"],
                     "document_id": translation["document_id"],
-                    "target_language": translation["target_language"],
+                    "target_languages": target_languages,
                     "segment_count": translation["segment_count"],
+                    "reused_translation_count": int(
+                        translation.get("reused_translation_count") or 0
+                    ),
+                    "translated_translation_count": int(
+                        translation.get("translated_translation_count") or 0
+                    ),
                     "model": translation["model"],
                 },
                 remote_address=self._remote_address(),
@@ -1191,6 +1337,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             review_note=str(payload.get("review_note") or ""),
             actor=actor,
         )
+        target_languages = list(translation.get("target_languages") or [])
+        if not target_languages and translation.get("target_language"):
+            target_languages = [str(translation["target_language"])]
         with AuthStore() as store:
             store.audit(
                 "contract.translation_confirmed",
@@ -1199,7 +1348,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 target_id=case_id,
                 detail={
                     "translation_id": translation_id,
-                    "target_language": translation["target_language"],
+                    "target_languages": target_languages,
                     "segment_count": translation["segment_count"],
                 },
                 remote_address=self._remote_address(),
