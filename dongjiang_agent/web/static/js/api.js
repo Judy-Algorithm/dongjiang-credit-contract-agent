@@ -1,17 +1,41 @@
 let csrfToken = ""
+const responseCache = new Map()
 
 export function setCsrfToken(value) {
   csrfToken = value || ""
 }
 
 async function request(path, options = {}) {
+  const cacheTtl = Number(options.cacheTtl || 0)
+  const method = options.method || "GET"
+  const cachedValue = responseCache.get(path)
+  if (method === "GET" && cacheTtl > 0 && cachedValue?.value && Date.now() - cachedValue.at < cacheTtl) return cachedValue.value
+  if (method === "GET" && cacheTtl > 0 && cachedValue?.promise) return cachedValue.promise
   const headers = {...(options.headers || {})}
-  if (options.method && options.method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken
-  const response = await fetch(path, {...options, headers, credentials:"same-origin"})
-  const data = await response.json().catch(() => ({ok:false, error:"服务返回了无效响应"}))
-  if (response.status === 401) window.dispatchEvent(new Event("app:unauthorized"))
-  if (!response.ok || !data.ok) throw new Error(data.error || "请求失败")
-  return data
+  if (method !== "GET" && csrfToken) headers["X-CSRF-Token"] = csrfToken
+  const execute = async () => {
+    const {cacheTtl:_, ...fetchOptions} = options
+    const response = await fetch(path, {...fetchOptions, headers, credentials:"same-origin"})
+    const data = await response.json().catch(() => ({ok:false, error:"服务返回了无效响应"}))
+    if (response.status === 401) window.dispatchEvent(new Event("app:unauthorized"))
+    if (!response.ok || !data.ok) throw new Error(data.error || "请求失败")
+    if (method !== "GET") responseCache.clear()
+    return data
+  }
+  if (method !== "GET" || cacheTtl <= 0) return execute()
+  const promise = execute().then((value) => {
+    responseCache.set(path, {at:Date.now(), value})
+    return value
+  }).catch((error) => {
+    responseCache.delete(path)
+    throw error
+  })
+  responseCache.set(path, {at:Date.now(), promise})
+  return promise
+}
+
+function cached(path, ttl = 15000) {
+  return request(path, {cacheTtl:ttl})
 }
 
 export async function encodeFiles(fileList) {
@@ -54,28 +78,29 @@ export const api = {
   confirmPasswordReset:(payload) => post("/api/auth/password-reset/confirm", payload),
   logout:() => post("/api/auth/logout", {}),
   changePassword:(payload) => post("/api/auth/change-password", payload),
-  listUsers:() => request("/api/users"),
+  listUsers:() => cached("/api/users"),
   createUser:(payload) => post("/api/users", payload),
   updateUser:(userId, payload) => patch(`/api/users/${encodeURIComponent(userId)}`, payload),
-  listRegistrations:() => request("/api/registrations"),
+  listRegistrations:() => cached("/api/registrations", 8000),
   reviewRegistration:(userId, payload) => post(`/api/registrations/${encodeURIComponent(userId)}/review`, payload),
-  listNotifications:() => request("/api/notifications"),
+  listNotifications:() => cached("/api/notifications", 8000),
+  navigationSummary:(refresh = false) => refresh ? request("/api/navigation-summary") : cached("/api/navigation-summary", 15000),
   markNotificationRead:(notificationId) => post(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {}),
   markAllNotificationsRead:() => post("/api/notifications/read-all", {}),
   assignCaseOwner:(caseId, ownerUserId) => patch(`/api/cases/${encodeURIComponent(caseId)}`, {owner_user_id:ownerUserId}),
-  listAudit:() => request("/api/audit"),
-  listWritebackFailures:() => request("/api/operations/writebacks"),
-  getSlaDashboard:() => request("/api/operations/sla"),
-  getAgentOperations:() => request("/api/operations/agents"),
+  listAudit:() => cached("/api/audit", 15000),
+  listWritebackFailures:() => cached("/api/operations/writebacks", 10000),
+  getSlaDashboard:() => cached("/api/operations/sla", 10000),
+  getAgentOperations:() => cached("/api/operations/agents", 10000),
   probeModelHealth:() => post("/api/operations/model/probe", {}),
   runSlaSweep:() => post("/api/operations/sla/sweep", {}),
-  getAnalytics:(days = 30) => request(`/api/operations/analytics?days=${encodeURIComponent(days)}`),
+  getAnalytics:(days = 30) => cached(`/api/operations/analytics?days=${encodeURIComponent(days)}`, 15000),
   analyticsExportUrl:(days, format) => `/api/operations/analytics/export.${encodeURIComponent(format)}?days=${encodeURIComponent(days)}`,
-  getBenchmark:() => request("/api/operations/benchmarks"),
+  getBenchmark:() => cached("/api/operations/benchmarks", 15000),
   runBenchmark:(repeats = 2) => post("/api/operations/benchmarks/run", {repeats}),
   benchmarkExportUrl:(format) => `/api/operations/benchmarks/export.${encodeURIComponent(format)}`,
-  listCases:({mine = false} = {}) => request(`/api/cases${mine ? "?mine=1" : ""}`),
-  getCase:(caseId) => request(`/api/cases/${encodeURIComponent(caseId)}`),
+  listCases:({mine = false} = {}) => cached(`/api/cases${mine ? "?mine=1" : ""}`, 10000),
+  getCase:(caseId) => cached(`/api/cases/${encodeURIComponent(caseId)}`, 10000),
   getDocumentFragment:(caseId, documentId, fragmentId = "") => request(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(documentId)}?fragment=${encodeURIComponent(fragmentId)}`),
   createContractRevision:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/revisions`, payload),
   submitContractRevision:(caseId, revisionId) => post(`/api/cases/${encodeURIComponent(caseId)}/revisions/${encodeURIComponent(revisionId)}/submit`, {}),

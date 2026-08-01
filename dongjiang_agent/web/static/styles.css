@@ -141,6 +141,8 @@ nav a.active:not(.primary)::after {
   padding: 44px 0 72px;
 }
 
+.route-view { display: contents; }
+
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -420,11 +422,10 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .error-box { padding: 15px 16px; background: var(--red-bg); border: 1px solid #efb4a7; border-radius: 10px; color: var(--red); }
 .error-box p { margin: 7px 0 13px; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 30; max-width: min(420px, calc(100% - 48px)); padding: 14px 18px; background: var(--ink); border-radius: 10px; box-shadow: var(--shadow); color: var(--canvas); }
-.global-loading { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; gap: 12px; background: rgba(255, 255, 255, .82); backdrop-filter: blur(3px); }
-.global-loading span { width: 28px; height: 28px; border: 3px solid var(--hairline); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
-.global-loading b { font-weight: 550; }
+.navigation-progress { position: fixed; inset: 0 0 auto; z-index: 60; height: 3px; overflow: hidden; background: var(--hairline-soft); pointer-events: none; }
+.navigation-progress span { width: 38%; height: 100%; display: block; background: var(--primary); animation: navigation-progress 1s ease-in-out infinite; }
 .hidden { display: none !important; }
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes navigation-progress { from { transform: translateX(-105%); } to { transform: translateX(365%); } }
 
 .auth-shell { width: 100%; min-height: 100vh; padding: 0; }
 .auth-screen { min-height: 100vh; padding: 48px 20px; display: grid; align-content: center; justify-items: center; background: var(--canvas); }
@@ -457,6 +458,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .account-popover { position: absolute; top: 54px; right: 0; z-index: 20; width: 224px; padding: 13px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow); }
 .account-popover strong, .account-popover small { display: block; }
 .account-popover small { margin: 3px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.account-section-label { margin: 7px 10px 3px; display: block; color: var(--muted); font-size: 10px; font-weight: 700; }
 .account-popover a, .account-popover button { width: 100%; min-height: 42px; padding: 9px 10px; display: block; background: transparent; border: 0; border-radius: 8px; color: var(--body); cursor: pointer; text-align: left; font-weight: 550; }
 .account-popover a:hover, .account-popover button:hover { background: var(--surface-soft); color: var(--ink); }
 .account-popover a.current { background: var(--surface-soft); color: var(--ink); }

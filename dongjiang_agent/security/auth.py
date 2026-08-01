@@ -583,6 +583,12 @@ class AuthStore:
         ).fetchall()
         return [_public_user(row) for row in rows]
 
+    def pending_registration_count(self) -> int:
+        row = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM users WHERE registration_status = 'pending'"
+        ).fetchone()
+        return int(row["count"]) if row else 0
+
     def review_registration(
         self,
         user_id: str,
@@ -1148,6 +1154,13 @@ class AuthStore:
             (user_id,),
         ).fetchone()
         return {"items": items, "unread": int(unread["count"]) if unread else 0}
+
+    def unread_notification_count(self, user_id: str) -> int:
+        row = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND read_at IS NULL",
+            (user_id,),
+        ).fetchone()
+        return int(row["count"]) if row else 0
 
     def mark_notification_read(self, user_id: str, notification_id: str) -> None:
         cursor = self.connection.execute(

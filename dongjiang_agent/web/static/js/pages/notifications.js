@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260801-core3"
-import {navigate} from "../router.js?v=20260731-nav"
-import {escapeHtml, dateTime} from "../format.js?v=20260731-nav"
+import {api} from "../api.js?v=20260801-smooth2"
+import {navigate} from "../router.js?v=20260801-smooth2"
+import {escapeHtml, dateTime} from "../format.js?v=20260801-smooth2"
 
 const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", sla:"时效", agent_incident:"Agent异常", system:"系统"}
 
@@ -13,10 +13,12 @@ export async function renderNotificationsPage(root) {
     </section>`
   root.querySelector("#readAll")?.addEventListener("click", async () => {
     await api.markAllNotificationsRead()
+    window.dispatchEvent(new Event("app:navigation-summary-refresh"))
     window.dispatchEvent(new Event("app:navigate"))
   })
   root.querySelectorAll("[data-notification]").forEach((button) => button.addEventListener("click", async () => {
     await api.markNotificationRead(button.dataset.notification)
+    window.dispatchEvent(new Event("app:navigation-summary-refresh"))
     const link = button.dataset.notificationLink
     if (link) navigate(link)
     else window.dispatchEvent(new Event("app:navigate"))

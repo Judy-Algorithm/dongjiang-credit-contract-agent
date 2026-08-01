@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>东江信审与合同评审</title>
-  <link rel="stylesheet" href="/styles.css?v=20260801-core3">
+  <link rel="stylesheet" href="/styles.css?v=20260801-smooth2">
+  <link rel="modulepreload" href="/js/api.js?v=20260801-smooth2">
+  <link rel="modulepreload" href="/js/auth.js?v=20260801-smooth2">
+  <link rel="modulepreload" href="/js/router.js?v=20260801-smooth2">
+  <link rel="modulepreload" href="/js/format.js?v=20260801-smooth2">
+  <link rel="modulepreload" href="/js/pages/cases.js?v=20260801-smooth2">
 </head>
 <body>
   <header id="appHeader" class="app-header hidden"></header>
 
   <main id="app" class="page-shell" aria-live="polite"></main>
   <div id="toast" class="toast hidden" role="status"></div>
-  <div id="globalLoading" class="global-loading hidden"><span></span><b>正在处理</b></div>
+  <div id="globalLoading" class="navigation-progress hidden" role="progressbar" aria-label="页面加载中"><span></span></div>
 
-  <script type="module" src="/js/app.js?v=20260801-core3"></script>
+  <script type="module" src="/js/app.js?v=20260801-smooth2"></script>
 </body>
 </html>

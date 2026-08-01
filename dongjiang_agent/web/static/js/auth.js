@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260801-core3"
+import {api, setCsrfToken} from "./api.js?v=20260801-smooth2"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

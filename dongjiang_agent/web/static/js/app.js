@@ -10,34 +10,44 @@ let loadAuth
 let currentRoute
 let installRouter
 let navigate
+let renderSequence = 0
+let navigationTimer = null
+const modulePromises = new Map()
+const navigationSummary = {unread:0, pendingRegistrations:0, loadedAt:0, inFlight:null}
+const NAVIGATION_SUMMARY_TTL = 15000
+let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260801-core3",
-  register: "./pages/auth.js?v=20260801-core3",
-  "forgot-password": "./pages/auth.js?v=20260801-core3",
-  setup: "./pages/auth.js?v=20260801-core3",
-  "change-password": "./pages/auth.js?v=20260801-core3",
-  cases: "./pages/cases.js?v=20260801-core3",
-  "case-new": "./pages/case-new.js?v=20260801-core3",
-  "case-detail": "./pages/case-detail.js?v=20260801-core3",
-  "case-action": "./pages/case-action.js?v=20260801-core3",
-  users: "./pages/users.js?v=20260801-core3",
-  audit: "./pages/audit.js?v=20260801-core3",
-  writebacks: "./pages/writebacks.js?v=20260801-core3",
-  registrations: "./pages/registrations.js?v=20260801-core3",
-  notifications: "./pages/notifications.js?v=20260801-core3",
-  operations: "./pages/operations.js?v=20260801-core3",
-  "agent-operations": "./pages/agent-operations.js?v=20260801-core3",
-  analytics: "./pages/analytics.js?v=20260801-core3",
-  benchmarks: "./pages/benchmark.js?v=20260801-core3",
+  login: "./pages/auth.js?v=20260801-smooth2",
+  register: "./pages/auth.js?v=20260801-smooth2",
+  "forgot-password": "./pages/auth.js?v=20260801-smooth2",
+  setup: "./pages/auth.js?v=20260801-smooth2",
+  "change-password": "./pages/auth.js?v=20260801-smooth2",
+  cases: "./pages/cases.js?v=20260801-smooth2",
+  "case-new": "./pages/case-new.js?v=20260801-smooth2",
+  "case-detail": "./pages/case-detail.js?v=20260801-smooth2",
+  "case-action": "./pages/case-action.js?v=20260801-smooth2",
+  users: "./pages/users.js?v=20260801-smooth2",
+  audit: "./pages/audit.js?v=20260801-smooth2",
+  writebacks: "./pages/writebacks.js?v=20260801-smooth2",
+  registrations: "./pages/registrations.js?v=20260801-smooth2",
+  notifications: "./pages/notifications.js?v=20260801-smooth2",
+  operations: "./pages/operations.js?v=20260801-smooth2",
+  "agent-operations": "./pages/agent-operations.js?v=20260801-smooth2",
+  analytics: "./pages/analytics.js?v=20260801-smooth2",
+  benchmarks: "./pages/benchmark.js?v=20260801-smooth2",
 }
 
 async function loadModule(path) {
-  try {
-    return await import(path)
-  } catch (_) {
-    await new Promise((resolve) => window.setTimeout(resolve, 350))
+  if (modulePromises.has(path)) return modulePromises.get(path)
+  const promise = import(path).catch(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 180))
     return import(`${path}&retry=${Date.now()}`)
-  }
+  }).catch((error) => {
+    modulePromises.delete(path)
+    throw error
+  })
+  modulePromises.set(path, promise)
+  return promise
 }
 
 async function loadPageModule(routeName) {
@@ -47,19 +57,24 @@ async function loadPageModule(routeName) {
 }
 
 async function bootstrap() {
-  const authModule = await loadModule("./auth.js?v=20260801-core3")
+  const [authModule, apiModule, routerModule] = await Promise.all([
+    loadModule("./auth.js?v=20260801-smooth2"),
+    loadModule("./api.js?v=20260801-smooth2"),
+    loadModule("./router.js?v=20260801-smooth2"),
+  ])
   ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
-  api = (await loadModule("./api.js?v=20260801-core3")).api
-  const routerModule = await loadModule("./router.js?v=20260801-core3")
+  api = apiModule.api
   ;({currentRoute, installRouter, navigate} = routerModule)
   installRouter(render)
   await render()
+  warmPageModules()
 }
 
 async function render() {
+  const renderId = ++renderSequence
   const route = currentRoute()
-  loading.classList.remove("hidden")
-  root.innerHTML = ""
+  let committed = false
+  startNavigationProgress()
   try {
     const auth = await loadAuth()
     if (auth.setupRequired && route.name !== "setup") return navigate("/setup", {replace:true})
@@ -69,91 +84,99 @@ async function render() {
     if (auth.authenticated && auth.user.must_change_password && route.name !== "change-password") return navigate("/change-password", {replace:true})
     if (route.name === "not-found") return navigate(auth.authenticated ? "/cases" : "/login", {replace:true})
 
-    await renderHeader(auth, route)
+    renderHeader(auth, route)
     setActiveNav(route)
     const page = await loadPageModule(route.name)
-    if (route.name === "login") page.renderLoginPage(root)
-    if (route.name === "register") page.renderRegisterPage(root)
-    if (route.name === "forgot-password") page.renderForgotPasswordPage(root)
-    if (route.name === "setup") page.renderSetupPage(root)
-    if (route.name === "change-password") page.renderChangePasswordPage(root)
-    if (route.name === "cases") await page.renderCasesPage(root, route)
+    const nextView = document.createElement("div")
+    nextView.className = "route-view"
+    if (route.name === "login") page.renderLoginPage(nextView)
+    if (route.name === "register") page.renderRegisterPage(nextView)
+    if (route.name === "forgot-password") page.renderForgotPasswordPage(nextView)
+    if (route.name === "setup") page.renderSetupPage(nextView)
+    if (route.name === "change-password") page.renderChangePasswordPage(nextView)
+    if (route.name === "cases") await page.renderCasesPage(nextView, route)
     if (route.name === "case-new") {
       if (!hasRole("sales")) throw new Error("只有销售角色可以发起信审。")
-      await page.renderNewCasePage(root, route)
+      await page.renderNewCasePage(nextView, route)
     }
-    if (route.name === "case-detail") await page.renderCaseDetailPage(root, route)
-    if (route.name === "case-action") await page.renderCaseActionPage(root, route)
+    if (route.name === "case-detail") await page.renderCaseDetailPage(nextView, route)
+    if (route.name === "case-action") await page.renderCaseActionPage(nextView, route)
     if (route.name === "users") {
       if (!hasRole("admin")) throw new Error("只有管理员可以管理用户。")
-      await page.renderUsersPage(root)
+      await page.renderUsersPage(nextView)
     }
     if (route.name === "audit") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看安全审计。")
-      await page.renderAuditPage(root)
+      await page.renderAuditPage(nextView)
     }
     if (route.name === "writebacks") {
       if (!hasRole("admin")) throw new Error("只有管理员可以处理系统回写。")
-      await page.renderWritebacksPage(root)
+      await page.renderWritebacksPage(nextView)
     }
     if (route.name === "registrations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以审核注册申请。")
-      await page.renderRegistrationsPage(root)
+      await page.renderRegistrationsPage(nextView)
     }
-    if (route.name === "notifications") await page.renderNotificationsPage(root)
+    if (route.name === "notifications") await page.renderNotificationsPage(nextView)
     if (route.name === "operations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看时效运营。")
-      await page.renderOperationsPage(root)
+      await page.renderOperationsPage(nextView)
     }
     if (route.name === "agent-operations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看 Agent 运维。")
-      await page.renderAgentOperationsPage(root)
+      await page.renderAgentOperationsPage(nextView)
     }
     if (route.name === "analytics") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看管理分析。")
-      await page.renderAnalyticsPage(root, route)
+      await page.renderAnalyticsPage(nextView, route)
     }
     if (route.name === "benchmarks") {
       if (!hasRole("admin")) throw new Error("只有管理员可以运行质量评测。")
-      await page.renderBenchmarkPage(root)
+      await page.renderBenchmarkPage(nextView)
     }
+    if (renderId !== renderSequence) return
+    root.replaceChildren(nextView)
+    committed = true
+    if (["notifications", "registrations"].includes(route.name)) refreshNavigationSummary(auth, {force:true})
   } catch (error) {
+    if (renderId !== renderSequence) return
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
+    committed = true
   } finally {
-    loading.classList.add("hidden")
-    window.scrollTo({top:0, behavior:"instant"})
+    if (renderId === renderSequence) {
+      stopNavigationProgress()
+      if (committed) window.scrollTo({top:0, behavior:"instant"})
+    }
   }
 }
 
-async function renderHeader(auth, route) {
+function renderHeader(auth, route) {
   const publicPage = ["login","register","forgot-password","setup"].includes(route.name)
   shellHeader.classList.toggle("hidden", publicPage)
   root.classList.toggle("auth-shell", publicPage)
-  if (publicPage || !auth.authenticated) return
-  const user = auth.user
-  let unread = 0
-  let pendingRegistrations = 0
-  try {
-    unread = Number((await api.listNotifications()).unread || 0)
-    if (hasRole("admin")) {
-      const applications = (await api.listRegistrations()).applications || []
-      pendingRegistrations = applications.filter((item) => item.registration_status === "pending").length
-    }
-  } catch (_) {
-    // Header counters are helpful but must not block the working page.
+  if (publicPage || !auth.authenticated) {
+    renderedHeaderUserId = ""
+    return
   }
+  const user = auth.user
+  if (renderedHeaderUserId === user.user_id && shellHeader.childElementCount) {
+    refreshNavigationSummary(auth)
+    return
+  }
+  const unread = navigationSummary.unread
+  const pendingRegistrations = navigationSummary.pendingRegistrations
   shellHeader.innerHTML = `
     <a class="identity" href="/cases" data-link><span class="brand-mark">东江</span><span>信审与合同评审</span></a>
     <nav>
       <a href="/cases" data-link data-nav="cases">案件</a>
       ${hasRole("sales") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
-      <a href="/notifications" data-link data-nav="notifications">通知${unread ? `<span class="nav-count">${Math.min(unread, 99)}</span>` : ""}</a>
-      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/benchmarks" data-link data-nav="benchmarks">质量评测</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
+      <a href="/notifications" data-link data-nav="notifications">通知<span id="notificationCount" class="nav-count ${unread ? "" : "hidden"}">${Math.min(unread, 99)}</span></a>
+      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/benchmarks" data-link data-nav="benchmarks">质量评测</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
-        <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b>${pendingRegistrations ? `<em class="account-count">${Math.min(pendingRegistrations, 99)}</em>` : ""}</button>
+        <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b><em id="accountRegistrationCount" class="account-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</em></button>
         <div id="accountPopover" class="account-popover hidden">
           <strong>${escapeText(user.display_name)}</strong><small>${escapeText(user.role_labels.join(" · "))}</small>
-          ${hasRole("admin") ? `<a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link>注册审核${pendingRegistrations ? `<span class="account-menu-count">${Math.min(pendingRegistrations, 99)}</span>` : ""}</a>` : ""}
+          ${hasRole("admin") ? `<span class="account-section-label">系统管理</span><a class="${route.name === "users" ? "current" : ""}" href="/users" data-link data-account-nav="users">用户管理</a><a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link data-account-nav="registrations">注册审核<span id="registrationMenuCount" class="account-menu-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</span></a>` : ""}
           <a href="/change-password" data-link>修改密码</a><button id="logoutButton" type="button">退出登录</button>
         </div>
       </div>
@@ -163,11 +186,67 @@ async function renderHeader(auth, route) {
   shellHeader.querySelector("#logoutButton").addEventListener("click", async () => {
     await api.logout(); clearAuth(); navigate("/login", {replace:true})
   })
+  renderedHeaderUserId = user.user_id
+  refreshNavigationSummary(auth)
+}
+
+function refreshNavigationSummary(auth, {force = false} = {}) {
+  if (!auth.authenticated) return
+  const fresh = Date.now() - navigationSummary.loadedAt < NAVIGATION_SUMMARY_TTL
+  if (!force && fresh) return
+  if (navigationSummary.inFlight) return navigationSummary.inFlight
+  navigationSummary.inFlight = api.navigationSummary(force).then((data) => {
+    navigationSummary.unread = Number(data.unread_notifications || 0)
+    navigationSummary.pendingRegistrations = Number(data.pending_registrations || 0)
+    navigationSummary.loadedAt = Date.now()
+    updateHeaderCounts(auth.user)
+  }).catch(() => {}).finally(() => { navigationSummary.inFlight = null })
+  return navigationSummary.inFlight
+}
+
+function updateHeaderCounts(user) {
+  const notificationCount = shellHeader.querySelector("#notificationCount")
+  if (notificationCount) {
+    notificationCount.textContent = Math.min(navigationSummary.unread, 99)
+    notificationCount.classList.toggle("hidden", !navigationSummary.unread)
+  }
+  for (const id of ["accountRegistrationCount", "registrationMenuCount"]) {
+    const count = shellHeader.querySelector(`#${id}`)
+    if (!count) continue
+    count.textContent = Math.min(navigationSummary.pendingRegistrations, 99)
+    count.classList.toggle("hidden", !navigationSummary.pendingRegistrations)
+  }
+  const accountButton = shellHeader.querySelector("#accountButton")
+  if (accountButton) accountButton.setAttribute("aria-label", `${user.display_name || user.username}账户菜单${navigationSummary.pendingRegistrations ? `，${navigationSummary.pendingRegistrations}个注册申请待审核` : ""}`)
+}
+
+function startNavigationProgress() {
+  window.clearTimeout(navigationTimer)
+  navigationTimer = window.setTimeout(() => loading.classList.remove("hidden"), 180)
+}
+
+function stopNavigationProgress() {
+  window.clearTimeout(navigationTimer)
+  loading.classList.add("hidden")
+}
+
+function warmPageModules() {
+  const routes = ["cases", "case-detail", "case-action", "notifications"]
+  if (hasRole("sales")) routes.push("case-new")
+  if (hasRole("admin")) routes.push("users", "registrations", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks")
+  const warm = () => {
+    routes.forEach((name) => loadPageModule(name).catch(() => {}))
+    Promise.allSettled([api.listCases(), api.listNotifications()])
+  }
+  if ("requestIdleCallback" in window) window.requestIdleCallback(warm, {timeout:1500})
+  else window.setTimeout(warm, 300)
 }
 
 function setActiveNav(route) {
   const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "agent-operations" ? "agent-operations" : route.name === "analytics" ? "analytics" : route.name === "benchmarks" ? "benchmarks" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "registrations" ? "" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
+  document.querySelectorAll("[data-account-nav]").forEach((link) => link.classList.toggle("current", link.dataset.accountNav === route.name))
+  shellHeader.querySelector("#accountPopover")?.classList.add("hidden")
 }
 
 function escapeText(value) {
@@ -176,6 +255,11 @@ function escapeText(value) {
 
 window.addEventListener("app:toast", (event) => {
   toast.textContent = event.detail; toast.classList.remove("hidden"); window.setTimeout(() => toast.classList.add("hidden"), 2200)
+})
+window.addEventListener("app:navigation-summary-refresh", () => {
+  const auth = currentAuth()
+  navigationSummary.loadedAt = 0
+  refreshNavigationSummary(auth, {force:true})
 })
 window.addEventListener("app:unauthorized", () => {
   if (!currentAuth().authenticated) return

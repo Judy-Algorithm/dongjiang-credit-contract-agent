@@ -307,7 +307,12 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
-        self.send_header("Cache-Control", "no-store, max-age=0")
+        if target.name == "index.html":
+            self.send_header("Cache-Control", "no-store, max-age=0")
+        elif "v=" in self.path:
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "public, max-age=300")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(body)
@@ -456,6 +461,23 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 with AuthStore() as store:
                     result = store.list_notifications(str(user["user_id"]))
                 self._json(200, {"ok": True, **result})
+                return
+            if path == "/api/navigation-summary":
+                with AuthStore() as store:
+                    unread = store.unread_notification_count(str(user["user_id"]))
+                    pending_registrations = (
+                        store.pending_registration_count()
+                        if "admin" in set(user.get("roles") or [])
+                        else 0
+                    )
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "unread_notifications": unread,
+                        "pending_registrations": pending_registrations,
+                    },
+                )
                 return
             if path == "/api/audit":
                 self._require_roles(user, "admin")

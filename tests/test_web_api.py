@@ -691,17 +691,63 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn("运行风险演示案例", html)
             self.assertNotIn("华南精密制造示例有限公司", html)
 
-        self.connection.request("GET", "/js/app.js?v=20260731-nav")
+        self.connection.request("GET", "/js/app.js?v=20260801-smooth2")
         response = self.connection.getresponse()
         javascript = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
+        self.assertIn("max-age=31536000", response.headers["Cache-Control"])
+        self.assertIn("immutable", response.headers["Cache-Control"])
         self.assertNotIn('data-nav="tasks">我的待办', javascript)
         self.assertIn('href="/cases/new" data-link data-nav="new">发起信审', javascript)
         self.assertIn('href="/agent-operations" data-link data-nav="agent-operations">Agent运维', javascript)
+        self.assertNotIn('href="/users" data-link data-nav="users">用户', javascript)
         self.assertNotIn('class="primary small" href="/cases/new"', javascript)
         account_start = javascript.index('<div id="accountPopover"')
-        account_end = javascript.index('</div>', account_start)
+        account_end = javascript.index('</div>', account_start) + len('</div>')
+        self.assertIn('系统管理', javascript[account_start:account_end])
+        self.assertIn('href="/users"', javascript[account_start:account_end])
         self.assertIn('href="/registrations"', javascript[account_start:account_end])
+
+        self.connection.request("GET", "/cases")
+        response = self.connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
+
+    def test_navigation_summary_is_lightweight_scoped_and_admin_aware(self):
+        with AuthStore() as store:
+            store.create_notification(
+                self.request("GET", "/api/auth/status")[1]["user"]["user_id"],
+                category="system",
+                title="导航摘要测试",
+                body="只统计未读数量",
+            )
+            store.create_user(
+                username="summary.pending",
+                display_name="待审核摘要用户",
+                password="InitialPass123",
+                roles=["sales"],
+                active=False,
+                registration_status="pending",
+            )
+        status, summary = self.request("GET", "/api/navigation-summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(summary["unread_notifications"], 1)
+        self.assertEqual(summary["pending_registrations"], 1)
+        self.assertEqual(
+            set(summary),
+            {
+                "ok",
+                "unread_notifications",
+                "pending_registrations",
+            },
+        )
+
+        self.create_user("summary.sales", "摘要销售", ["sales"])
+        self.activate_user("summary.sales")
+        status, sales_summary = self.request("GET", "/api/navigation-summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(sales_summary["pending_registrations"], 0)
 
     def test_oa_callback_requires_token_and_complete_approval_chain(self):
         _, created = self.request(
@@ -1514,7 +1560,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260801-core3", html)
+        self.assertIn(b"20260801-smooth2", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -1530,16 +1576,30 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260801-core3"
+            "/js/app.js?v=20260801-smooth2"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
         self.assertIn("async function loadModule", source)
-        self.assertIn("await import(path)", source)
+        self.assertIn("const promise = import(path)", source)
         self.assertIn("retry=${Date.now()}", source)
         self.assertIn("pageModulePaths", source)
+        self.assertIn("refreshNavigationSummary", source)
+        self.assertIn("startNavigationProgress", source)
+        self.assertIn("warmPageModules", source)
+        self.assertIn("Promise.all([", source)
+        self.assertIn("root.replaceChildren(nextView)", source)
+        self.assertNotIn('root.innerHTML = ""', source)
         self.assertNotIn('from "./pages/', source)
         self.assertIn("javascript", headers["Content-Type"])
+
+        status, api_module, headers = self.download(
+            "/js/api.js?v=20260801-smooth2"
+        )
+        self.assertEqual(status, 200)
+        self.assertIn(b"responseCache", api_module)
+        self.assertIn(b"cacheTtl", api_module)
+        self.assertIn("immutable", headers["Cache-Control"])
 
     @patch("dongjiang_agent.web.server.ModelHealthService")
     def test_model_probe_is_admin_only_and_audited(self, service_class):
