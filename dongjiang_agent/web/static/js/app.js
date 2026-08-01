@@ -1,25 +1,60 @@
-import {api} from "./api.js?v=20260801-benchmark"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260801-benchmark"
-import {currentRoute, installRouter, navigate} from "./router.js?v=20260801-benchmark"
-import {renderAuditPage} from "./pages/audit.js?v=20260801-benchmark"
-import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260801-benchmark"
-import {renderCasesPage} from "./pages/cases.js?v=20260801-benchmark"
-import {renderNewCasePage} from "./pages/case-new.js?v=20260801-benchmark"
-import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260801-benchmark"
-import {renderCaseActionPage} from "./pages/case-action.js?v=20260801-benchmark"
-import {renderUsersPage} from "./pages/users.js?v=20260801-benchmark"
-import {renderWritebacksPage} from "./pages/writebacks.js?v=20260801-benchmark"
-import {renderRegistrationsPage} from "./pages/registrations.js?v=20260801-benchmark"
-import {renderNotificationsPage} from "./pages/notifications.js?v=20260801-benchmark"
-import {renderOperationsPage} from "./pages/operations.js?v=20260801-benchmark"
-import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260801-benchmark"
-import {renderAnalyticsPage} from "./pages/analytics.js?v=20260801-benchmark"
-import {renderBenchmarkPage} from "./pages/benchmark.js?v=20260801-benchmark"
-
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
 const loading = document.getElementById("globalLoading")
 const toast = document.getElementById("toast")
+let api
+let clearAuth
+let currentAuth
+let hasRole
+let loadAuth
+let currentRoute
+let installRouter
+let navigate
+const pageModulePaths = {
+  login: "./pages/auth.js?v=20260801-display-fix",
+  register: "./pages/auth.js?v=20260801-display-fix",
+  "forgot-password": "./pages/auth.js?v=20260801-display-fix",
+  setup: "./pages/auth.js?v=20260801-display-fix",
+  "change-password": "./pages/auth.js?v=20260801-display-fix",
+  cases: "./pages/cases.js?v=20260801-display-fix",
+  "case-new": "./pages/case-new.js?v=20260801-display-fix",
+  "case-detail": "./pages/case-detail.js?v=20260801-display-fix",
+  "case-action": "./pages/case-action.js?v=20260801-display-fix",
+  users: "./pages/users.js?v=20260801-display-fix",
+  audit: "./pages/audit.js?v=20260801-display-fix",
+  writebacks: "./pages/writebacks.js?v=20260801-display-fix",
+  registrations: "./pages/registrations.js?v=20260801-display-fix",
+  notifications: "./pages/notifications.js?v=20260801-display-fix",
+  operations: "./pages/operations.js?v=20260801-display-fix",
+  "agent-operations": "./pages/agent-operations.js?v=20260801-display-fix",
+  analytics: "./pages/analytics.js?v=20260801-display-fix",
+  benchmarks: "./pages/benchmark.js?v=20260801-display-fix",
+}
+
+async function loadModule(path) {
+  try {
+    return await import(path)
+  } catch (_) {
+    await new Promise((resolve) => window.setTimeout(resolve, 350))
+    return import(`${path}&retry=${Date.now()}`)
+  }
+}
+
+async function loadPageModule(routeName) {
+  const path = pageModulePaths[routeName]
+  if (!path) throw new Error("页面模块不存在。")
+  return loadModule(path)
+}
+
+async function bootstrap() {
+  const authModule = await loadModule("./auth.js?v=20260801-display-fix")
+  ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
+  api = (await loadModule("./api.js?v=20260801-display-fix")).api
+  const routerModule = await loadModule("./router.js?v=20260801-display-fix")
+  ;({currentRoute, installRouter, navigate} = routerModule)
+  installRouter(render)
+  await render()
+}
 
 async function render() {
   const route = currentRoute()
@@ -36,50 +71,51 @@ async function render() {
 
     await renderHeader(auth, route)
     setActiveNav(route)
-    if (route.name === "login") renderLoginPage(root)
-    if (route.name === "register") renderRegisterPage(root)
-    if (route.name === "forgot-password") renderForgotPasswordPage(root)
-    if (route.name === "setup") renderSetupPage(root)
-    if (route.name === "change-password") renderChangePasswordPage(root)
-    if (route.name === "cases") await renderCasesPage(root, route)
+    const page = await loadPageModule(route.name)
+    if (route.name === "login") page.renderLoginPage(root)
+    if (route.name === "register") page.renderRegisterPage(root)
+    if (route.name === "forgot-password") page.renderForgotPasswordPage(root)
+    if (route.name === "setup") page.renderSetupPage(root)
+    if (route.name === "change-password") page.renderChangePasswordPage(root)
+    if (route.name === "cases") await page.renderCasesPage(root, route)
     if (route.name === "case-new") {
       if (!hasRole("sales")) throw new Error("只有销售角色可以发起信审。")
-      await renderNewCasePage(root, route)
+      await page.renderNewCasePage(root, route)
     }
-    if (route.name === "case-detail") await renderCaseDetailPage(root, route)
-    if (route.name === "case-action") await renderCaseActionPage(root, route)
+    if (route.name === "case-detail") await page.renderCaseDetailPage(root, route)
+    if (route.name === "case-action") await page.renderCaseActionPage(root, route)
     if (route.name === "users") {
       if (!hasRole("admin")) throw new Error("只有管理员可以管理用户。")
-      await renderUsersPage(root)
+      await page.renderUsersPage(root)
     }
     if (route.name === "audit") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看安全审计。")
-      await renderAuditPage(root)
+      await page.renderAuditPage(root)
     }
     if (route.name === "writebacks") {
       if (!hasRole("admin")) throw new Error("只有管理员可以处理系统回写。")
-      await renderWritebacksPage(root)
+      await page.renderWritebacksPage(root)
     }
     if (route.name === "registrations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以审核注册申请。")
-      await renderRegistrationsPage(root)
+      await page.renderRegistrationsPage(root)
     }
-    if (route.name === "notifications") await renderNotificationsPage(root)
+    if (route.name === "notifications") await page.renderNotificationsPage(root)
     if (route.name === "operations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看时效运营。")
-      await renderOperationsPage(root)
+      await page.renderOperationsPage(root)
     }
     if (route.name === "agent-operations") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看 Agent 运维。")
-      await renderAgentOperationsPage(root)
+      await page.renderAgentOperationsPage(root)
     }
     if (route.name === "analytics") {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看管理分析。")
-      await renderAnalyticsPage(root, route)
+      await page.renderAnalyticsPage(root, route)
     }
     if (route.name === "benchmarks") {
       if (!hasRole("admin")) throw new Error("只有管理员可以运行质量评测。")
-      await renderBenchmarkPage(root)
+      await page.renderBenchmarkPage(root)
     }
   } catch (error) {
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
@@ -149,5 +185,7 @@ window.addEventListener("unhandledrejection", (event) => {
   event.preventDefault(); toast.textContent = event.reason?.message || "操作失败"; toast.classList.remove("hidden"); window.setTimeout(() => toast.classList.add("hidden"), 3500)
 })
 
-installRouter(render)
-render()
+bootstrap().catch((error) => {
+  loading.classList.add("hidden")
+  root.innerHTML = `<div class="error-box"><b>页面资源加载失败</b><p>${escapeText(error.message || "网络连接短暂异常，请重新加载页面。")}</p><a href="${escapeText(window.location.href)}" class="secondary">重新加载</a></div>`
+})

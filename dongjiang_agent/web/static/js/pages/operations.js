@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-benchmark"
+import {api} from "../api.js?v=20260801-display-fix"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 export async function renderOperationsPage(root) {

@@ -1522,6 +1522,19 @@ class WebApiTests(unittest.TestCase):
         self.assertIn(b"renderBenchmarkPage", module)
         self.assertIn("javascript", headers["Content-Type"])
 
+    def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
+        status, module, headers = self.download(
+            "/js/app.js?v=20260801-display-fix"
+        )
+        self.assertEqual(status, 200)
+        source = module.decode("utf-8")
+        self.assertIn("async function loadModule", source)
+        self.assertIn("await import(path)", source)
+        self.assertIn("retry=${Date.now()}", source)
+        self.assertIn("pageModulePaths", source)
+        self.assertNotIn('from "./pages/', source)
+        self.assertIn("javascript", headers["Content-Type"])
+
 
 if __name__ == "__main__":
     unittest.main()
