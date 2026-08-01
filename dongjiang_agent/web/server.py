@@ -19,6 +19,7 @@ from ..operations import (
     AgentIncidentService,
     AgentOperationsService,
     AnalyticsService,
+    BenchmarkService,
     SLAMonitor,
     SLAService,
     agent_incident_view,
@@ -287,7 +288,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "agent-operations", "analytics", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -498,6 +499,32 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._require_roles(user, "admin")
                 days = parse_qs(parsed.query).get("days", ["30"])[0]
                 self._json(200, {"ok": True, **AnalyticsService().report(days=days)})
+                return
+            if path == "/api/operations/benchmarks":
+                self._require_roles(user, "admin")
+                self._json(200, {"ok": True, **BenchmarkService().summary()})
+                return
+            if path in {
+                "/api/operations/benchmarks/export.csv",
+                "/api/operations/benchmarks/export.xlsx",
+            }:
+                self._require_roles(user, "admin")
+                service = BenchmarkService()
+                report = service.summary().get("latest")
+                if not report:
+                    raise ValueError("尚未运行质量评测，暂无可导出的报告。")
+                if path.endswith(".csv"):
+                    self._download(
+                        service.export_csv(report),
+                        filename=f"dongjiang-quality-benchmark-{report['run_id']}.csv",
+                        content_type="text/csv; charset=utf-8",
+                    )
+                else:
+                    self._download(
+                        service.export_xlsx(report),
+                        filename=f"dongjiang-quality-benchmark-{report['run_id']}.xlsx",
+                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
                 return
             if path in {
                 "/api/operations/analytics/export.csv",
@@ -745,6 +772,30 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         remote_address=self._remote_address(),
                     )
                 self._json(200, result)
+                return
+            if path == "/api/operations/benchmarks/run":
+                self._require_roles(user, "admin")
+                repeats = int(payload.get("repeats") or 2)
+                report = BenchmarkService().run(repeats=repeats)
+                with AuthStore() as store:
+                    store.audit(
+                        "operations.benchmark_run",
+                        actor=user,
+                        target_type="benchmark",
+                        target_id=str(report.get("run_id") or ""),
+                        detail={
+                            "suite_id": (report.get("suite") or {}).get("suite_id"),
+                            "suite_version": (report.get("suite") or {}).get("version"),
+                            "case_total": (report.get("metrics") or {}).get("case_total"),
+                            "case_passed": (report.get("metrics") or {}).get("case_passed"),
+                            "status": report.get("status"),
+                            "repeat_count": report.get("repeat_count"),
+                            "external_ai": (report.get("runtime") or {}).get("external_ai"),
+                            "enterprise_integrations": (report.get("runtime") or {}).get("enterprise_integrations"),
+                        },
+                        remote_address=self._remote_address(),
+                    )
+                self._json(200, {"ok": True, "report": report})
                 return
             parts = [item for item in path.split("/") if item]
             if len(parts) == 4 and parts[:2] == ["api", "notifications"] and parts[3] == "read":

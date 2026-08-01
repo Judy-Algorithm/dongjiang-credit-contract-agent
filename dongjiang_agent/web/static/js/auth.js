@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260801-candidate"
+import {api, setCsrfToken} from "./api.js?v=20260801-benchmark"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

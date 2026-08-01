@@ -1,0 +1,189 @@
+{
+  "suite_id": "dongjiang-competition-benchmark",
+  "version": "1.0.0",
+  "title": "东江信审与合同评审合成基准集",
+  "policy_status": "PROPOSED_NOT_OFFICIAL",
+  "source": "比赛命题材料、公开规则边界与完全合成案例",
+  "disclaimer": "本基准集只用于规则回归和流程验证，不代表真实业务泛化准确率或东江正式信用政策。",
+  "defaults": {
+    "customer_type": "new",
+    "business_type": "TKP",
+    "project_name": "质量评测项目",
+    "monthly_order_amount": 1000000,
+    "external_rating": "AA",
+    "asset_liability_ratio": 0.45,
+    "current_ratio": 1.5
+  },
+  "templates": {
+    "complete_contract": "销售合同\n甲方：东江集团；乙方：{customer_name}。\n合同标的：精密组件。合同金额：{amount}元，信用额度：{credit}元。\n付款及账期：月结{term}天。知识产权：双方背景知识产权各自所有。保密：不得披露商业秘密。\n违约责任：违约方赔偿可证明的直接损失，累计不超过合同金额。解除与终止：重大违约经书面催告30日未改正后可以解除。争议解决：适用中国法律，由深圳市人民法院管辖。\n{extra}",
+    "missing_confidentiality": "销售合同\n甲方：东江集团；乙方：{customer_name}。合同标的：精密组件。\n合同金额：{amount}元，信用额度：{credit}元。付款及账期：月结{term}天。\n知识产权：双方背景知识产权各自所有。违约责任：赔偿可证明的直接损失。\n解除与终止：重大违约经催告后解除。争议解决：适用中国法律，由深圳市人民法院管辖。"
+  },
+  "cases": [
+    {
+      "case_key": "credit-insufficient-evidence",
+      "name": "单一评级资料不足",
+      "tags": ["credit", "supplement"],
+      "customer": {
+        "customer_name": "合成-资料不足客户",
+        "external_rating": "AAA",
+        "asset_liability_ratio": null,
+        "current_ratio": null
+      },
+      "expected": {
+        "credit": {"requires_supplement": true},
+        "workflow": {"waiting_for": "credit_supplement"}
+      }
+    },
+    {
+      "case_key": "normal-low-risk-pass",
+      "name": "低风险正常通过",
+      "tags": ["credit", "contract", "pass"],
+      "customer": {"customer_name": "合成-正常通过客户"},
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 800000, "credit": 800000, "term": 60, "extra": ""}
+      },
+      "expected": {
+        "credit": {"risk_level": "low", "approved_credit_limit": 3000000, "recommended_term_days": 90, "requires_supplement": false},
+        "contract": {"decision": "pass", "approval_route": "normal", "required_rule_ids": [], "forbidden_rule_ids": ["CREDIT-OVER-LIMIT", "CREDIT-OVER-TERM"]},
+        "workflow": {"waiting_for": null}
+      }
+    },
+    {
+      "case_key": "high-risk-policy-cap",
+      "name": "执行风险触发高风险上限",
+      "tags": ["credit", "high-risk"],
+      "customer": {
+        "customer_name": "合成-高风险客户",
+        "customer_type": "existing",
+        "tax_or_enforcement_alert": true,
+        "cooperation_years": 2,
+        "overdue_count_12m": 2,
+        "max_overdue_days_12m": 95,
+        "on_time_payment_rate": 0.7
+      },
+      "expected": {
+        "credit": {"risk_level": "high", "approved_credit_limit": 1000000, "recommended_term_days": 30, "requires_supplement": false},
+        "workflow": {"waiting_for": "credit_approval"}
+      }
+    },
+    {
+      "case_key": "rating-conflict-manual-review",
+      "name": "多机构评级冲突转人工复核",
+      "tags": ["credit", "rating", "manual-review"],
+      "customer": {
+        "customer_name": "合成-评级冲突客户",
+        "external_rating": "",
+        "external_ratings": [
+          {"agency": "中诚信国际", "rating": "AAA", "outlook": "稳定", "rating_date": "2026-06-01", "source": "synthetic-a"},
+          {"agency": "联合资信", "rating": "BBB", "outlook": "负面", "rating_date": "2026-06-15", "source": "synthetic-b"}
+        ]
+      },
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 500000, "credit": 500000, "term": 30, "extra": ""}
+      },
+      "expected": {
+        "credit": {"requires_supplement": false, "rating_requires_manual_review": true},
+        "contract": {"decision": "pass", "approval_route": "finance_legal", "required_rule_ids": []},
+        "workflow": {"waiting_for": "finance_legal_review"}
+      }
+    },
+    {
+      "case_key": "tkp-special-term",
+      "name": "TKP 120天账期进入特批",
+      "tags": ["contract", "TKP", "special-approval"],
+      "customer": {"customer_name": "合成-TKP特批客户"},
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 800000, "credit": 800000, "term": 120, "extra": ""}
+      },
+      "expected": {
+        "credit": {"risk_level": "low"},
+        "contract": {"decision": "special_approval", "approval_route": "director_ceo", "required_rule_ids": ["TKP-SPECIAL-TERM"]},
+        "workflow": {"waiting_for": "manager_approval"}
+      }
+    },
+    {
+      "case_key": "tkm-tail-ratio-special",
+      "name": "TKM精密模具尾款比例特批",
+      "tags": ["contract", "TKM", "special-approval"],
+      "customer": {
+        "customer_name": "合成-TKM尾款客户",
+        "business_type": "TKM",
+        "tkm_business_subtype": "precision"
+      },
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 1000000, "credit": 1000000, "term": 60, "extra": "尾款比例为50%，尾款在3个月内支付。"}
+      },
+      "expected": {
+        "credit": {"risk_level": "low", "approved_credit_limit": 2000000},
+        "contract": {"decision": "special_approval", "approval_route": "director_ceo", "required_rule_ids": ["TKM-SPECIAL-TAIL-RATIO"]},
+        "workflow": {"waiting_for": "manager_approval"}
+      }
+    },
+    {
+      "case_key": "available-credit-over-limit",
+      "name": "动态额度占用触发超限",
+      "tags": ["credit-control", "contract", "special-approval"],
+      "customer": {
+        "customer_name": "合成-额度占用客户",
+        "outstanding_receivables_amount": 1500000,
+        "open_order_amount": 1000000
+      },
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 800000, "credit": 800000, "term": 60, "extra": ""}
+      },
+      "expected": {
+        "credit": {"risk_level": "low", "available_credit_amount": 500000},
+        "contract": {"decision": "special_approval", "approval_route": "director_ceo", "required_rule_ids": ["CREDIT-OVER-LIMIT"]},
+        "workflow": {"waiting_for": "manager_approval"}
+      }
+    },
+    {
+      "case_key": "missing-confidentiality-manual",
+      "name": "缺少保密条款转财务法务",
+      "tags": ["contract", "completeness", "manual-review"],
+      "customer": {"customer_name": "合成-条款缺失客户"},
+      "contract": {
+        "template": "missing_confidentiality",
+        "values": {"amount": 800000, "credit": 800000, "term": 60}
+      },
+      "expected": {
+        "contract": {"decision": "manual_review", "approval_route": "finance_legal", "required_rule_ids": ["COMPLETE-HAS_CONFIDENTIALITY"]},
+        "workflow": {"waiting_for": "finance_legal_review"}
+      }
+    },
+    {
+      "case_key": "cancel-without-liability-block",
+      "name": "无责取消触发底线阻断",
+      "tags": ["contract", "hard-stop", "revision"],
+      "customer": {"customer_name": "合成-无责取消客户"},
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 800000, "credit": 800000, "term": 60, "extra": "买方可随时取消订单且不承担任何责任。"}
+      },
+      "expected": {
+        "contract": {"decision": "block", "approval_route": "return_to_owner", "required_rule_ids": ["DJ-CANCEL-WITHOUT-LIABILITY"]},
+        "workflow": {"waiting_for": "sales_revision"}
+      }
+    },
+    {
+      "case_key": "indirect-loss-block-redaction",
+      "name": "间接损失阻断与脱敏日志",
+      "tags": ["contract", "hard-stop", "privacy"],
+      "customer": {"customer_name": "合成-隐私边界客户"},
+      "contract": {
+        "template": "complete_contract",
+        "values": {"amount": 800000, "credit": 800000, "term": 60, "extra": "卖方承担全部间接损失和利润损失。联系人13800138000，邮箱qa-sensitive@example.com，收款账号6222021234567890123。"}
+      },
+      "sensitive_values": ["13800138000", "qa-sensitive@example.com", "6222021234567890123"],
+      "expected": {
+        "contract": {"decision": "block", "approval_route": "return_to_owner", "required_rule_ids": ["DJ-INDIRECT-LOSS"]},
+        "workflow": {"waiting_for": "sales_revision"}
+      }
+    }
+  ]
+}

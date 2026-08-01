@@ -11,7 +11,7 @@ from typing import Pattern
 
 class RedactionVault:
     _PATTERNS: tuple[tuple[str, Pattern[str]], ...] = (
-        ("BANK", re.compile(r"\b[1-9]\d{15,18}\b")),
+        ("BANK", re.compile(r"(?<!\d)[1-9]\d{15,18}(?!\d)")),
         ("PHONE", re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")),
         (
             "EMAIL",
@@ -22,7 +22,14 @@ class RedactionVault:
             ),
         ),
         ("ID", re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")),
-        ("USCC", re.compile(r"\b[0-9A-HJ-NPQRTUWXY]{18}\b")),
+        (
+            "USCC",
+            re.compile(
+                r"(?<![0-9A-HJ-NPQRTUWXY])"
+                r"[0-9A-HJ-NPQRTUWXY]{18}"
+                r"(?![0-9A-HJ-NPQRTUWXY])"
+            ),
+        ),
         ("MONEY", re.compile(r"(?:人民币|RMB|CNY|¥|￥)\s*[\d,]+(?:\.\d{1,2})?")),
         (
             "PRICE",

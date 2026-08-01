@@ -1,19 +1,20 @@
-import {api} from "./api.js?v=20260801-candidate"
-import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260731-nav"
-import {currentRoute, installRouter, navigate} from "./router.js?v=20260731-nav"
-import {renderAuditPage} from "./pages/audit.js?v=20260731-nav"
-import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260731-nav"
-import {renderCasesPage} from "./pages/cases.js?v=20260731-nav"
-import {renderNewCasePage} from "./pages/case-new.js?v=20260731-nav"
-import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260801-candidate"
-import {renderCaseActionPage} from "./pages/case-action.js?v=20260801-candidate"
-import {renderUsersPage} from "./pages/users.js?v=20260731-nav"
-import {renderWritebacksPage} from "./pages/writebacks.js?v=20260731-nav"
-import {renderRegistrationsPage} from "./pages/registrations.js?v=20260731-nav"
-import {renderNotificationsPage} from "./pages/notifications.js?v=20260731-nav"
-import {renderOperationsPage} from "./pages/operations.js?v=20260731-nav"
-import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260801-agentsla"
-import {renderAnalyticsPage} from "./pages/analytics.js?v=20260731-nav"
+import {api} from "./api.js?v=20260801-benchmark"
+import {clearAuth, currentAuth, hasRole, loadAuth} from "./auth.js?v=20260801-benchmark"
+import {currentRoute, installRouter, navigate} from "./router.js?v=20260801-benchmark"
+import {renderAuditPage} from "./pages/audit.js?v=20260801-benchmark"
+import {renderChangePasswordPage, renderForgotPasswordPage, renderLoginPage, renderRegisterPage, renderSetupPage} from "./pages/auth.js?v=20260801-benchmark"
+import {renderCasesPage} from "./pages/cases.js?v=20260801-benchmark"
+import {renderNewCasePage} from "./pages/case-new.js?v=20260801-benchmark"
+import {renderCaseDetailPage} from "./pages/case-detail.js?v=20260801-benchmark"
+import {renderCaseActionPage} from "./pages/case-action.js?v=20260801-benchmark"
+import {renderUsersPage} from "./pages/users.js?v=20260801-benchmark"
+import {renderWritebacksPage} from "./pages/writebacks.js?v=20260801-benchmark"
+import {renderRegistrationsPage} from "./pages/registrations.js?v=20260801-benchmark"
+import {renderNotificationsPage} from "./pages/notifications.js?v=20260801-benchmark"
+import {renderOperationsPage} from "./pages/operations.js?v=20260801-benchmark"
+import {renderAgentOperationsPage} from "./pages/agent-operations.js?v=20260801-benchmark"
+import {renderAnalyticsPage} from "./pages/analytics.js?v=20260801-benchmark"
+import {renderBenchmarkPage} from "./pages/benchmark.js?v=20260801-benchmark"
 
 const root = document.getElementById("app")
 const shellHeader = document.getElementById("appHeader")
@@ -76,6 +77,10 @@ async function render() {
       if (!hasRole("admin")) throw new Error("只有管理员可以查看管理分析。")
       await renderAnalyticsPage(root, route)
     }
+    if (route.name === "benchmarks") {
+      if (!hasRole("admin")) throw new Error("只有管理员可以运行质量评测。")
+      await renderBenchmarkPage(root)
+    }
   } catch (error) {
     root.innerHTML = `<div class="error-box"><b>页面加载失败</b><p>${escapeText(error.message || error)}</p><a href="/cases" data-link class="secondary">返回案件列表</a></div>`
   } finally {
@@ -107,7 +112,7 @@ async function renderHeader(auth, route) {
       <a href="/cases" data-link data-nav="cases">案件</a>
       ${hasRole("sales") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
       <a href="/notifications" data-link data-nav="notifications">通知${unread ? `<span class="nav-count">${Math.min(unread, 99)}</span>` : ""}</a>
-      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
+      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/benchmarks" data-link data-nav="benchmarks">质量评测</a><a href="/users" data-link data-nav="users">用户</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b>${pendingRegistrations ? `<em class="account-count">${Math.min(pendingRegistrations, 99)}</em>` : ""}</button>
         <div id="accountPopover" class="account-popover hidden">
@@ -125,7 +130,7 @@ async function renderHeader(auth, route) {
 }
 
 function setActiveNav(route) {
-  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "agent-operations" ? "agent-operations" : route.name === "analytics" ? "analytics" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "registrations" ? "" : "cases"
+  const active = route.name === "case-new" ? "new" : route.name === "users" ? "users" : route.name === "notifications" ? "notifications" : route.name === "operations" ? "operations" : route.name === "agent-operations" ? "agent-operations" : route.name === "analytics" ? "analytics" : route.name === "benchmarks" ? "benchmarks" : route.name === "audit" ? "audit" : route.name === "writebacks" ? "writebacks" : route.name === "registrations" ? "" : "cases"
   document.querySelectorAll("[data-nav]").forEach((link) => link.classList.toggle("active", link.dataset.nav === active))
 }
 

@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-candidate"
+import {api} from "../api.js?v=20260801-benchmark"
 import {escapeHtml} from "../format.js?v=20260731-nav"
 import {navigate} from "../router.js?v=20260731-nav"
 

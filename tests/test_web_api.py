@@ -1433,6 +1433,95 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/operations/analytics?days=30")[0], 403)
         self.assertEqual(self.download("/api/operations/analytics/export.csv?days=30")[0], 403)
 
+    @patch("dongjiang_agent.web.server.BenchmarkService")
+    def test_benchmark_run_exports_and_audit_are_admin_only(self, service_class):
+        report = {
+            "run_id": "BRUN-TEST",
+            "status": "passed",
+            "repeat_count": 2,
+            "suite": {"suite_id": "suite-test", "version": "1.0.0"},
+            "runtime": {
+                "external_ai": "disabled",
+                "enterprise_integrations": "disabled",
+            },
+            "metrics": {"case_total": 10, "case_passed": 10},
+            "cases": [],
+        }
+        service = service_class.return_value
+        service.summary.return_value = {
+            "suite": report["suite"],
+            "latest": report,
+            "status": "completed",
+        }
+        service.run.return_value = report
+        service.export_csv.return_value = b"benchmark-csv"
+        service.export_xlsx.return_value = b"benchmark-xlsx"
+
+        status, summary = self.request("GET", "/api/operations/benchmarks")
+        self.assertEqual(status, 200)
+        self.assertEqual(summary["latest"]["run_id"], "BRUN-TEST")
+        status, result = self.request(
+            "POST", "/api/operations/benchmarks/run", {"repeats": 2}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["report"]["status"], "passed")
+        service.run.assert_called_once_with(repeats=2)
+
+        status, body, headers = self.download(
+            "/api/operations/benchmarks/export.csv"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"benchmark-csv")
+        self.assertIn("text/csv", headers["Content-Type"])
+        status, body, headers = self.download(
+            "/api/operations/benchmarks/export.xlsx"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"benchmark-xlsx")
+        self.assertIn("spreadsheetml", headers["Content-Type"])
+
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        event = next(
+            item
+            for item in events
+            if item["event_type"] == "operations.benchmark_run"
+        )
+        self.assertEqual(event["target_id"], "BRUN-TEST")
+        self.assertEqual(event["detail"]["case_passed"], 10)
+
+        self.create_user("benchmark.sales", "评测普通销售", ["sales"])
+        self.activate_user("benchmark.sales")
+        self.assertEqual(
+            self.request("GET", "/api/operations/benchmarks")[0], 403
+        )
+        self.assertEqual(
+            self.request(
+                "POST", "/api/operations/benchmarks/run", {"repeats": 2}
+            )[0],
+            403,
+        )
+        self.assertEqual(
+            self.download("/api/operations/benchmarks/export.csv")[0], 403
+        )
+
+        self.cookie = ""
+        self.csrf_token = ""
+        self.assertEqual(
+            self.request("GET", "/api/operations/benchmarks")[0], 401
+        )
+
+    def test_benchmark_spa_route_and_static_module_exist(self):
+        status, html, headers = self.download("/benchmarks")
+        self.assertEqual(status, 200)
+        self.assertIn(b"20260801-benchmark", html)
+        self.assertIn("text/html", headers["Content-Type"])
+
+        status, module, headers = self.download("/js/pages/benchmark.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"renderBenchmarkPage", module)
+        self.assertIn("javascript", headers["Content-Type"])
+
 
 if __name__ == "__main__":
     unittest.main()

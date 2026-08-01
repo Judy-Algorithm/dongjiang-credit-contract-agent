@@ -86,6 +86,21 @@ class SecurityAndWorkflowTests(unittest.TestCase):
         self.assertNotIn("1,200,000", safe)
         self.assertEqual(vault.restore(safe), raw)
 
+    def test_redaction_masks_identifiers_adjacent_to_chinese_text(self):
+        raw = (
+            "收款账号6222021234567890123，"
+            "统一社会信用代码91440300MA5F12345X。"
+        )
+        vault = RedactionVault("CASE-CJK-BOUNDARY")
+
+        safe = vault.redact(raw)
+
+        self.assertNotIn("6222021234567890123", safe)
+        self.assertNotIn("91440300MA5F12345X", safe)
+        self.assertIn("⟦BANK_", safe)
+        self.assertIn("⟦USCC_", safe)
+        self.assertEqual(vault.restore(safe), raw)
+
     def test_redaction_vault_merges_existing_case_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
