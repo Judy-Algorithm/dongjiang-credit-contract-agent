@@ -22,6 +22,13 @@ from .codec import case_from_state, checkpoint_dict
 from .dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
 from .graph import build_workflow
 from .incidents import detect_plan_incident, new_agent_incident
+from .candidate_reviews import (
+    CANDIDATE_WAITING_FOR,
+    apply_contract_candidate,
+    build_candidate_comparison,
+    candidate_fingerprint,
+    latest_candidate,
+)
 from .nodes import WorkflowNodes
 
 
@@ -252,6 +259,7 @@ class DongjiangWorkflowHarness:
             "agent_task_results": [],
             "execution_audits": [],
             "agent_incidents": [],
+            "agent_candidate_reviews": [],
             "agent_rerun_context": None,
             "active_workflow_plan": None,
             "active_agent_task": None,
@@ -374,14 +382,54 @@ class DongjiangWorkflowHarness:
             summary = {
                 "score": assessment.get("score"),
                 "risk_level": assessment.get("risk_level"),
+                "approved_credit_limit": assessment.get("approved_credit_limit"),
+                "recommended_term_days": assessment.get("recommended_term_days"),
                 "requires_supplement": bool(assessment.get("requires_supplement")),
+                "credit_locked": bool(assessment.get("credit_locked")),
                 "verification_status": verification.get("status"),
+                "plan_id": plan_id,
+                "spec_ref": str(plan.get("spec_hash") or "")[:12],
             }
         elif plan.get("agent") == "contract":
             self._merge_node_update(candidate, self.nodes.run_contract_analysis(candidate))
             self._merge_node_update(candidate, self.nodes.synthesize_contract_reviews(candidate))
             self._merge_node_update(candidate, self.nodes.verify_contract_reviews(candidate))
             reviews = list(candidate.get("contract_reviews") or [])
+            contracts = list(candidate.get("contract_facts") or [])
+            verifications = {
+                str(item.get("document_id") or ""): dict(item)
+                for item in candidate.get("contract_verifications") or []
+            }
+            documents: list[dict[str, Any]] = []
+            for index, review in enumerate(reviews):
+                document_id = str(
+                    review.get("document_id")
+                    or (contracts[index] if index < len(contracts) else {}).get(
+                        "document_id"
+                    )
+                    or f"contract-{index + 1}"
+                )
+                findings = list(review.get("findings") or [])
+                assistance = dict(review.get("ai_assistance") or {})
+                verification = verifications.get(document_id) or {}
+                documents.append(
+                    {
+                        "document_id": document_id,
+                        "decision": review.get("decision"),
+                        "risk_level": review.get("risk_level"),
+                        "rule_finding_count": len(findings),
+                        "ai_finding_count": len(assistance.get("findings") or []),
+                        "rule_ids": sorted(
+                            {
+                                str(item.get("rule_id") or "")
+                                for item in findings
+                                if item.get("rule_id")
+                            }
+                        ),
+                        "verification_status": verification.get("status"),
+                        "evidence_coverage": verification.get("evidence_coverage"),
+                    }
+                )
             summary = {
                 "review_count": len(reviews),
                 "decisions": sorted(
@@ -391,6 +439,9 @@ class DongjiangWorkflowHarness:
                     str(item.get("status") or "")
                     for item in candidate.get("contract_verifications") or []
                 ],
+                "documents": documents,
+                "plan_id": plan_id,
+                "spec_ref": str(plan.get("spec_hash") or "")[:12],
             }
         else:
             raise ValueError("未知的Agent计划类型。")
@@ -555,6 +606,193 @@ class DongjiangWorkflowHarness:
             },
         )
         return self._run_result(case_id), deepcopy(incident)
+
+    def manage_agent_candidate(
+        self,
+        case_id: str,
+        *,
+        incident_id: str,
+        action: str,
+        actor: ActorContext,
+        reason: str,
+        request_id: str = "",
+    ) -> tuple[WorkflowRun, dict[str, Any]]:
+        allowed_roles = {"admin", "credit", "finance", "legal", "system"}
+        if not allowed_roles.intersection(actor.roles):
+            raise PermissionError("当前角色不能提交或拒绝Agent候选结果。")
+        if action not in {"request_adoption", "reject_candidate"}:
+            raise ValueError("未知的Agent候选处置动作。")
+        clean_reason = " ".join(str(reason or "").split())[:500]
+        if len(clean_reason) < 2:
+            raise ValueError("提交采纳或拒绝候选时必须填写理由。")
+        current = self.get(case_id)
+        state = dict(current.state)
+        incidents = list(state.get("agent_incidents") or [])
+        incident = next(
+            (
+                deepcopy(item)
+                for item in incidents
+                if str(item.get("incident_id") or "") == incident_id
+            ),
+            None,
+        )
+        if incident is None:
+            raise KeyError("Agent异常不存在。")
+        plan = next(
+            (
+                item
+                for item in state.get("workflow_plans") or []
+                if str(item.get("plan_id") or "")
+                == str(incident.get("plan_id") or "")
+            ),
+            None,
+        )
+        if plan is None:
+            raise KeyError("Agent候选关联的计划不存在。")
+        assert_plan_integrity(plan)
+        if str(plan.get("agent") or "") != str(incident.get("agent") or ""):
+            raise ValueError("Agent候选类型与冻结计划不一致。")
+        if str(incident.get("status") or "") == "open":
+            raise ValueError("请先确认Agent运行异常，再处置候选结果。")
+        candidate = latest_candidate(incident)
+        if not candidate:
+            raise ValueError("该异常尚未形成可处置的候选结果。")
+        fingerprint = candidate_fingerprint(candidate)
+        reviews = [deepcopy(item) for item in state.get("agent_candidate_reviews") or []]
+        existing = next(
+            (
+                item
+                for item in reversed(reviews)
+                if item.get("incident_id") == incident_id
+                and (
+                    (request_id and str(item.get("request_id") or "") == request_id)
+                    or (
+                    not request_id
+                    and item.get("candidate_fingerprint") == fingerprint
+                    and item.get("status") == "pending"
+                    )
+                )
+            ),
+            None,
+        )
+        if request_id and existing is None:
+            raise KeyError("Agent候选采纳申请不存在或不属于该异常。")
+        now = utc_now()
+        if action == "request_adoption":
+            agent = str(incident.get("agent") or "")
+            eligible = CANDIDATE_WAITING_FOR.get(agent, set())
+            if current.waiting_for not in eligible:
+                raise ValueError("案件当前不在与该候选兼容的正式审批节点。")
+            if incident.get("status") == "resolved":
+                raise ValueError("已关闭的Agent异常不能再提交候选采纳申请。")
+            summary = dict(candidate.get("candidate_summary") or {})
+            if str(candidate.get("execution_audit") or "") != "conformant":
+                raise ValueError("候选执行审计未通过，不能提交正式采纳。")
+            if agent == "credit" and summary.get("verification_status") != "passed":
+                raise ValueError("信用候选独立核验未通过，不能提交正式采纳。")
+            if agent == "contract" and (
+                not summary.get("documents")
+                or any(
+                    item.get("verification_status") != "passed"
+                    for item in summary.get("documents") or []
+                )
+            ):
+                raise ValueError("合同候选独立核验未通过，不能提交正式采纳。")
+            if existing:
+                raise ValueError("同一候选已有待审批的采纳申请。")
+            for item in reviews:
+                if (
+                    item.get("incident_id") == incident_id
+                    and item.get("status") == "pending"
+                    and item.get("candidate_fingerprint") != fingerprint
+                ):
+                    item.update(
+                        {
+                            "status": "superseded",
+                            "decision": {
+                                "action": "candidate_replaced",
+                                "official_state_changed": False,
+                            },
+                            "decided_at": now,
+                        }
+                    )
+            review = {
+                "request_id": f"ACR-{uuid4().hex[:12].upper()}",
+                "incident_id": incident_id,
+                "plan_id": incident.get("plan_id"),
+                "agent": agent,
+                "rerun_completed_at": candidate.get("completed_at"),
+                "status": "pending",
+                "requested_by": {
+                    "user_id": actor.actor_id,
+                    "display_name": actor.display_name or actor.actor_id,
+                },
+                "requested_at": now,
+                "reason": clean_reason,
+                "eligible_waiting_for": current.waiting_for,
+                "candidate_fingerprint": fingerprint,
+                "decision": {},
+                "decided_by": {},
+                "decided_at": None,
+            }
+            reviews.append(review)
+            trace_stage = "agent.candidate.adoption_requested"
+        else:
+            if existing and existing.get("status") != "pending":
+                raise ValueError("该候选申请已完成处置。")
+            review = existing or {
+                "request_id": f"ACR-{uuid4().hex[:12].upper()}",
+                "incident_id": incident_id,
+                "plan_id": incident.get("plan_id"),
+                "agent": incident.get("agent"),
+                "rerun_completed_at": candidate.get("completed_at"),
+                "requested_by": {},
+                "requested_at": None,
+                "eligible_waiting_for": None,
+                "candidate_fingerprint": fingerprint,
+            }
+            if not existing:
+                reviews.append(review)
+            review.update(
+                {
+                    "status": "rejected",
+                    "reason": clean_reason,
+                    "decision": {"action": "reject_candidate", "reason_recorded": True},
+                    "decided_by": {
+                        "user_id": actor.actor_id,
+                        "display_name": actor.display_name or actor.actor_id,
+                    },
+                    "decided_at": now,
+                }
+            )
+            trace_stage = "agent.candidate.rejected"
+        self.graph.update_state(
+            self._config(case_id),
+            {
+                "agent_candidate_reviews": reviews,
+                "trace": [
+                    {
+                        "ts": now,
+                        "stage": trace_stage,
+                        "message": "Agent候选结果已进入受控审批处置。",
+                        "data": {
+                            "request_id": review["request_id"],
+                            "incident_id": incident_id,
+                            "agent": review.get("agent"),
+                            "action": action,
+                            "actor_id": actor.actor_id,
+                            "official_state_changed": False,
+                        },
+                    }
+                ],
+            },
+        )
+        updated = self._run_result(case_id)
+        result = deepcopy(review)
+        result["comparison"] = build_candidate_comparison(
+            dict(updated.state), incident, candidate
+        )
+        return updated, result
 
     @staticmethod
     def _writeback_payload(state: dict[str, Any], phase: str) -> tuple[str, dict[str, Any]]:
@@ -724,6 +962,9 @@ class DongjiangWorkflowHarness:
             raise ValueError(f"案件 {case_id} 当前不在等待状态。")
         self._authorize(current.waiting_for, actor)
         payload = dict(decision)
+        candidate_adoption = self._candidate_adoption_payload(current, payload, actor)
+        if candidate_adoption:
+            payload["_candidate_adoption"] = candidate_adoption
         texts = list(payload.pop("contract_texts", []) or [])
         if texts and current.waiting_for not in {"contract_upload", "sales_revision"}:
             raise ValueError("当前节点不接受合同正文。")
@@ -752,10 +993,137 @@ class DongjiangWorkflowHarness:
             payload["file_paths"] = files
         payload["actor"] = asdict(actor)
         self.graph.invoke(
-            Command(resume=payload, update={"actor": asdict(actor)}),
+            Command(
+                resume=payload,
+                update={"actor": asdict(actor)},
+            ),
             config=self._config(case_id),
         )
         return self._run_result(case_id)
+
+    def _candidate_adoption_payload(
+        self,
+        current: WorkflowRun,
+        payload: dict[str, Any],
+        actor: ActorContext,
+    ) -> dict[str, Any]:
+        request_id = str(payload.get("candidate_adoption_request_id") or "").strip()
+        if not request_id:
+            return {}
+        action = str(payload.get("action") or "")
+        if action != "approve":
+            raise ValueError("正式采纳Agent候选时必须执行批准操作。")
+        state = dict(current.state)
+        reviews = [deepcopy(item) for item in state.get("agent_candidate_reviews") or []]
+        review = next(
+            (
+                item
+                for item in reviews
+                if str(item.get("request_id") or "") == request_id
+            ),
+            None,
+        )
+        if review is None:
+            raise KeyError("Agent候选采纳申请不存在。")
+        if review.get("status") != "pending":
+            raise ValueError("Agent候选采纳申请已完成处置。")
+        agent = str(review.get("agent") or "")
+        if current.waiting_for not in CANDIDATE_WAITING_FOR.get(agent, set()):
+            raise ValueError("当前正式审批节点与Agent候选不兼容。")
+        if review.get("eligible_waiting_for") != current.waiting_for:
+            raise ValueError("Agent候选申请对应的审批节点已经变化。")
+        incident = next(
+            (
+                item
+                for item in state.get("agent_incidents") or []
+                if str(item.get("incident_id") or "")
+                == str(review.get("incident_id") or "")
+            ),
+            None,
+        )
+        if incident is None:
+            raise KeyError("Agent候选关联的异常不存在。")
+        plan = next(
+            (
+                item
+                for item in state.get("workflow_plans") or []
+                if str(item.get("plan_id") or "")
+                == str(review.get("plan_id") or "")
+            ),
+            None,
+        )
+        if plan is None:
+            raise KeyError("Agent候选关联的计划不存在。")
+        assert_plan_integrity(plan)
+        if str(plan.get("agent") or "") != agent:
+            raise ValueError("Agent候选类型与冻结计划不一致。")
+        candidate = latest_candidate(incident)
+        if not candidate or candidate_fingerprint(candidate) != review.get(
+            "candidate_fingerprint"
+        ):
+            raise ValueError("Agent候选结果已经变化，原采纳申请已失效。")
+        summary = dict(candidate.get("candidate_summary") or {})
+        now = utc_now()
+        review.update(
+            {
+                "status": "approved",
+                "decision": {
+                    "action": action,
+                    "waiting_for": current.waiting_for,
+                    "official_state_changed": True,
+                },
+                "decided_by": {
+                    "user_id": actor.actor_id,
+                    "display_name": actor.display_name or actor.actor_id,
+                },
+                "decided_at": now,
+            }
+        )
+        state_update: dict[str, Any] = {"agent_candidate_reviews": reviews}
+        if agent == "credit":
+            assessment = deepcopy(state.get("credit_assessment") or {})
+            for key in (
+                "score",
+                "risk_level",
+                "approved_credit_limit",
+                "recommended_term_days",
+                "requires_supplement",
+                "credit_locked",
+            ):
+                if key in summary:
+                    assessment[key] = summary[key]
+            state_update["credit_assessment"] = assessment
+            payload["approved_credit_limit"] = summary.get(
+                "approved_credit_limit"
+            )
+            payload["approved_term_days"] = summary.get(
+                "recommended_term_days"
+            )
+        elif agent == "contract":
+            state_update["contract_reviews"] = apply_contract_candidate(
+                list(state.get("contract_reviews") or []),
+                list(state.get("contract_facts") or []),
+                summary,
+                request_id,
+            )
+        return {
+            "agent": agent,
+            "request_id": request_id,
+            "state_update": state_update,
+            "trace": {
+                "ts": now,
+                "stage": "agent.candidate.approved",
+                "message": "Agent候选已由当前正式审批节点确认采纳。",
+                "data": {
+                    "request_id": request_id,
+                    "incident_id": review.get("incident_id"),
+                    "agent": agent,
+                    "waiting_for": current.waiting_for,
+                    "actor_id": actor.actor_id,
+                    "official_state_changed": True,
+                },
+            },
+        }
 
     def close(self) -> None:
         self._connection.close()

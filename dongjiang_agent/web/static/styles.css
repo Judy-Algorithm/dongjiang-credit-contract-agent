@@ -657,6 +657,31 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .agent-audit-issues span { color: var(--red); font-size: 10px; overflow-wrap: anywhere; }
 .agent-audit-issues b { margin-right: 8px; }
 .agent-security-note { margin-top: 16px; padding: 13px 15px; color: var(--muted); font-size: 12px; background: var(--surface-soft); border-left: 3px solid var(--ink); }
+.candidate-reviews { margin-top: 24px; }
+.candidate-list { display: grid; gap: 12px; }
+.candidate-card { overflow: hidden; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.candidate-card > header { padding: 16px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--hairline-soft); }
+.candidate-card > header small, .candidate-card > header p { color: var(--muted); }
+.candidate-card > header h4 { margin: 3px 0; font-size: 15px; }
+.candidate-card > header p { margin: 0; font-size: 11px; }
+.candidate-diff { padding: 8px 18px; }
+.candidate-diff-head, .candidate-diff-row { min-height: 38px; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(100px, 1fr) minmax(100px, 1fr); align-items: center; gap: 12px; border-bottom: 1px solid var(--hairline-soft); }
+.candidate-diff-head { color: var(--muted); font-size: 10px; }
+.candidate-diff-row { font-size: 11px; }
+.candidate-diff-row.changed { border-left: 3px solid var(--orange); padding-left: 9px; background: var(--orange-bg); }
+.candidate-contracts { padding: 8px 18px; display: grid; gap: 1px; }
+.candidate-contract-row { padding: 11px 0; display: grid; grid-template-columns: minmax(130px, 1.2fr) 1fr 1fr; gap: 10px; border-bottom: 1px solid var(--hairline-soft); }
+.candidate-contract-row > div small, .candidate-contract-row > small { display: block; color: var(--muted); font-size: 10px; }
+.candidate-contract-row > small { grid-column: 2 / -1; }
+.candidate-contract-row.changed { border-left: 3px solid var(--orange); padding-left: 9px; }
+.candidate-card > footer { padding: 13px 18px; display: flex; align-items: center; justify-content: space-between; gap: 14px; background: var(--surface-soft); }
+.candidate-card > footer > small { max-width: 560px; color: var(--muted); }
+.candidate-card > footer > div { display: flex; gap: 8px; flex: 0 0 auto; }
+.candidate-dialog { display: grid; gap: 16px; }
+.candidate-dialog label { color: var(--body); font-size: 12px; }
+.candidate-approval-banner { margin-bottom: 20px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-left: 3px solid var(--orange); background: var(--orange-bg); }
+.candidate-approval-banner b, .candidate-approval-banner small { display: block; }
+.candidate-approval-banner small { margin-top: 3px; color: var(--muted); }
 .reason-list { margin: 0; padding-left: 20px; }
 .reason-list li + li { margin-top: 8px; }
 .integration-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
@@ -795,6 +820,11 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .agent-lanes { padding: 6px 14px 14px; }
   .agent-audit { grid-template-columns: 1fr; }
   .agent-node-grid { grid-template-columns: 1fr; }
+  .candidate-card > header, .candidate-card > footer, .candidate-approval-banner { align-items: stretch; flex-direction: column; }
+  .candidate-card > footer > div { display: grid; }
+  .candidate-diff-head, .candidate-diff-row { grid-template-columns: minmax(86px, 1fr) minmax(80px, 1fr) minmax(80px, 1fr); gap: 7px; }
+  .candidate-contract-row { grid-template-columns: 1fr 1fr; }
+  .candidate-contract-row > div, .candidate-contract-row > small { grid-column: 1 / -1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

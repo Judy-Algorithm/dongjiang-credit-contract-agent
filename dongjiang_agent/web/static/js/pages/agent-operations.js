@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-agentsla"
+import {api} from "../api.js?v=20260801-candidate"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const severityLabels = {

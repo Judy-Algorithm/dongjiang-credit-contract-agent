@@ -12,6 +12,13 @@ from typing import Any
 from ..contract.revisions import suggested_replacement
 from ..ingestion import location_label
 from ..operations.sla import case_sla
+from ..workflow.candidate_reviews import (
+    CANDIDATE_WAITING_FOR,
+    build_candidate_comparison,
+    candidate_fingerprint,
+    latest_candidate,
+    safe_candidate_review_view,
+)
 
 
 STATUS_LABELS = {
@@ -320,6 +327,74 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _agent_candidates(
+    case: dict[str, Any],
+    waiting_for: str | None,
+    actor: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    reviews = list(case.get("agent_candidate_reviews") or [])
+    actor_roles = set((actor or {}).get("roles") or [])
+    can_manage = bool(
+        {"admin", "credit", "finance", "legal"}.intersection(actor_roles)
+    )
+    rows: list[dict[str, Any]] = []
+    for incident in reversed(list(case.get("agent_incidents") or [])):
+        candidate = latest_candidate(incident)
+        if not candidate:
+            continue
+        fingerprint = candidate_fingerprint(candidate)
+        linked = [
+            item
+            for item in reviews
+            if item.get("incident_id") == incident.get("incident_id")
+            and item.get("candidate_fingerprint") == fingerprint
+        ]
+        review = linked[-1] if linked else None
+        status = str((review or {}).get("status") or "candidate")
+        agent = str(incident.get("agent") or "")
+        incident_status = str(incident.get("status") or "")
+        can_request = bool(
+            can_manage
+            and incident_status != "open"
+            and incident_status != "resolved"
+            and status != "pending"
+            and waiting_for in CANDIDATE_WAITING_FOR.get(agent, set())
+        )
+        can_reject = bool(
+            can_manage
+            and incident_status != "open"
+            and status in {"candidate", "pending"}
+        )
+        rows.append(
+            {
+                "incident_id": incident.get("incident_id"),
+                "plan_id": incident.get("plan_id"),
+                "agent": agent,
+                "agent_label": "信用信审子 Agent" if agent == "credit" else "合同审查子 Agent",
+                "status": status,
+                "incident_status": incident_status,
+                "candidate_ref": fingerprint[:12],
+                "completed_at": candidate.get("completed_at"),
+                "comparison": build_candidate_comparison(case, incident, candidate),
+                "review": safe_candidate_review_view(review) if review else None,
+                "permissions": {
+                    "can_request_adoption": can_request,
+                    "can_reject_candidate": can_reject,
+                },
+                "eligibility_message": (
+                    "可提交至当前正式审批节点"
+                    if can_request
+                    else "案件不在兼容审批节点，仅可查看差异"
+                    if waiting_for not in CANDIDATE_WAITING_FOR.get(agent, set())
+                    else "该候选正在等待或已经完成处置"
+                    if review
+                    else "请先确认Agent运行异常"
+                ),
+            }
+        )
+    return rows
+
+
 def case_view(
     case: dict[str, Any],
     *,
@@ -553,6 +628,7 @@ def case_view(
         "findings": findings,
         "ai_assistance": ai_assistance,
         "agent_execution": _agent_execution(case),
+        "agent_candidates": _agent_candidates(case, resolved_waiting, actor),
         "records": records,
         "documents": documents,
         "source_documents": [

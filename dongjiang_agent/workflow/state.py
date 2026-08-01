@@ -52,6 +52,7 @@ class WorkflowState(TypedDict, total=False):
     agent_task_results: Annotated[list[dict[str, Any]], operator.add]
     execution_audits: Annotated[list[dict[str, Any]], operator.add]
     agent_incidents: list[dict[str, Any]]
+    agent_candidate_reviews: list[dict[str, Any]]
     agent_rerun_context: dict[str, Any] | None
     active_workflow_plan: dict[str, Any] | None
     active_agent_task: dict[str, Any] | None

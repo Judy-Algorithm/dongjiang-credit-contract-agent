@@ -83,5 +83,6 @@ export const api = {
   submitContractAction:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/contract-actions`, payload),
   retryWriteback:(caseId, phase, system) => post(`/api/cases/${encodeURIComponent(caseId)}/writeback-retries`, {phase, system}),
   manageAgentIncident:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/agent-incidents`, payload),
+  manageAgentCandidate:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/agent-candidate-actions`, payload),
   sweepAgentIncidents:() => post("/api/operations/agents/sweep", {}),
 }

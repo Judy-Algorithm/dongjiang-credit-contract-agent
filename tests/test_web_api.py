@@ -1205,6 +1205,126 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("未发现可处置", rejected["error"])
 
+    def test_agent_candidate_api_is_redacted_and_formal_approval_controls_adoption(self):
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "候选采纳接口客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        with DongjiangWorkflowHarness() as harness:
+            run = harness.get(case_id)
+            plan = run.state["workflow_plans"][-1]
+            model = dict(run.state["credit_assessment"])
+            candidate_limit = max(
+                0, float(model["approved_credit_limit"]) - 100_000
+            )
+            incident = {
+                "incident_id": "AINC-WEB-CANDIDATE",
+                "plan_id": plan["plan_id"],
+                "agent": "credit",
+                "status": "rerun_completed",
+                "history": [{"note": "异常内部备注不得出现在案件接口"}],
+                "rerun_history": [
+                    {
+                        "incident_id": "AINC-WEB-CANDIDATE",
+                        "plan_id": plan["plan_id"],
+                        "task_id": "credit.analysis.1",
+                        "status": "completed",
+                        "execution_audit": "conformant",
+                        "completed_at": "2026-08-01T08:00:00+00:00",
+                        "candidate_summary": {
+                            "score": float(model["score"]) - 2,
+                            "risk_level": "medium",
+                            "approved_credit_limit": candidate_limit,
+                            "recommended_term_days": model[
+                                "recommended_term_days"
+                            ],
+                            "requires_supplement": False,
+                            "credit_locked": False,
+                            "verification_status": "passed",
+                        },
+                        "note": "候选重跑备注不得出现在案件接口",
+                    }
+                ],
+            }
+            harness.graph.update_state(
+                harness._config(case_id), {"agent_incidents": [incident]}
+            )
+
+        status, detail = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(detail["case"]["agent_candidates"]), 1)
+        detail_text = json.dumps(detail, ensure_ascii=False)
+        self.assertNotIn("异常内部备注不得出现在案件接口", detail_text)
+        self.assertNotIn("候选重跑备注不得出现在案件接口", detail_text)
+
+        status, requested = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-candidate-actions",
+            {
+                "action": "request_adoption",
+                "incident_id": "AINC-WEB-CANDIDATE",
+                "reason": "已完成独立复核，提交正式审批确认",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(requested["review"]["status"], "pending")
+        self.assertTrue(requested["review"]["reason_recorded"])
+        self.assertNotIn(
+            "已完成独立复核",
+            json.dumps(requested, ensure_ascii=False),
+        )
+        request_id = requested["review"]["request_id"]
+
+        status, duplicate = self.request(
+            "POST",
+            f"/api/cases/{case_id}/agent-candidate-actions",
+            {
+                "action": "request_adoption",
+                "incident_id": "AINC-WEB-CANDIDATE",
+                "reason": "重复提交候选申请",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("已有待审批", duplicate["error"])
+
+        status, approved = self.request(
+            "POST",
+            f"/api/cases/{case_id}/credit-actions",
+            {
+                "action": "approve",
+                "comment": "正式审批确认采纳候选",
+                "candidate_adoption_request_id": request_id,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            approved["case"]["credit"]["approved_result"]["credit_limit"],
+            candidate_limit,
+        )
+        candidate = approved["case"]["agent_candidates"][0]
+        self.assertEqual(candidate["status"], "approved")
+        self.assertFalse(candidate["permissions"]["can_request_adoption"])
+        with AuthStore() as store:
+            event_types = {
+                item["event_type"] for item in store.list_audit(limit=500)
+            }
+        self.assertIn("agent.candidate.request_adoption", event_types)
+        self.assertIn("agent.candidate.approved", event_types)
+
     @patch("dongjiang_agent.web.server.SLAService")
     def test_sla_operations_are_admin_only_and_sweep_is_audited(self, service_class):
         service = service_class.return_value

@@ -806,6 +806,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 if resource == "agent-incidents":
                     self._manage_agent_incident(case_id, payload, user)
                     return
+                if resource == "agent-candidate-actions":
+                    self._manage_agent_candidate(case_id, payload, user)
+                    return
             if (
                 len(parts) == 6
                 and parts[:2] == ["api", "cases"]
@@ -913,6 +916,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             "oa_evidence_id": payload.get("oa_evidence_id"),
             "approval_chain": payload.get("approval_chain"),
             "comment": payload.get("comment"),
+            "candidate_adoption_request_id": str(
+                payload.get("candidate_adoption_request_id") or ""
+            ),
         }
         with DongjiangWorkflowHarness() as harness:
             run = harness.resume(
@@ -1172,6 +1178,94 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _manage_agent_candidate(
+        self,
+        case_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+        from ..workflow.candidate_reviews import safe_candidate_review_view
+
+        self._require_roles(user, "admin", "credit", "finance", "legal")
+        action = str(payload.get("action") or "").strip()
+        incident_id = str(payload.get("incident_id") or "").strip()
+        request_id = str(payload.get("request_id") or "").strip()
+        if not incident_id:
+            raise ValueError("请选择需要处置的Agent候选。")
+        with DongjiangWorkflowHarness() as harness:
+            run, review = harness.manage_agent_candidate(
+                case_id,
+                incident_id=incident_id,
+                action=action,
+                actor=self._actor(user),
+                reason=str(payload.get("reason") or ""),
+                request_id=request_id,
+            )
+        link = f"/cases/{case_id}?tab=agents"
+        review_view = safe_candidate_review_view(review)
+        with AuthStore() as store:
+            store.audit(
+                f"agent.candidate.{action}",
+                actor=user,
+                target_type="agent_candidate_review",
+                target_id=str(review.get("request_id") or ""),
+                detail={
+                    "case_id": case_id,
+                    "incident_id": incident_id,
+                    "plan_id": review.get("plan_id"),
+                    "agent": review.get("agent"),
+                    "status": review.get("status"),
+                    "official_state_changed": False,
+                    "reason_recorded": bool(str(review.get("reason") or "").strip()),
+                },
+                remote_address=self._remote_address(),
+            )
+            roles = list(
+                WAITING_ROLES.get(str(review.get("eligible_waiting_for") or ""))
+                or ["admin"]
+            )
+            title = (
+                "Agent候选等待正式审批"
+                if action == "request_adoption"
+                else "Agent候选已拒绝"
+            )
+            recipients = store.notify_roles(
+                roles,
+                category="agent_candidate",
+                title=title,
+                body=f"案件 {case_id} 的Agent候选处置状态已更新。",
+                link=link,
+                exclude_user_id=str(user.get("user_id") or ""),
+            )
+            self_notification = store.create_notification(
+                str(user.get("user_id") or ""),
+                category="agent_candidate",
+                title=title,
+                body=f"案件 {case_id} 的Agent候选处置状态已更新。",
+                link=link,
+                dedupe_key=(
+                    f"agent-candidate:{review.get('request_id')}:"
+                    f"{action}:{review.get('status')}"
+                ),
+            )
+            if self_notification:
+                recipients.append(user)
+        self._send_notification_emails(
+            recipients,
+            title,
+            f"案件 {case_id} 的Agent候选处置状态已更新。",
+            link,
+        )
+        self._json(
+            200,
+            {
+                "ok": True,
+                "review": review_view,
+                "case": self._workflow_view(run, user),
+            },
+        )
+
     def _submit_contract_revision(
         self,
         case_id: str,
@@ -1290,6 +1384,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     "approval_chain": payload.get("approval_chain") or [],
                     "file_paths": paths,
                     "contract_texts": payload.get("contract_texts") or [],
+                    "candidate_adoption_request_id": str(
+                        payload.get("candidate_adoption_request_id") or ""
+                    ),
                 }
                 run = harness.resume(case_id, decision, actor=self._actor(user))
         with AuthStore() as store:
@@ -1298,9 +1395,56 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 actor=user,
                 target_type="case",
                 target_id=case_id,
-                detail={"resource": resource, "action": action},
+                detail={
+                    "resource": resource,
+                    "action": action,
+                    "candidate_adoption_request_id": str(
+                        payload.get("candidate_adoption_request_id") or ""
+                    ),
+                },
                 remote_address=self._remote_address(),
             )
+            candidate_request_id = str(
+                payload.get("candidate_adoption_request_id") or ""
+            )
+            candidate_review = next(
+                (
+                    item
+                    for item in run.state.get("agent_candidate_reviews") or []
+                    if str(item.get("request_id") or "") == candidate_request_id
+                ),
+                None,
+            )
+            if candidate_review and candidate_review.get("status") == "approved":
+                store.audit(
+                    "agent.candidate.approved",
+                    actor=user,
+                    target_type="agent_candidate_review",
+                    target_id=candidate_request_id,
+                    detail={
+                        "case_id": case_id,
+                        "incident_id": candidate_review.get("incident_id"),
+                        "plan_id": candidate_review.get("plan_id"),
+                        "agent": candidate_review.get("agent"),
+                        "waiting_for": (candidate_review.get("decision") or {}).get(
+                            "waiting_for"
+                        ),
+                        "official_state_changed": True,
+                    },
+                    remote_address=self._remote_address(),
+                )
+                requester_id = str(
+                    (candidate_review.get("requested_by") or {}).get("user_id") or ""
+                )
+                if requester_id:
+                    store.create_notification(
+                        requester_id,
+                        category="agent_candidate",
+                        title="Agent候选已由正式审批采纳",
+                        body=f"案件 {case_id} 的Agent候选已在正式审批节点生效。",
+                        link=f"/cases/{case_id}?tab=agents",
+                        dedupe_key=f"agent-candidate:{candidate_request_id}:approved",
+                    )
         self._notify_case_waiting(run, user)
         self._notify_failed_writebacks(run)
         self._json(200, {"ok": True, "case": self._workflow_view(run, user)})

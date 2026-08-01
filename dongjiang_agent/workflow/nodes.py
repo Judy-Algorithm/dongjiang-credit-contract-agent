@@ -930,6 +930,15 @@ class WorkflowNodes:
             }
         )
         payload = dict(response or {})
+        candidate_adoption = dict(payload.pop("_candidate_adoption", {}) or {})
+        candidate_update = dict(candidate_adoption.get("state_update") or {})
+        candidate_trace = dict(candidate_adoption.get("trace") or {})
+        if candidate_adoption:
+            if candidate_adoption.get("agent") != "credit":
+                raise ValueError("正式信用审批不能采纳非信用Agent候选。")
+            model_result = dict(candidate_update.get("credit_assessment") or {})
+            if not model_result:
+                raise ValueError("信用候选缺少可采纳的结构化结果。")
         action = str(payload.get("action") or "")
         if action in {"approve", "adjust_and_approve"}:
             model_limit = float(model_result.get("approved_credit_limit") or 0)
@@ -1012,6 +1021,7 @@ class WorkflowNodes:
                 ]
             return Command(
                 update={
+                    **candidate_update,
                     "credit_approval_request": payload,
                     "human_decision": payload,
                     "waiting_for": None,
@@ -1029,6 +1039,7 @@ class WorkflowNodes:
                             ),
                         )
                     ),
+                    "trace": [candidate_trace] if candidate_trace else [],
                 },
                 goto="activate_credit",
             )
@@ -1895,35 +1906,46 @@ class WorkflowNodes:
                 "allowed_actions": ["approve", "reject"],
             }
         )
-        approved = str((response or {}).get("action") or "") == "approve"
+        response_payload = dict(response or {})
+        candidate_adoption = dict(
+            response_payload.pop("_candidate_adoption", {}) or {}
+        )
+        candidate_update = dict(candidate_adoption.get("state_update") or {})
+        candidate_trace = dict(candidate_adoption.get("trace") or {})
+        if candidate_adoption and candidate_adoption.get("agent") != "contract":
+            raise ValueError("合同管理审批不能采纳非合同Agent候选。")
+        approved = str(response_payload.get("action") or "") == "approve"
         if approved:
-            evidence = list((response or {}).get("approval_evidence") or [])
+            evidence = list(response_payload.get("approval_evidence") or [])
             if not evidence:
                 raise ValueError("合同特批必须上传批准邮件、OA截图或其他审批附件。")
             terms = approval_terms(
-                dict(response or {}),
+                response_payload,
                 default_scope=f'仅限案件 {state["case_id"]} 的合同例外',
             )
-            decision = {**dict(response or {}), **terms}
+            decision = {**response_payload, **terms}
             return Command(
                 update={
+                    **candidate_update,
                     "status": "approved_by_exception",
                     "human_decision": decision,
                     "approval_evidence": list(state.get("approval_evidence") or []) + evidence,
                     "exception_approval": decision,
                     "waiting_for": None,
-                    "trace": [trace(
-                        "manager.approved",
-                        "管理层已批准本次例外并归档审批证据。",
-                        evidence_count=len(evidence),
-                    )],
+                    "trace": ([candidate_trace] if candidate_trace else []) + [
+                        trace(
+                            "manager.approved",
+                            "管理层已批准本次例外并归档审批证据。",
+                            evidence_count=len(evidence),
+                        )
+                    ],
                 },
                 goto="finalize",
             )
         return Command(
             update={
                 "status": "blocked",
-                "human_decision": dict(response),
+                "human_decision": response_payload,
                 "waiting_for": "sales_revision",
                 "trace": [trace("manager.rejected", "管理层拒绝特批，退回销售修改。")],
             },
@@ -1943,18 +1965,29 @@ class WorkflowNodes:
                 "allowed_actions": ["approve", "supplement", "revise_contract"],
             }
         )
-        action = str((response or {}).get("action") or "")
+        response_payload = dict(response or {})
+        candidate_adoption = dict(
+            response_payload.pop("_candidate_adoption", {}) or {}
+        )
+        candidate_update = dict(candidate_adoption.get("state_update") or {})
+        candidate_trace = dict(candidate_adoption.get("trace") or {})
+        if candidate_adoption and candidate_adoption.get("agent") != "contract":
+            raise ValueError("财务法务审批不能采纳非合同Agent候选。")
+        action = str(response_payload.get("action") or "")
         if action == "approve":
             return Command(
                 update={
+                    **candidate_update,
                     "status": "approved_after_manual_review",
-                    "human_decision": dict(response),
+                    "human_decision": response_payload,
                     "waiting_for": None,
-                    "trace": [trace("manual.approved", "财务/法务完成复核并确认。")],
+                    "trace": ([candidate_trace] if candidate_trace else []) + [
+                        trace("manual.approved", "财务/法务完成复核并确认。")
+                    ],
                 },
                 goto="finalize",
             )
-        files = list((response or {}).get("file_paths") or [])
+        files = list(response_payload.get("file_paths") or [])
         if action == "supplement" and files:
             return Command(
                 update={

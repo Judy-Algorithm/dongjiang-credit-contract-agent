@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-agentsla"
+import {api} from "../api.js?v=20260801-candidate"
 import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-nav"
 
 const tabs = [
@@ -42,6 +42,7 @@ export async function renderCaseDetailPage(root, route) {
     if (tab === "contract") installEvidenceViewer(root, item)
     if (tab === "documents") installDocumentViewer(root, item)
     if (tab === "writeback") installWritebackRetry(root, item, renderTab)
+    if (tab === "agents") installCandidateActions(root, item, renderTab)
   }
   root.querySelector(".tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-tab]")
@@ -157,13 +158,67 @@ function approvalTab(item) {
 
 function agentExecutionTab(item) {
   const execution = item.agent_execution || {}, plans = execution.plans || []
-  if (!plans.length) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
+  const candidates = item.agent_candidates || []
+  if (!plans.length && !candidates.length) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
   return `<div class="agent-execution">
-    <div class="agent-parent"><div><small>父工作流</small><h3>${escapeHtml(execution.parent_label || "业务主流程")}</h3></div><span class="badge approved">受控动态编排</span></div>
-    <div class="agent-flow-connector" aria-hidden="true"></div>
-    ${plans.map(agentPlan).join("")}
+    ${plans.length ? `<div class="agent-parent"><div><small>父工作流</small><h3>${escapeHtml(execution.parent_label || "业务主流程")}</h3></div><span class="badge approved">受控动态编排</span></div><div class="agent-flow-connector" aria-hidden="true"></div>${plans.map(agentPlan).join("")}` : ""}
+    ${candidateReviews(candidates)}
     <div class="agent-security-note">${escapeHtml(execution.security_notice || "")}</div>
   </div>`
+}
+
+function candidateReviews(candidates) {
+  if (!candidates.length) return ""
+  return `<section class="candidate-reviews"><div class="section-heading"><div><h3>异常与候选</h3><span>候选结果不会直接覆盖正式结论</span></div><span>${candidates.length} 项</span></div>
+    <div class="candidate-list">${candidates.map(candidateCard).join("")}</div>
+  </section>`
+}
+
+function candidateCard(candidate) {
+  const statusLabel = ({candidate:"候选运行",pending:"等待正式审批",approved:"已由正式审批采纳",rejected:"已拒绝",superseded:"已失效"})[candidate.status] || candidate.status
+  const comparison = candidate.comparison || {}
+  return `<article class="candidate-card"><header><div><small>${escapeHtml(candidate.agent_label)} · ${escapeHtml(candidate.candidate_ref)}</small><h4>${escapeHtml(statusLabel)}</h4><p>${escapeHtml(candidate.eligibility_message || "")}</p></div><span class="badge ${candidate.status === "approved" ? "approved" : candidate.status === "rejected" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span></header>
+    ${comparison.mode === "field" ? creditCandidateDiff(comparison.differences || []) : contractCandidateDiff(comparison.documents || [])}
+    <footer><small>提交申请不会修改正式结论；正式生效仍需当前审批节点确认。</small><div>${candidate.permissions?.can_reject_candidate ? `<button class="secondary" data-candidate-action="reject_candidate" data-incident-id="${escapeHtml(candidate.incident_id)}" data-request-id="${escapeHtml(candidate.review?.request_id || "")}">拒绝候选</button>` : ""}${candidate.permissions?.can_request_adoption ? `<button class="primary" data-candidate-action="request_adoption" data-incident-id="${escapeHtml(candidate.incident_id)}">提交采纳申请</button>` : ""}</div></footer>
+  </article>`
+}
+
+function creditCandidateDiff(rows) {
+  return `<div class="candidate-diff"><div class="candidate-diff-head"><span>对比项</span><span>正式结果</span><span>候选结果</span></div>${rows.map((row) => `<div class="candidate-diff-row ${row.changed ? "changed" : ""}"><b>${escapeHtml(row.label)}</b><span>${candidateValue(row.field, row.official)}</span><span>${candidateValue(row.field, row.candidate)}</span></div>`).join("")}</div>`
+}
+
+function contractCandidateDiff(documents) {
+  return `<div class="candidate-contracts">${documents.map((doc) => `<div class="candidate-contract-row ${doc.changed ? "changed" : ""}"><div><b>${escapeHtml(doc.document_id)}</b><small>${doc.changed ? `${doc.changed_fields.length} 项变化` : "无变化"}</small></div><span>${escapeHtml(doc.official?.decision || "—")} · ${escapeHtml(doc.official?.risk_level || "—")}</span><span>${escapeHtml(doc.candidate?.decision || "—")} · ${escapeHtml(doc.candidate?.risk_level || "—")}</span><small>规则 ${doc.official?.rule_finding_count ?? "—"} → ${doc.candidate?.rule_finding_count ?? "—"} · AI ${doc.official?.ai_finding_count ?? "—"} → ${doc.candidate?.ai_finding_count ?? "—"} · 证据覆盖 ${percent(doc.official?.evidence_coverage)} → ${percent(doc.candidate?.evidence_coverage)}</small></div>`).join("")}</div>`
+}
+
+function candidateValue(field, value) {
+  if (value == null || value === "") return "—"
+  if (["requires_supplement","credit_locked"].includes(field)) return value ? "是" : "否"
+  if (field === "approved_credit_limit") return money(value)
+  if (field === "recommended_term_days") return `${value} 天`
+  return escapeHtml(String(value))
+}
+
+function percent(value) { return value == null ? "—" : `${Math.round(Number(value) * 100)}%` }
+
+function installCandidateActions(root, item, renderTab) {
+  root.querySelector(".candidate-list")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-candidate-action]")
+    if (!button) return
+    const action = button.dataset.candidateAction
+    const label = action === "request_adoption" ? "提交采纳申请" : "拒绝候选"
+    root.insertAdjacentHTML("beforeend", `<div id="candidateDialog" class="modal-backdrop"><form class="modal-panel candidate-dialog"><div class="section-heading"><h3>${label}</h3><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">该操作不会直接改变正式业务结论。</p><label>处置理由<textarea id="candidateReason" rows="4" required placeholder="填写核验依据和处置理由"></textarea></label><p id="candidateError" class="error-box hidden"></p><div class="form-actions"><span></span><button type="submit" class="${action === "request_adoption" ? "primary" : "secondary"}">${label}</button></div></form></div>`)
+    const dialog = root.querySelector("#candidateDialog")
+    dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
+    dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.remove() })
+    dialog.querySelector("form").addEventListener("submit", async (e) => {
+      e.preventDefault(); const submit = e.submitter, error = dialog.querySelector("#candidateError"); submit.disabled = true; error.classList.add("hidden")
+      try {
+        const data = await api.manageAgentCandidate(item.case_id, {action, incident_id:button.dataset.incidentId, request_id:button.dataset.requestId || "", reason:dialog.querySelector("#candidateReason").value})
+        Object.assign(item, data.case); dialog.remove(); window.dispatchEvent(new CustomEvent("app:toast", {detail:action === "request_adoption" ? "候选已提交正式审批" : "候选已拒绝"})); renderTab("agents")
+      } catch (reason) { error.textContent = reason.message || String(reason); error.classList.remove("hidden"); submit.disabled = false }
+    })
+  })
 }
 
 function agentPlan(plan) {

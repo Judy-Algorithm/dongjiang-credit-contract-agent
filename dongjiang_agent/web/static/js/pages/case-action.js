@@ -1,4 +1,4 @@
-import {api, encodeFiles} from "../api.js?v=20260801-agentsla"
+import {api, encodeFiles} from "../api.js?v=20260801-candidate"
 import {escapeHtml, money} from "../format.js?v=20260731-nav"
 import {navigate} from "../router.js?v=20260731-nav"
 
@@ -9,6 +9,8 @@ export async function renderCaseActionPage(root, route) {
     return
   }
   const type = item.next_action.type
+  const candidateAgent = type === "credit_approval" ? "credit" : ["manual_review","manager_review"].includes(type) ? "contract" : ""
+  const candidateRequest = (item.agent_candidates || []).find((candidate) => candidate.status === "pending" && candidate.agent === candidateAgent)
   root.innerHTML = `
     <header class="page-header">
       <div><h1>${escapeHtml(item.next_action.label)}</h1><p>${escapeHtml(item.customer.customer_name)}　·　${escapeHtml(item.case_id)}</p></div>
@@ -16,6 +18,7 @@ export async function renderCaseActionPage(root, route) {
     </header>
     <section class="panel action-card">
       ${context(item)}
+      ${candidateRequest ? `<div class="candidate-approval-banner"><div><b>Agent候选正在等待本节点确认</b><small>候选 ${escapeHtml(candidateRequest.candidate_ref)} · 仅在点击批准时采纳</small></div><label class="checkbox-row"><input id="adoptCandidate" type="checkbox">本次批准采纳候选结果</label></div>` : ""}
       ${["upload_contract","submit_revision"].includes(type)
         ? contractForm(type, item)
         : type === "credit_supplement"
@@ -34,6 +37,8 @@ export async function renderCaseActionPage(root, route) {
     event.preventDefault()
     const submitter = event.submitter
     const action = submitter?.dataset.action
+    const candidateRequestId = root.querySelector("#adoptCandidate")?.checked ? candidateRequest?.review?.request_id || "" : ""
+    if (candidateRequestId && action !== "approve") throw new Error("采纳Agent候选时请使用批准操作；调整后批准将保留人工调整值。")
     const encoded = await encodeFiles(files?.files || [])
     const contractText = root.querySelector("#contractText")?.value.trim() || ""
     let data
@@ -87,10 +92,12 @@ export async function renderCaseActionPage(root, route) {
       data = await api.submitContractAction(item.case_id, {
         action,
         comment:root.querySelector("#comment")?.value.trim() || "",
+        candidate_adoption_request_id:candidateRequestId,
         approval_scope:root.querySelector("#approvalScope")?.value.trim() || "",
         validity_days:optionalNumber(root, "#validityDays"),
         oa_evidence_id:root.querySelector("#oaEvidenceId")?.value.trim() || "",
         files:["manager_review","special_release"].includes(type) && action !== "approve" ? [] : encoded,
+        candidate_adoption_request_id:candidateRequestId,
       })
     }
     window.dispatchEvent(new CustomEvent("app:toast", {detail:"操作已提交"}))
