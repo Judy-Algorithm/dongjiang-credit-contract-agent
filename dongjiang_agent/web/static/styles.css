@@ -412,6 +412,14 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .decision-context { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 22px; }
 .decision-context div { padding: 14px; background: var(--surface-soft); border-radius: 10px; }
 .decision-context span { display: block; color: var(--muted); font-size: 12px; }
+.approval-mode { margin: 0 0 8px; padding: 0; display: inline-flex; border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; }
+.approval-mode legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.approval-mode label { cursor: pointer; }
+.approval-mode input { position: absolute; width: 1px; min-height: 1px; opacity: 0; }
+.approval-mode span { display: block; min-width: 112px; padding: 10px 15px; color: var(--body); text-align: center; }
+.approval-mode input:checked + span { background: var(--ink); color: var(--canvas); }
+.approval-mode-hint { margin: 0 0 18px; }
+input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: not-allowed; }
 
 .supplement-notice { margin: 18px 0; padding: 15px 17px; background: var(--orange-bg); border-left: 3px solid var(--orange); border-radius: 0 10px 10px 0; }
 .supplement-notice strong { color: var(--orange); }

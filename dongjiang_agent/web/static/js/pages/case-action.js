@@ -32,11 +32,19 @@ export async function renderCaseActionPage(root, route) {
   if (files) files.addEventListener("change", () => {
     root.querySelector("#actionFileList").innerHTML = Array.from(files.files).map((file) => `<span class="file-chip">${escapeHtml(file.name)}</span>`).join("")
   })
+  if (type === "credit_approval") setupCreditApprovalMode(root)
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault()
+    if (form.dataset.submitting === "true") return
     const submitter = event.submitter
     const action = submitter?.dataset.action
+    form.dataset.submitting = "true"
+    form.querySelectorAll("button").forEach((button) => { button.disabled = true })
+    try {
+    if (type === "credit_approval" && action === "adjust_and_approve" && !root.querySelector("#comment")?.value.trim()) {
+      throw new Error("人工调整额度或账期时，请填写调整依据。")
+    }
     const candidateRequestId = root.querySelector("#adoptCandidate")?.checked ? candidateRequest?.review?.request_id || "" : ""
     if (candidateRequestId && action !== "approve") throw new Error("采纳Agent候选时请使用批准操作；调整后批准将保留人工调整值。")
     const encoded = await encodeFiles(files?.files || [])
@@ -102,7 +110,33 @@ export async function renderCaseActionPage(root, route) {
     }
     window.dispatchEvent(new CustomEvent("app:toast", {detail:"操作已提交"}))
     navigate(`/cases/${encodeURIComponent(data.case.case_id)}`, {replace:true})
+    } catch (reason) {
+      delete form.dataset.submitting
+      form.querySelectorAll("button").forEach((button) => { button.disabled = false })
+      throw reason
+    }
   })
+}
+
+function setupCreditApprovalMode(root) {
+  const controls = Array.from(root.querySelectorAll('input[name="approvalMode"]'))
+  const limit = root.querySelector("#approvedCreditLimit")
+  const term = root.querySelector("#approvedTermDays")
+  const comment = root.querySelector("#comment")
+  const submit = root.querySelector("#creditApprovalSubmit")
+  const hint = root.querySelector("#approvalModeHint")
+  const update = () => {
+    const adjusted = controls.find((control) => control.checked)?.value === "adjust"
+    limit.readOnly = !adjusted
+    term.readOnly = !adjusted
+    submit.dataset.action = adjusted ? "adjust_and_approve" : "approve"
+    submit.textContent = adjusted ? "调整后批准" : "按建议批准"
+    hint.textContent = adjusted
+      ? "额度或账期将以人工填写值生效，处理意见必须说明调整依据。"
+      : "额度和账期采用上方模型建议值，不接受手工修改。"
+  }
+  controls.forEach((control) => control.addEventListener("change", update))
+  update()
 }
 
 function context(item) {
@@ -223,15 +257,19 @@ function creditSupplementForm() {
 }
 
 function decisionForm(type, item) {
-  const actions = type === "credit_approval"
-    ? [["reject","拒绝","danger"],["request_supplement","要求补充资料","secondary"],["adjust_and_approve","调整后批准","secondary"],["approve","批准","primary"]]
-    : ["manager_review","special_release"].includes(type)
+  const actions = ["manager_review","special_release"].includes(type)
     ? [["reject","驳回","danger"],["approve","批准","primary"]]
     : [["request_revision","要求修改合同","secondary"],["supplement","补充资料","secondary"],["approve","确认通过","primary"]]
   const model = item.credit?.model_result || {}
   return `
     <form id="actionForm">
       ${type === "credit_approval" ? `
+        <fieldset class="approval-mode" aria-describedby="approvalModeHint">
+          <legend>审批方式</legend>
+          <label><input type="radio" name="approvalMode" value="model" checked><span>按模型建议</span></label>
+          <label><input type="radio" name="approvalMode" value="adjust"><span>人工调整</span></label>
+        </fieldset>
+        <p id="approvalModeHint" class="field-hint approval-mode-hint"></p>
         <div class="form-grid two">
           <label>正式授信额度（元）<input id="approvedCreditLimit" type="number" min="0" value="${escapeHtml(model.credit_limit ?? "")}"></label>
           <label>正式账期（天）<input id="approvedTermDays" type="number" min="1" max="${escapeHtml(model.hard_term_limit_days ?? "")}" value="${escapeHtml(model.term_days ?? "")}"></label>
@@ -263,7 +301,9 @@ function decisionForm(type, item) {
         </div>` : ""}
       <label class="full">处理意见<textarea id="comment" rows="4" placeholder="填写审批或复核意见"></textarea></label>
       <div class="form-actions"><span></span><div class="right">
-        ${actions.map(([action,label,style]) => `<button type="submit" class="${style}" data-action="${action}">${label}</button>`).join("")}
+        ${type === "credit_approval"
+          ? `<button type="submit" class="danger" data-action="reject">拒绝</button><button type="submit" class="secondary" data-action="request_supplement">要求补充资料</button><button id="creditApprovalSubmit" type="submit" class="primary" data-action="approve">按建议批准</button>`
+          : actions.map(([action,label,style]) => `<button type="submit" class="${style}" data-action="${action}">${label}</button>`).join("")}
       </div></div>
     </form>`
 }

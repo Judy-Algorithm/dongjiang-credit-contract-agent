@@ -58,7 +58,9 @@ class WorkflowRun:
 
     @property
     def paused(self) -> bool:
-        return bool(self.next_nodes)
+        # Some LangGraph/SQLite combinations expose an interrupted task while
+        # omitting it from snapshot.next. The interrupt is still resumable.
+        return bool(self.next_nodes or self.interrupt)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -1357,14 +1359,62 @@ class DongjiangWorkflowHarness:
         elif files:
             payload["file_paths"] = files
         payload["actor"] = asdict(actor)
+        resume_config, recovered = self._resume_config(current, actor)
         self.graph.invoke(
             Command(
                 resume=payload,
-                update={"actor": asdict(actor)},
+                update=None if recovered else {"actor": asdict(actor)},
             ),
-            config=self._config(case_id),
+            config=resume_config,
         )
         return self._run_result(case_id)
+
+    def _resume_config(
+        self,
+        current: WorkflowRun,
+        actor: ActorContext,
+    ) -> tuple[dict[str, Any], bool]:
+        base_config = self._config(current.case_id)
+        snapshot = self.graph.get_state(base_config)
+        failed_interrupt = bool(
+            current.waiting_for
+            and current.interrupt
+            and not snapshot.next
+            and any(getattr(task, "error", None) for task in snapshot.tasks)
+        )
+        if not failed_interrupt:
+            return base_config, False
+
+        clean = next(
+            (
+                item
+                for item in self.graph.get_state_history(base_config)
+                if item.next
+                and self._interrupt_payload(item)
+                and (item.values or {}).get("waiting_for") == current.waiting_for
+            ),
+            None,
+        )
+        if clean is None:
+            return base_config, False
+        recovered_config = self.graph.update_state(
+            clean.config,
+            {
+                "actor": asdict(actor),
+                "trace": [
+                    {
+                        "ts": utc_now(),
+                        "stage": "workflow.interrupt_retry_prepared",
+                        "message": "上一轮人工操作校验失败，已从原等待节点重新提交。",
+                        "data": {
+                            "waiting_for": current.waiting_for,
+                            "actor_id": actor.actor_id,
+                        },
+                    }
+                ],
+            },
+        )
+        return recovered_config, True
 
     def _candidate_adoption_payload(
         self,

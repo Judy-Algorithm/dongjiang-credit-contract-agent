@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dongjiang_agent.persistence import CaseRepository
 from dongjiang_agent.integrations import IntegrationBundle
-from dongjiang_agent.workflow import ActorContext, DongjiangWorkflowHarness
+from dongjiang_agent.workflow import ActorContext, DongjiangWorkflowHarness, WorkflowRun
 
 
 COMPLETE_SAFE_CONTRACT = """销售合同
@@ -32,6 +32,100 @@ class LangGraphWorkflowTests(unittest.TestCase):
             output_dir=root / "output",
             evidence_dir=root / "evidence",
         )
+
+    def test_interrupt_payload_counts_as_resumable_when_snapshot_next_is_empty(self):
+        run = WorkflowRun(
+            case_id="DJ-INTERRUPT",
+            status="credit_pending_approval",
+            stage="credit_pending_approval",
+            waiting_for="credit_approval",
+            next_nodes=[],
+            interrupt={"type": "credit_approval"},
+            state={"status": "credit_pending_approval"},
+        )
+        self.assertTrue(run.paused)
+
+    def test_plain_approval_ignores_supplied_adjustment_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "按建议批准测试客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                        "external_rating": "AA",
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-model", ("sales",), "crm"),
+                )
+                model = run.state["credit_assessment"]
+                approved = harness.resume(
+                    run.case_id,
+                    {
+                        "action": "approve",
+                        "approved_credit_limit": 1,
+                        "approved_term_days": 1,
+                        "comment": "页面即使传入修改值，也应采用模型建议",
+                    },
+                    actor=ActorContext("credit-model", ("credit",), "web"),
+                )
+                effective = approved.state["effective_credit_assessment"]
+                self.assertEqual(
+                    effective["approved_credit_limit"],
+                    model["approved_credit_limit"],
+                )
+                self.assertEqual(
+                    effective["recommended_term_days"],
+                    model["recommended_term_days"],
+                )
+
+    def test_validation_failure_can_retry_from_same_human_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "审批失败重试测试客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                        "external_rating": "AA",
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-retry", ("sales",), "crm"),
+                )
+                with self.assertRaisesRegex(ValueError, "必须填写调整原因"):
+                    harness.resume(
+                        run.case_id,
+                        {
+                            "action": "adjust_and_approve",
+                            "approved_credit_limit": 1_500_000,
+                            "approved_term_days": 45,
+                            "comment": "",
+                        },
+                        actor=ActorContext("credit-retry", ("credit",), "web"),
+                    )
+
+                failed = harness.get(run.case_id)
+                self.assertEqual(failed.waiting_for, "credit_approval")
+                self.assertTrue(failed.paused)
+                retried = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "改为按模型建议批准"},
+                    actor=ActorContext("credit-retry", ("credit",), "web"),
+                )
+                self.assertEqual(retried.waiting_for, "contract_upload")
+                self.assertEqual(retried.state["credit_status"], "effective")
+                self.assertTrue(any(
+                    item.get("stage") == "workflow.interrupt_retry_prepared"
+                    for item in retried.state.get("trace") or []
+                ))
 
     def test_blocked_contract_can_be_revised_and_resumed(self):
         with tempfile.TemporaryDirectory() as tmp:
