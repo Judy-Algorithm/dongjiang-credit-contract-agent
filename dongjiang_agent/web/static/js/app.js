@@ -11,24 +11,24 @@ let currentRoute
 let installRouter
 let navigate
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260801-display-fix",
-  register: "./pages/auth.js?v=20260801-display-fix",
-  "forgot-password": "./pages/auth.js?v=20260801-display-fix",
-  setup: "./pages/auth.js?v=20260801-display-fix",
-  "change-password": "./pages/auth.js?v=20260801-display-fix",
-  cases: "./pages/cases.js?v=20260801-display-fix",
-  "case-new": "./pages/case-new.js?v=20260801-display-fix",
-  "case-detail": "./pages/case-detail.js?v=20260801-display-fix",
-  "case-action": "./pages/case-action.js?v=20260801-display-fix",
-  users: "./pages/users.js?v=20260801-display-fix",
-  audit: "./pages/audit.js?v=20260801-display-fix",
-  writebacks: "./pages/writebacks.js?v=20260801-display-fix",
-  registrations: "./pages/registrations.js?v=20260801-display-fix",
-  notifications: "./pages/notifications.js?v=20260801-display-fix",
-  operations: "./pages/operations.js?v=20260801-display-fix",
-  "agent-operations": "./pages/agent-operations.js?v=20260801-display-fix",
-  analytics: "./pages/analytics.js?v=20260801-display-fix",
-  benchmarks: "./pages/benchmark.js?v=20260801-display-fix",
+  login: "./pages/auth.js?v=20260801-core3",
+  register: "./pages/auth.js?v=20260801-core3",
+  "forgot-password": "./pages/auth.js?v=20260801-core3",
+  setup: "./pages/auth.js?v=20260801-core3",
+  "change-password": "./pages/auth.js?v=20260801-core3",
+  cases: "./pages/cases.js?v=20260801-core3",
+  "case-new": "./pages/case-new.js?v=20260801-core3",
+  "case-detail": "./pages/case-detail.js?v=20260801-core3",
+  "case-action": "./pages/case-action.js?v=20260801-core3",
+  users: "./pages/users.js?v=20260801-core3",
+  audit: "./pages/audit.js?v=20260801-core3",
+  writebacks: "./pages/writebacks.js?v=20260801-core3",
+  registrations: "./pages/registrations.js?v=20260801-core3",
+  notifications: "./pages/notifications.js?v=20260801-core3",
+  operations: "./pages/operations.js?v=20260801-core3",
+  "agent-operations": "./pages/agent-operations.js?v=20260801-core3",
+  analytics: "./pages/analytics.js?v=20260801-core3",
+  benchmarks: "./pages/benchmark.js?v=20260801-core3",
 }
 
 async function loadModule(path) {
@@ -47,10 +47,10 @@ async function loadPageModule(routeName) {
 }
 
 async function bootstrap() {
-  const authModule = await loadModule("./auth.js?v=20260801-display-fix")
+  const authModule = await loadModule("./auth.js?v=20260801-core3")
   ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
-  api = (await loadModule("./api.js?v=20260801-display-fix")).api
-  const routerModule = await loadModule("./router.js?v=20260801-display-fix")
+  api = (await loadModule("./api.js?v=20260801-core3")).api
+  const routerModule = await loadModule("./router.js?v=20260801-core3")
   ;({currentRoute, installRouter, navigate} = routerModule)
   installRouter(render)
   await render()

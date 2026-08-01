@@ -54,7 +54,7 @@ def main() -> int:
     workflow_resume = subparsers.add_parser("workflow-resume", help="使用审批或补充资料恢复工作流")
     workflow_resume.add_argument("--case-id", required=True)
     workflow_resume.add_argument("--decision", required=True, help="恢复指令 JSON 文件")
-    lifecycle = subparsers.add_parser(
+    subparsers.add_parser(
         "lifecycle-sweep", help="执行一年无订单且无欠款客户的授信清零"
     )
     subparsers.add_parser("sla-sweep", help="扫描临期和逾期待办并发送去重提醒")

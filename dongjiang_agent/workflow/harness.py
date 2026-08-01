@@ -17,9 +17,15 @@ from langgraph.types import Command
 from ..domain.codec import profile_from_dict
 from ..domain.models import AuditCase, CreditProfile, utc_now
 from ..integrations import IntegrationBundle
+from ..llm import StructuredFieldExtractor
 from ..persistence import CaseRepository
 from .codec import case_from_state, checkpoint_dict
-from .dynamic import RETRYABLE_ANALYSIS_TASKS, assert_plan_integrity
+from .dynamic import (
+    RETRYABLE_ANALYSIS_TASKS,
+    assert_plan_integrity,
+    build_contract_plan,
+    build_credit_plan,
+)
 from .graph import build_workflow
 from .incidents import detect_plan_incident, new_agent_incident
 from .candidate_reviews import (
@@ -260,6 +266,7 @@ class DongjiangWorkflowHarness:
             "execution_audits": [],
             "agent_incidents": [],
             "agent_candidate_reviews": [],
+            "structured_extractions": [],
             "agent_rerun_context": None,
             "active_workflow_plan": None,
             "active_agent_task": None,
@@ -298,6 +305,364 @@ class DongjiangWorkflowHarness:
             },
         )
         return self._run_result(current.case_id)
+
+    def generate_structured_extraction(
+        self,
+        case_id: str,
+        *,
+        document_kind: str,
+        actor: ActorContext,
+        extractor: StructuredFieldExtractor | None = None,
+    ) -> tuple[WorkflowRun, dict[str, Any]]:
+        allowed_roles = (
+            {"admin", "credit", "finance", "system"}
+            if document_kind == "credit"
+            else {"admin", "finance", "legal", "system"}
+            if document_kind == "contract"
+            else set()
+        )
+        if not allowed_roles.intersection(actor.roles):
+            raise PermissionError("当前角色不能发起AI结构化提取。")
+        current = self.get(case_id)
+        if document_kind == "credit" and current.waiting_for != "credit_approval":
+            raise ValueError("信用结构化提取仅支持信用审批节点。")
+        if document_kind == "contract" and current.waiting_for not in {
+            "manager_approval",
+            "finance_legal_review",
+        }:
+            raise ValueError("合同结构化提取仅支持合同审批节点。")
+        documents = [
+            deepcopy(item)
+            for item in current.state.get("source_documents") or []
+            if item.get("document_kind") == document_kind
+            and item.get("parse_status") == "parsed"
+            and item.get("fragments")
+        ]
+        if not documents:
+            raise ValueError("当前案件没有可定位的已解析资料。")
+        redacted_text = "\n\n".join(
+            f"[DOCUMENT {item.get('document_id')}]\n"
+            + "\n".join(
+                str(fragment.get("text") or "")
+                for fragment in item.get("fragments") or []
+            )
+            for item in documents
+        )
+        result = (extractor or StructuredFieldExtractor()).extract(
+            document_kind,
+            redacted_text=redacted_text,
+            documents=documents,
+        )
+        extraction = {
+            "extraction_id": f"XTR-{uuid4().hex[:12].upper()}",
+            "document_kind": document_kind,
+            "status": (
+                "pending"
+                if (result.get("verification") or {}).get("status") == "passed"
+                else "verification_failed"
+            ),
+            "model": result.get("model"),
+            "prompt_version": result.get("prompt_version"),
+            "summary": result.get("summary"),
+            "candidates": list(result.get("candidates") or []),
+            "verification": dict(result.get("verification") or {}),
+            "created_by": {
+                "user_id": actor.actor_id,
+                "display_name": actor.display_name or actor.actor_id,
+            },
+            "created_at": utc_now(),
+            "decision": {},
+        }
+        rows = [
+            deepcopy(item)
+            for item in current.state.get("structured_extractions") or []
+        ]
+        rows.append(extraction)
+        self.graph.update_state(
+            self._config(case_id),
+            {
+                "structured_extractions": rows,
+                "trace": [
+                    {
+                        "ts": utc_now(),
+                        "stage": "agent.extraction.generated",
+                        "message": "AI结构化字段候选已生成并完成独立证据核验。",
+                        "data": {
+                            "extraction_id": extraction["extraction_id"],
+                            "document_kind": document_kind,
+                            "candidate_count": len(extraction["candidates"]),
+                            "verification_status": extraction["verification"].get(
+                                "status"
+                            ),
+                            "official_state_changed": False,
+                        },
+                    }
+                ],
+            },
+        )
+        return self._run_result(case_id), deepcopy(extraction)
+
+    def manage_structured_extraction(
+        self,
+        case_id: str,
+        *,
+        extraction_id: str,
+        action: str,
+        actor: ActorContext,
+        candidate_ids: list[str] | None = None,
+        reason: str = "",
+    ) -> tuple[WorkflowRun, dict[str, Any]]:
+        if action not in {"adopt", "reject"}:
+            raise ValueError("结构化提取处置动作必须是adopt或reject。")
+        clean_reason = " ".join(str(reason or "").split())[:500]
+        if len(clean_reason) < 2:
+            raise ValueError("采纳或拒绝结构化候选时必须填写理由。")
+        current = self.get(case_id)
+        state = deepcopy(current.state)
+        rows = [deepcopy(item) for item in state.get("structured_extractions") or []]
+        extraction = next(
+            (
+                item
+                for item in rows
+                if str(item.get("extraction_id") or "") == extraction_id
+            ),
+            None,
+        )
+        if extraction is None:
+            raise KeyError("AI结构化提取记录不存在。")
+        allowed_roles = (
+            {"admin", "credit", "finance", "system"}
+            if extraction.get("document_kind") == "credit"
+            else {"admin", "finance", "legal", "system"}
+        )
+        if not allowed_roles.intersection(actor.roles):
+            raise PermissionError("当前角色不能处置AI结构化提取候选。")
+        if extraction.get("status") != "pending":
+            raise ValueError("该结构化提取候选已完成处置或核验失败。")
+        selected_ids = {str(item) for item in candidate_ids or []}
+        selected = [
+            deepcopy(item)
+            for item in extraction.get("candidates") or []
+            if not selected_ids or str(item.get("candidate_id") or "") in selected_ids
+        ]
+        now = utc_now()
+        if action == "reject":
+            extraction.update(
+                {
+                    "status": "rejected",
+                    "decision": {
+                        "action": action,
+                        "reason": clean_reason,
+                        "official_state_changed": False,
+                    },
+                    "decided_by": {
+                        "user_id": actor.actor_id,
+                        "display_name": actor.display_name or actor.actor_id,
+                    },
+                    "decided_at": now,
+                }
+            )
+            self.graph.update_state(
+                self._config(case_id),
+                {
+                    "structured_extractions": rows,
+                    "trace": [
+                        {
+                            "ts": now,
+                            "stage": "agent.extraction.rejected",
+                            "message": "AI结构化字段候选已被人工拒绝。",
+                            "data": {
+                                "extraction_id": extraction_id,
+                                "official_state_changed": False,
+                            },
+                        }
+                    ],
+                },
+            )
+            return self._run_result(case_id), deepcopy(extraction)
+        if not selected:
+            raise ValueError("请至少选择一个待采纳字段。")
+        if (extraction.get("verification") or {}).get("status") != "passed":
+            raise ValueError("结构化候选独立核验未通过，不能采纳。")
+        update = self._adopt_extraction_candidates(
+            state, extraction, selected, current.waiting_for
+        )
+        extraction.update(
+            {
+                "status": "adopted",
+                "decision": {
+                    "action": action,
+                    "reason": clean_reason,
+                    "candidate_ids": [item["candidate_id"] for item in selected],
+                    "official_state_changed": True,
+                    "result_plan_id": update.get("active_workflow_plan", {}).get(
+                        "plan_id"
+                    ),
+                },
+                "decided_by": {
+                    "user_id": actor.actor_id,
+                    "display_name": actor.display_name or actor.actor_id,
+                },
+                "decided_at": now,
+            }
+        )
+        update["structured_extractions"] = rows
+        update["trace"] = list(update.get("trace") or []) + [
+            {
+                "ts": now,
+                "stage": "agent.extraction.adopted",
+                "message": "人工采纳AI结构化字段后已重新执行受控Agent计划。",
+                "data": {
+                    "extraction_id": extraction_id,
+                    "candidate_count": len(selected),
+                    "plan_id": extraction["decision"].get("result_plan_id"),
+                    "official_state_changed": True,
+                },
+            }
+        ]
+        self.graph.update_state(self._config(case_id), update)
+        return self._run_result(case_id), deepcopy(extraction)
+
+    def _adopt_extraction_candidates(
+        self,
+        state: dict[str, Any],
+        extraction: dict[str, Any],
+        selected: list[dict[str, Any]],
+        current_waiting_for: str | None,
+    ) -> dict[str, Any]:
+        kind = str(extraction.get("document_kind") or "")
+        snapshot = self.nodes._runtime_snapshot()
+        snapshot["structured_extraction_ref"] = str(
+            extraction.get("extraction_id") or ""
+        )
+        candidate = deepcopy(state)
+        candidate["agent_task_results"] = []
+        candidate["agent_runs"] = []
+        candidate["execution_audits"] = []
+        candidate["trace"] = []
+        candidate["errors"] = []
+        candidate["agent_rerun_context"] = None
+        if kind == "credit":
+            customer = deepcopy(candidate.get("customer") or {})
+            for item in selected:
+                customer[str(item["field"])] = item.get("value")
+            candidate["customer"] = customer
+            plan = build_credit_plan(
+                str(state["case_id"]),
+                customer,
+                list(state.get("source_documents") or []),
+                runtime_snapshot=snapshot,
+            )
+            candidate["active_workflow_plan"] = plan
+            for task in plan.get("tasks") or []:
+                if task.get("phase") == "analysis":
+                    candidate["active_agent_task"] = task
+                    self._merge_node_update(
+                        candidate, self.nodes.run_credit_analysis(candidate)
+                    )
+            self._merge_node_update(
+                candidate, self.nodes.synthesize_credit_analysis(candidate)
+            )
+            self._merge_node_update(candidate, self.nodes.score_credit(candidate))
+            self._merge_node_update(candidate, self.nodes.verify_credit(candidate))
+            waiting_for = (
+                "credit_supplement"
+                if (candidate.get("credit_assessment") or {}).get(
+                    "requires_supplement"
+                )
+                else "credit_approval"
+            )
+            if waiting_for != current_waiting_for:
+                raise ValueError("采纳候选会改变当前信用审批节点，请走正式补件重审。")
+            return {
+                "customer": customer,
+                "credit_assessment": candidate.get("credit_assessment"),
+                "credit_analysis": candidate.get("credit_analysis"),
+                "credit_verification": candidate.get("credit_verification"),
+                "active_workflow_plan": candidate.get("active_workflow_plan"),
+                "workflow_plans": [candidate.get("active_workflow_plan")],
+                "agent_task_results": candidate.get("agent_task_results"),
+                "agent_runs": candidate.get("agent_runs"),
+                "execution_audits": candidate.get("execution_audits"),
+                "status": (
+                    "credit_supplement_required"
+                    if waiting_for == "credit_supplement"
+                    else "credit_pending_approval"
+                ),
+                "credit_status": (
+                    "supplement_required"
+                    if waiting_for == "credit_supplement"
+                    else "pending_approval"
+                ),
+                "waiting_for": waiting_for,
+                "trace": candidate.get("trace"),
+            }
+        if kind == "contract":
+            contracts = [deepcopy(item) for item in candidate.get("contract_facts") or []]
+            by_id = {
+                str(item.get("document_id") or ""): item for item in contracts
+            }
+            for item in selected:
+                target = by_id.get(str(item.get("document_id") or ""))
+                if target is None:
+                    raise ValueError("合同字段候选关联的文档已不存在。")
+                target[str(item["field"])] = item.get("value")
+                target.setdefault("evidence", []).append(
+                    {
+                        "source": "ai_structured_candidate",
+                        "field": item["field"],
+                        "value": item.get("value"),
+                        "confidence": item.get("confidence"),
+                        "excerpt": item.get("evidence_query"),
+                        "document_id": item.get("document_id"),
+                        "fragment_id": item.get("fragment_id"),
+                        "location": dict(item.get("location") or {}),
+                    }
+                )
+            candidate["contract_facts"] = contracts
+            plan = build_contract_plan(
+                str(state["case_id"]),
+                contracts,
+                ai_available=bool(
+                    self.nodes.contract_ai.enabled
+                    and self.nodes.contract_ai.gateway.available
+                ),
+                runtime_snapshot=snapshot,
+            )
+            candidate["active_workflow_plan"] = plan
+            for task in plan.get("tasks") or []:
+                if task.get("phase") == "analysis":
+                    candidate["active_agent_task"] = task
+                    self._merge_node_update(
+                        candidate, self.nodes.run_contract_analysis(candidate)
+                    )
+            self._merge_node_update(
+                candidate, self.nodes.synthesize_contract_reviews(candidate)
+            )
+            self._merge_node_update(
+                candidate, self.nodes.verify_contract_reviews(candidate)
+            )
+            decision_update = self.nodes.decide(candidate)
+            waiting_for = str(decision_update.get("waiting_for") or "") or None
+            if waiting_for != current_waiting_for:
+                raise ValueError("采纳候选会改变合同审批路由，请提交正式合同重审。")
+            return {
+                "contract_facts": contracts,
+                "contract_reviews": candidate.get("contract_reviews"),
+                "contract_verifications": candidate.get("contract_verifications"),
+                "decision": decision_update.get("decision"),
+                "approval_route": decision_update.get("approval_route"),
+                "approval_request": decision_update.get("approval_request"),
+                "active_workflow_plan": candidate.get("active_workflow_plan"),
+                "workflow_plans": [candidate.get("active_workflow_plan")],
+                "agent_task_results": candidate.get("agent_task_results"),
+                "agent_runs": candidate.get("agent_runs"),
+                "execution_audits": candidate.get("execution_audits"),
+                "status": decision_update.get("status"),
+                "waiting_for": waiting_for,
+                "trace": candidate.get("trace"),
+            }
+        raise ValueError("未知的结构化提取类型。")
 
     @staticmethod
     def _latest_plan_rows(

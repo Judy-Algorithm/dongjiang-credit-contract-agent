@@ -143,6 +143,24 @@ class IntegrationBundle:
                 raise ValueError(f"{prefix}_HEADERS_JSON 必须是JSON对象。")
             return {str(key): str(value) for key, value in parsed.items()}
 
+        if os.getenv("DONGJIANG_INTEGRATION_MODE", "").strip().lower() == "mock":
+            from .mock import (
+                MockCRMAdapter,
+                MockEnterpriseStore,
+                MockOAAdapter,
+                MockSAPAdapter,
+            )
+
+            mock_root = os.getenv(
+                "DONGJIANG_MOCK_ENTERPRISE_ROOT", "data/mock-enterprise"
+            )
+            store = MockEnterpriseStore(mock_root)
+            return cls(
+                oa=MockOAAdapter(store),
+                crm=MockCRMAdapter(store),
+                sap=MockSAPAdapter(store),
+                audit_root=Path(audit_root),
+            )
         oa_url = os.getenv("DONGJIANG_OA_BASE_URL", "").strip()
         crm_url = os.getenv("DONGJIANG_CRM_BASE_URL", "").strip()
         sap_url = os.getenv("DONGJIANG_SAP_BASE_URL", "").strip()

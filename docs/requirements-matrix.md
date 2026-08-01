@@ -1,6 +1,6 @@
 # 命题要求与实现矩阵
 
-更新时间：2026-07-31
+更新时间：2026-08-01
 
 ## 已可演示
 
@@ -27,6 +27,9 @@
 | 合同修订闭环 | 风险逐项采用建议/人工修改/保留说明；生成Word修订稿与清洁稿；清洁稿重新审查并保留版本链 | `test_contract_revisions.py`、`test_contract_revision_generates_downloads_and_resubmits_clean_version` |
 | 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
 | AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
+| AI结构化提取与人工采纳 | 信用/合同字段严格白名单和Schema校验；候选必须绑定案件证据并通过独立核验；生成和拒绝不改正式状态，人工采纳后重建冻结计划但不自动批准 | `test_model_health_and_extraction.py`、`test_structured_extraction_workflow.py`、`test_structured_extraction_api_enforces_roles_and_redacts_audit` |
+| 文本模型健康与降级监控 | 管理员查看配置、最近状态、耗时、成功率和失败类型并主动探测；记录不含密钥、提示词或正文 | `test_health_store_contains_no_prompt_key_or_document`、`test_model_probe_is_admin_only_and_audited` |
+| OA/CRM/SAP Mock闭环 | 比赛模式生成完整OA审批链、批准范围/有效期和证据ID，并通过现有工作流激活授信、幂等回写三系统；所有响应显式标记`mock: true` | `test_mock_integrations.py`、`test_mock_enterprise_approval_runs_existing_workflow_and_is_admin_only` |
 | 失败回写运维 | 管理员集中查看失败OA/CRM/SAP回写；仅重试指定失败目标，沿用幂等键并持久化重试历史和安全审计 | `test_admin_can_list_and_retry_failed_writeback` |
 | Agent执行运维 | 跨案件汇总计划完整性、执行偏差、失败/降级节点、重试和幂等复用；旧计划单独标识，管理员可直达案件运行页 | `test_agent_operations.py`、Agent运维页 |
 | Agent异常处置闭环 | 管理员确认、分派、备注、候选重跑和关闭异常；仅白名单分析节点可在隔离副本重跑，正式结论、审批状态和待办保持不变；处置写Trace、安全审计和通知 | `test_agent_incidents.py`、`test_agent_incident_api_enforces_permissions_audits_notifies_and_redacts` |
@@ -43,13 +46,14 @@
 
 | 能力 | 当前边界 | 需要东江提供 |
 |---|---|---|
-| 泛微 OA 流程 | 已有提交端口，未绑定真实表单字段 | 测试地址、鉴权、流程 ID、字段字典、回调规范 |
-| CRM 信审回写 | 已有读客户/写决策端口 | 客户主键、额度/账期字段、接口鉴权 |
+| 泛微 OA 流程 | HTTP适配器和显式Mock闭环已完成，尚未绑定真实表单字段 | 测试地址、鉴权、流程 ID、字段字典、回调规范 |
+| CRM/SAP 信审回写 | HTTP适配器、失败重试和显式Mock闭环已完成 | 客户主键、额度/账期字段、接口鉴权、SAP业务对象与返回码规范 |
 | 第三方评级自动抓取 | 支持上传报告；未做生产级站点采集 | 数据授权、站点许可或企业订阅接口 |
 | OCR | 有 Tesseract 路径和失败提示 | 生产 OCR 服务或内网模型 |
 | LLM 增强 | 仅允许脱敏文本；规则链不依赖 LLM | 企业批准模型、网关地址、数据处理协议 |
 
 ## 比赛前仍需补强
 
-当前已补齐TKM业务子类型、首期采购款豁免、总信用额、一年无订单自动失活、OA审批链数据、批准范围/有效期、HTTP回写适配器、原件案件级归档、内部用户权限和文件证据定位。真实企业联调仍需东江提供测试地址、鉴权、流程ID和字段字典。
-5. 原 Word 合同已支持段落级格式保留和修订痕迹；后续继续补表格内局部文字修订、条款级多语言及结构化LLM抽取。
+当前已补齐TKM业务子类型、首期采购款豁免、总信用额、一年无订单自动失活、OA审批链数据、批准范围/有效期、HTTP回写适配器、原件案件级归档、内部用户权限、文件证据定位、AI结构化提取与人工采纳、文本模型健康监控，以及显式Mock企业系统闭环。真实企业联调仍需东江提供测试地址、鉴权、流程ID、字段字典和SAP业务对象规范。
+
+原 Word 合同已支持段落级格式保留和修订痕迹；后续继续补表格内局部文字修订和条款级多语言。结构化LLM抽取已经完成受控候选闭环，不再列为缺口。

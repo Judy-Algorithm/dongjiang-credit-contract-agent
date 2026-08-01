@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-display-fix"
+import {api} from "../api.js?v=20260801-core3"
 import {dateTime, escapeHtml} from "../format.js?v=20260731-nav"
 
 const severityLabels = {
@@ -18,9 +18,10 @@ const incidentLabels = {
 
 export async function renderAgentOperationsPage(root) {
   const data = await api.getAgentOperations()
-  const metrics = data.metrics || {}, plans = data.plans || []
+  const metrics = data.metrics || {}, plans = data.plans || [], modelHealth = data.model_health || {}
   root.innerHTML = `
-    <header class="page-header"><div><h1>Agent 运维</h1><p>跨案件发现、处置并跟踪信用与合同子 Agent 的运行异常</p></div><div class="header-actions"><button id="sweepAgents" class="secondary">立即扫描</button><button id="refreshAgents" class="secondary">刷新状态</button></div></header>
+    <header class="page-header"><div><h1>Agent 运维</h1><p>跨案件发现、处置并跟踪信用与合同子 Agent 的运行异常</p></div><div class="header-actions"><button id="probeModel" class="secondary">探测文本模型</button><button id="sweepAgents" class="secondary">立即扫描</button><button id="refreshAgents" class="secondary">刷新状态</button></div></header>
+    ${modelHealthPanel(modelHealth)}
     <section class="metric-grid agent-ops-metrics">
       ${metric("动态计划", metrics.plan_total)}
       ${metric("治理覆盖率", percent(metrics.governance_coverage))}
@@ -55,6 +56,19 @@ export async function renderAgentOperationsPage(root) {
   }
   ;[search,agentType,severity].forEach((control) => control.addEventListener("input", renderRows))
   root.querySelector("#refreshAgents").addEventListener("click", () => window.dispatchEvent(new Event("app:navigate")))
+  root.querySelector("#probeModel").addEventListener("click", async (event) => {
+    const button = event.currentTarget
+    button.disabled = true
+    try {
+      const result = await api.probeModelHealth()
+      const status = result.latest?.status === "healthy" ? "可用" : "不可用"
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:`文本模型探测完成：${status}`}))
+      window.dispatchEvent(new Event("app:navigate"))
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+    }
+  })
   root.querySelector("#sweepAgents").addEventListener("click", async (event) => {
     const button = event.currentTarget
     button.disabled = true
@@ -74,6 +88,14 @@ export async function renderAgentOperationsPage(root) {
     if (plan) await showIncidentDialog(root, plan, button.dataset.incidentAction)
   })
   renderRows()
+}
+
+function modelHealthPanel(health) {
+  const latest = health.latest || {}
+  const status = latest.status || (health.configured ? "unknown" : "not_configured")
+  const labels = {healthy:"可用",unhealthy:"不可用",model_unavailable:"模型不存在",not_configured:"未配置",unknown:"等待探测"}
+  const tone = status === "healthy" ? "healthy" : status === "unknown" || status === "not_configured" ? "pending" : "critical"
+  return `<section class="model-health-bar ${tone}"><div><small>文本模型</small><b>${escapeHtml(health.model || "未配置")}</b></div><div><small>当前状态</small><b>${escapeHtml(labels[status] || status)}</b></div><div><small>最近探测 / 调用</small><b>${latest.at ? dateTime(latest.at) : "尚无记录"}</b></div><div><small>最近成功率</small><b>${percent(health.recent_success_rate)}</b></div><div><small>最近错误</small><b>${latest.http_status ? `HTTP ${latest.http_status}` : escapeHtml(latest.error_type || "无")}</b></div></section>`
 }
 
 function metric(label, value, tone = "") {

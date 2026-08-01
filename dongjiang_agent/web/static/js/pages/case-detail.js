@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-display-fix"
+import {api} from "../api.js?v=20260801-core3"
 import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260731-nav"
 
 const tabs = [
@@ -42,7 +42,10 @@ export async function renderCaseDetailPage(root, route) {
     if (tab === "contract") installEvidenceViewer(root, item)
     if (tab === "documents") installDocumentViewer(root, item)
     if (tab === "writeback") installWritebackRetry(root, item, renderTab)
-    if (tab === "agents") installCandidateActions(root, item, renderTab)
+    if (tab === "agents") {
+      installCandidateActions(root, item, renderTab)
+      installStructuredExtractionActions(root, item, renderTab)
+    }
   }
   root.querySelector(".tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-tab]")
@@ -159,12 +162,83 @@ function approvalTab(item) {
 function agentExecutionTab(item) {
   const execution = item.agent_execution || {}, plans = execution.plans || []
   const candidates = item.agent_candidates || []
-  if (!plans.length && !candidates.length) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
+  const extractions = item.structured_extractions || []
+  const extractionPermissions = item.structured_extraction_permissions || {}
+  const canGenerateExtraction = extractionPermissions.can_generate_credit || extractionPermissions.can_generate_contract
+  if (!plans.length && !candidates.length && !extractions.length && !canGenerateExtraction) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
   return `<div class="agent-execution">
+    ${structuredExtractionPanel(item)}
     ${plans.length ? `<div class="agent-parent"><div><small>父工作流</small><h3>${escapeHtml(execution.parent_label || "业务主流程")}</h3></div><span class="badge approved">受控动态编排</span></div><div class="agent-flow-connector" aria-hidden="true"></div>${plans.map(agentPlan).join("")}` : ""}
     ${candidateReviews(candidates)}
     <div class="agent-security-note">${escapeHtml(execution.security_notice || "")}</div>
   </div>`
+}
+
+function structuredExtractionPanel(item) {
+  const rows = item.structured_extractions || [], permissions = item.structured_extraction_permissions || {}
+  const actions = `${permissions.can_generate_credit ? `<button class="secondary" data-generate-extraction="credit">提取信用字段</button>` : ""}${permissions.can_generate_contract ? `<button class="secondary" data-generate-extraction="contract">提取合同字段</button>` : ""}`
+  if (!rows.length && !actions) return ""
+  return `<section class="structured-extractions"><div class="section-heading"><div><h3>AI 结构化提取</h3><span>字段候选必须绑定原文证据，人工采纳后重新执行受控 Agent</span></div><div class="header-actions">${actions}</div></div>
+    ${rows.length ? `<div class="structured-extraction-list">${rows.map(structuredExtractionCard).join("")}</div>` : `<div class="empty-note">尚未生成结构化字段候选。</div>`}
+  </section>`
+}
+
+function structuredExtractionCard(item) {
+  const labels = {pending:"等待人工确认",adopted:"已采纳并重跑",rejected:"已拒绝",verification_failed:"独立核验失败"}
+  const tone = item.status === "adopted" ? "approved" : item.status === "rejected" || item.status === "verification_failed" ? "high" : "pending"
+  return `<article class="structured-extraction-card"><header><div><small>${escapeHtml(item.extraction_id)} · ${item.document_kind === "credit" ? "信用资料" : "合同"}</small><h4>${escapeHtml(item.summary || "结构化字段候选")}</h4><p>${escapeHtml(item.model || "文本模型")} · ${dateTime(item.created_at)} · 独立核验 ${escapeHtml(item.verification?.status || "—")}</p></div><span class="badge ${tone}">${escapeHtml(labels[item.status] || item.status)}</span></header>
+    <div class="structured-field-list">${(item.candidates || []).map((candidate) => `<label class="structured-field-row"><input type="checkbox" value="${escapeHtml(candidate.candidate_id)}" ${item.status === "pending" ? "checked" : "disabled"}><span><b>${escapeHtml(candidate.label)}</b><small>${escapeHtml(extractionValue(candidate.value))} · ${Math.round(Number(candidate.confidence || 0) * 100)}% 置信</small></span><button type="button" class="text-button" data-extraction-evidence data-document-id="${escapeHtml(candidate.document_id)}" data-fragment-id="${escapeHtml(candidate.fragment_id)}">${escapeHtml(candidate.location_label || "查看证据")}</button></label>`).join("")}</div>
+    ${item.permissions?.can_review ? `<footer><small>采纳只更新所选字段；随后重新分析、评分/审查和独立核验，不自动批准。</small><div><button class="secondary" data-extraction-action="reject" data-extraction-id="${escapeHtml(item.extraction_id)}">拒绝</button><button class="primary" data-extraction-action="adopt" data-extraction-id="${escapeHtml(item.extraction_id)}">采纳所选字段</button></div></footer>` : item.decision?.result_plan_id ? `<footer><small>新计划 ${escapeHtml(item.decision.result_plan_id)} · 采纳 ${item.decision.candidate_count || 0} 个字段</small></footer>` : ""}
+  </article>`
+}
+
+function extractionValue(value) {
+  if (typeof value === "boolean") return value ? "是" : "否"
+  return value == null ? "—" : String(value)
+}
+
+function installStructuredExtractionActions(root, item, renderTab) {
+  root.querySelector(".structured-extractions")?.addEventListener("click", async (event) => {
+    const generate = event.target.closest("[data-generate-extraction]")
+    if (generate) {
+      generate.disabled = true
+      try {
+        const data = await api.generateStructuredExtraction(item.case_id, generate.dataset.generateExtraction)
+        Object.assign(item, data.case)
+        window.dispatchEvent(new CustomEvent("app:toast", {detail:"结构化字段候选已生成"}))
+        renderTab("agents")
+      } catch (reason) {
+        window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+        generate.disabled = false
+      }
+      return
+    }
+    const evidence = event.target.closest("[data-extraction-evidence]")
+    if (evidence) {
+      root.insertAdjacentHTML("beforeend", `<div id="extractionEvidenceDialog" class="modal-backdrop"><section class="modal-panel extraction-evidence-dialog"><div class="section-heading"><h3>字段原文证据</h3><button type="button" class="text-button" data-close>关闭</button></div><div id="extractionEvidenceViewer" class="evidence-viewer"><div class="evidence-loading">正在读取原件...</div></div></section></div>`)
+      const dialog = root.querySelector("#extractionEvidenceDialog")
+      dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
+      loadEvidence(dialog.querySelector("#extractionEvidenceViewer"), item, evidence.dataset.documentId, evidence.dataset.fragmentId)
+      return
+    }
+    const actionButton = event.target.closest("[data-extraction-action]")
+    if (!actionButton) return
+    const card = actionButton.closest(".structured-extraction-card")
+    const selected = [...card.querySelectorAll('input[type="checkbox"]:checked')].map((control) => control.value)
+    if (actionButton.dataset.extractionAction === "adopt" && !selected.length) {
+      return window.dispatchEvent(new CustomEvent("app:toast", {detail:"请至少选择一个字段"}))
+    }
+    root.insertAdjacentHTML("beforeend", `<div id="extractionDecisionDialog" class="modal-backdrop"><form class="modal-panel"><div class="section-heading"><h3>${actionButton.dataset.extractionAction === "adopt" ? "采纳结构化字段" : "拒绝结构化字段"}</h3><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">采纳后会重新执行受控 Agent，仍需当前审批节点正式确认。</p><label>核验理由<textarea id="extractionReason" required rows="4"></textarea></label><div id="extractionDecisionError" class="error-box hidden"></div><div class="form-actions"><span></span><button type="submit" class="primary">确认</button></div></form></div>`)
+    const dialog = root.querySelector("#extractionDecisionDialog")
+    dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
+    dialog.querySelector("form").addEventListener("submit", async (submitEvent) => {
+      submitEvent.preventDefault(); const submit = submitEvent.submitter; submit.disabled = true
+      try {
+        const data = await api.manageStructuredExtraction(item.case_id, {extraction_id:actionButton.dataset.extractionId,action:actionButton.dataset.extractionAction,candidate_ids:selected,reason:dialog.querySelector("#extractionReason").value})
+        Object.assign(item, data.case); dialog.remove(); window.dispatchEvent(new CustomEvent("app:toast", {detail:actionButton.dataset.extractionAction === "adopt" ? "字段已采纳并重新执行 Agent" : "候选已拒绝"})); renderTab("agents")
+      } catch (reason) { const box = dialog.querySelector("#extractionDecisionError"); box.textContent = reason.message || String(reason); box.classList.remove("hidden"); submit.disabled = false }
+    })
+  })
 }
 
 function candidateReviews(candidates) {
@@ -284,11 +358,24 @@ function documentsTab(item) {
 
 function writebackTab(item) {
   const writeback = item.writeback || {}, entries = Object.entries(writeback)
-  return `<div class="section-heading"><h3>企业系统回写</h3><span>${entries.length ? "已记录调用结果" : "尚未执行"}</span></div>
+  return `<div class="section-heading"><div><h3>企业系统回写</h3><span>${entries.length ? "已记录调用结果" : "尚未执行"}</span></div>${item.permissions?.can_run_mock_approval ? `<button id="runMockApproval" class="secondary">运行 Mock OA 审批</button>` : ""}</div>
     ${entries.length ? `<div class="integration-grid">${entries.map(([phase, result]) => integrationCard(phase, result, item.permissions?.can_retry_writeback)).join("")}</div>` : emptyState("暂无回写记录", "OA、CRM、SAP 调用结果会集中显示在这里。")}`
 }
 
 function installWritebackRetry(root, item, renderTab) {
+  root.querySelector("#runMockApproval")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget
+    button.disabled = true
+    try {
+      const data = await api.runMockEnterpriseApproval(item.case_id)
+      Object.assign(item, data.case)
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"Mock OA审批完成，CRM/SAP回写已执行"}))
+      renderTab("writeback")
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+    }
+  })
   root.querySelector(".integration-grid")?.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-writeback-retry]")
     if (!button) return

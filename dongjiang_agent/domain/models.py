@@ -206,6 +206,7 @@ class AuditCase:
     execution_audits: list[dict[str, Any]] = field(default_factory=list)
     agent_incidents: list[dict[str, Any]] = field(default_factory=list)
     agent_candidate_reviews: list[dict[str, Any]] = field(default_factory=list)
+    structured_extractions: list[dict[str, Any]] = field(default_factory=list)
     credit_verification: dict[str, Any] = field(default_factory=dict)
     contract_verifications: list[dict[str, Any]] = field(default_factory=list)
     applicant: dict[str, Any] = field(default_factory=dict)

@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260801-display-fix"
+import {api} from "../api.js?v=20260801-core3"
 import {navigate} from "../router.js?v=20260731-nav"
 import {escapeHtml, dateTime} from "../format.js?v=20260731-nav"
 

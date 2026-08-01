@@ -6,11 +6,13 @@ module is the only place where that state is translated for CRM/OA/Web users.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from ..contract.revisions import suggested_replacement
 from ..ingestion import location_label
+from ..llm.structured_extractor import FIELD_LABELS as EXTRACTION_FIELD_LABELS
 from ..operations.sla import case_sla
 from ..workflow.candidate_reviews import (
     CANDIDATE_WAITING_FOR,
@@ -96,7 +98,72 @@ RECORD_LABELS = {
     "workflow.closed": "案件已关闭",
     "workflow.finalized": "案件处理已完成",
     "case.owner_assigned": "案件负责人已调整",
+    "agent.extraction.generated": "AI结构化字段候选已生成",
+    "agent.extraction.adopted": "AI结构化字段已人工采纳",
+    "agent.extraction.rejected": "AI结构化字段候选已拒绝",
 }
+
+
+def _structured_extractions(
+    case: dict[str, Any], actor: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    roles = set((actor or {}).get("roles") or [])
+    rows: list[dict[str, Any]] = []
+    for raw in reversed(list(case.get("structured_extractions") or [])):
+        item = dict(raw)
+        decision = dict(item.get("decision") or {})
+        review_roles = (
+            {"admin", "credit", "finance"}
+            if item.get("document_kind") == "credit"
+            else {"admin", "finance", "legal"}
+        )
+        rows.append(
+            {
+                "extraction_id": item.get("extraction_id"),
+                "document_kind": item.get("document_kind"),
+                "status": item.get("status"),
+                "model": item.get("model"),
+                "prompt_version": item.get("prompt_version"),
+                "summary": item.get("summary"),
+                "verification": dict(item.get("verification") or {}),
+                "candidates": [
+                    {
+                        "candidate_id": candidate.get("candidate_id"),
+                        "field": candidate.get("field"),
+                        "label": candidate.get("label")
+                        or EXTRACTION_FIELD_LABELS.get(
+                            str(candidate.get("field") or ""),
+                            candidate.get("field"),
+                        ),
+                        "value": candidate.get("value"),
+                        "confidence": candidate.get("confidence"),
+                        "evidence_query": candidate.get("evidence_query"),
+                        "document_id": candidate.get("document_id"),
+                        "fragment_id": candidate.get("fragment_id"),
+                        "location": dict(candidate.get("location") or {}),
+                        "location_label": location_label(candidate.get("location")),
+                    }
+                    for candidate in item.get("candidates") or []
+                ],
+                "created_by": dict(item.get("created_by") or {}),
+                "created_at": item.get("created_at"),
+                "decided_by": dict(item.get("decided_by") or {}),
+                "decided_at": item.get("decided_at"),
+                "decision": {
+                    "action": decision.get("action"),
+                    "candidate_count": len(decision.get("candidate_ids") or []),
+                    "official_state_changed": bool(
+                        decision.get("official_state_changed")
+                    ),
+                    "result_plan_id": decision.get("result_plan_id"),
+                },
+                "permissions": {
+                    "can_review": bool(review_roles.intersection(roles))
+                    and item.get("status") == "pending"
+                },
+            }
+        )
+    return rows
 
 
 def _decision(reviews: list[dict[str, Any]]) -> str:
@@ -516,6 +583,13 @@ def case_view(
             "can_upload_credit_documents": resolved_waiting == "credit_supplement" and can_act,
             "can_approve_special_release": resolved_waiting == "special_release" and can_act,
             "can_retry_writeback": bool(actor and "admin" in set(actor.get("roles") or [])),
+            "can_run_mock_approval": bool(
+                actor
+                and "admin" in set(actor.get("roles") or [])
+                and resolved_waiting == "credit_approval"
+                and os.getenv("DONGJIANG_INTEGRATION_MODE", "").strip().lower()
+                == "mock"
+            ),
         },
         "credit": {
             "status": credit_status,
@@ -629,6 +703,34 @@ def case_view(
         "ai_assistance": ai_assistance,
         "agent_execution": _agent_execution(case),
         "agent_candidates": _agent_candidates(case, resolved_waiting, actor),
+        "structured_extractions": _structured_extractions(case, actor),
+        "structured_extraction_permissions": {
+            "can_generate_credit": bool(
+                actor
+                and {"admin", "credit", "finance"}.intersection(
+                    set(actor.get("roles") or [])
+                )
+                and resolved_waiting == "credit_approval"
+                and any(
+                    item.get("document_kind") == "credit"
+                    and item.get("parse_status") == "parsed"
+                    for item in case.get("source_documents") or []
+                )
+            ),
+            "can_generate_contract": bool(
+                actor
+                and {"admin", "finance", "legal"}.intersection(
+                    set(actor.get("roles") or [])
+                )
+                and resolved_waiting
+                in {"manager_approval", "finance_legal_review"}
+                and any(
+                    item.get("document_kind") == "contract"
+                    and item.get("parse_status") == "parsed"
+                    for item in case.get("source_documents") or []
+                )
+            ),
+        },
         "records": records,
         "documents": documents,
         "source_documents": [

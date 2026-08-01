@@ -67,6 +67,7 @@ export const api = {
   listWritebackFailures:() => request("/api/operations/writebacks"),
   getSlaDashboard:() => request("/api/operations/sla"),
   getAgentOperations:() => request("/api/operations/agents"),
+  probeModelHealth:() => post("/api/operations/model/probe", {}),
   runSlaSweep:() => post("/api/operations/sla/sweep", {}),
   getAnalytics:(days = 30) => request(`/api/operations/analytics?days=${encodeURIComponent(days)}`),
   analyticsExportUrl:(days, format) => `/api/operations/analytics/export.${encodeURIComponent(format)}?days=${encodeURIComponent(days)}`,
@@ -87,5 +88,8 @@ export const api = {
   retryWriteback:(caseId, phase, system) => post(`/api/cases/${encodeURIComponent(caseId)}/writeback-retries`, {phase, system}),
   manageAgentIncident:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/agent-incidents`, payload),
   manageAgentCandidate:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/agent-candidate-actions`, payload),
+  generateStructuredExtraction:(caseId, documentKind) => post(`/api/cases/${encodeURIComponent(caseId)}/structured-extractions`, {document_kind:documentKind}),
+  manageStructuredExtraction:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/structured-extraction-actions`, payload),
+  runMockEnterpriseApproval:(caseId, payload = {}) => post(`/api/cases/${encodeURIComponent(caseId)}/mock-enterprise-approval`, payload),
   sweepAgentIncidents:() => post("/api/operations/agents/sweep", {}),
 }

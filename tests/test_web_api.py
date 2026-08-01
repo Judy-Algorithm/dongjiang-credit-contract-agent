@@ -123,7 +123,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_authentication_csrf_and_role_task_filtering(self):
         sales = self.create_user("sales.a", "销售甲", ["sales"])
-        credit = self.create_user("credit.a", "信用甲", ["credit"])
+        self.create_user("credit.a", "信用甲", ["credit"])
 
         self.activate_user("sales.a")
         status, denied = self.raw_request(
@@ -359,7 +359,7 @@ class WebApiTests(unittest.TestCase):
                 registration_status="pending",
                 must_change_password=False,
             )
-        sales = self.create_user("review.sales", "普通销售", ["sales"])
+        self.create_user("review.sales", "普通销售", ["sales"])
         self.activate_user("review.sales")
         status, denied = self.request("GET", "/api/registrations")
         self.assertEqual(status, 403)
@@ -380,7 +380,7 @@ class WebApiTests(unittest.TestCase):
         first = self.create_user("notice.first", "通知甲", ["sales"])
         second = self.create_user("notice.second", "通知乙", ["sales"])
         with AuthStore() as store:
-            first_notice = store.create_notification(
+            store.create_notification(
                 first["user_id"], category="system", title="甲的通知", body="仅甲可见"
             )
             store.create_notification(
@@ -1514,7 +1514,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260801-benchmark", html)
+        self.assertIn(b"20260801-core3", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -1522,9 +1522,15 @@ class WebApiTests(unittest.TestCase):
         self.assertIn(b"renderBenchmarkPage", module)
         self.assertIn("javascript", headers["Content-Type"])
 
+        status, case_module, headers = self.download("/js/pages/case-detail.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"canGenerateExtraction", case_module)
+        self.assertIn(b"structuredExtractionPanel", case_module)
+        self.assertIn("javascript", headers["Content-Type"])
+
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260801-display-fix"
+            "/js/app.js?v=20260801-core3"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -1534,6 +1540,240 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("pageModulePaths", source)
         self.assertNotIn('from "./pages/', source)
         self.assertIn("javascript", headers["Content-Type"])
+
+    @patch("dongjiang_agent.web.server.ModelHealthService")
+    def test_model_probe_is_admin_only_and_audited(self, service_class):
+        service_class.return_value.probe.return_value = {
+            "configured": True,
+            "model": "test-model",
+            "latest": {
+                "status": "healthy",
+                "http_status": None,
+                "duration_ms": 12,
+            },
+            "recent_call_count": 1,
+            "recent_success_rate": 1.0,
+            "recent_failure_count": 0,
+        }
+        status, result = self.request(
+            "POST", "/api/operations/model/probe", {}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["latest"]["status"], "healthy")
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        event = next(
+            item
+            for item in events
+            if item["event_type"] == "operations.model_probe"
+        )
+        self.assertEqual(event["detail"]["model"], "test-model")
+
+        self.create_user("model.probe.sales", "模型探测销售", ["sales"])
+        self.activate_user("model.probe.sales")
+        self.assertEqual(
+            self.request("POST", "/api/operations/model/probe", {})[0], 403
+        )
+
+    @patch("dongjiang_agent.workflow.harness.StructuredFieldExtractor")
+    def test_structured_extraction_api_enforces_roles_and_redacts_audit(
+        self, extractor_class
+    ):
+        report = (
+            "客户：敏感客户名称\n"
+            "资产负债率为45%，流动比率为1.8。\n"
+            "联系人13800138000，邮箱secret@example.com。"
+        ).encode("utf-8")
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "敏感客户名称",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "files": [
+                    {
+                        "name": "credit-profile.txt",
+                        "data_base64": base64.b64encode(report).decode("ascii"),
+                    }
+                ],
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        state = self.request("GET", f"/api/cases/{case_id}")[1]["case"]
+        document = next(
+            item
+            for item in state["source_documents"]
+            if item["document_kind"] == "credit"
+        )
+        extractor_class.return_value.extract.return_value = {
+            "status": "succeeded",
+            "model": "fake-structured-model",
+            "prompt_version": "test-v1",
+            "summary": "候选已生成",
+            "candidates": [
+                {
+                    "candidate_id": "FIELD-01",
+                    "field": "current_ratio",
+                    "label": "流动比率",
+                    "value": 1.8,
+                    "confidence": 0.94,
+                    "evidence_query": "流动比率为1.8",
+                    "document_id": document["document_id"],
+                    "fragment_id": "line-2",
+                    "location": {"line": 2},
+                }
+            ],
+            "verification": {
+                "status": "passed",
+                "candidate_count": 1,
+                "located_count": 1,
+                "checks": {
+                    "schema_valid": True,
+                    "all_fields_allowlisted": True,
+                    "all_evidence_located": True,
+                    "confidence_valid": True,
+                },
+                "verifier": "independent_extraction_guard",
+            },
+        }
+
+        self.create_user("extraction.credit", "提取信用", ["credit"])
+        self.create_user("extraction.sales", "提取销售", ["sales"])
+        self.activate_user("extraction.credit")
+
+        status, generated = self.request(
+            "POST",
+            f"/api/cases/{case_id}/structured-extractions",
+            {"document_kind": "credit"},
+        )
+        self.assertEqual(status, 200)
+        extraction_id = generated["extraction"]["extraction_id"]
+        self.assertEqual(generated["extraction"]["status"], "pending")
+        self.assertAlmostEqual(
+            generated["case"]["customer"]["current_ratio"], 1.5
+        )
+        sent_text = extractor_class.return_value.extract.call_args.kwargs[
+            "redacted_text"
+        ]
+        self.assertNotIn("敏感客户名称", sent_text)
+        self.assertNotIn("13800138000", sent_text)
+        self.assertNotIn("secret@example.com", sent_text)
+
+        reason = "人工核对原始财务资料后确认，不记录正文"
+        status, adopted = self.request(
+            "POST",
+            f"/api/cases/{case_id}/structured-extraction-actions",
+            {
+                "extraction_id": extraction_id,
+                "action": "adopt",
+                "candidate_ids": ["FIELD-01"],
+                "reason": reason,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertAlmostEqual(adopted["case"]["customer"]["current_ratio"], 1.8)
+        self.assertFalse(adopted["case"]["credit"]["effective"])
+        self.assertIsNotNone(adopted["case"]["next_action"])
+        self.assertTrue(
+            adopted["extraction"]["decision"]["result_plan_id"]
+        )
+
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        extraction_events = [
+            item
+            for item in events
+            if str(item["event_type"]).startswith("agent.extraction.")
+        ]
+        self.assertEqual(len(extraction_events), 2)
+        serialized = json.dumps(extraction_events, ensure_ascii=False)
+        self.assertNotIn("敏感客户名称", serialized)
+        self.assertNotIn("13800138000", serialized)
+        self.assertNotIn("secret@example.com", serialized)
+        self.assertNotIn(reason, serialized)
+        self.assertNotIn("流动比率为1.8", serialized)
+
+        self.activate_user("extraction.sales")
+        self.assertEqual(
+            self.request(
+                "POST",
+                f"/api/cases/{case_id}/structured-extractions",
+                {"document_kind": "credit"},
+            )[0],
+            403,
+        )
+
+    def test_mock_enterprise_approval_runs_existing_workflow_and_is_admin_only(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DONGJIANG_INTEGRATION_MODE": "mock",
+                "DONGJIANG_MOCK_ENTERPRISE_ROOT": str(
+                    Path(self.temp.name) / "mock-enterprise"
+                ),
+            },
+            clear=False,
+        ):
+            status, created = self.request(
+                "POST",
+                "/api/cases",
+                {
+                    "customer": {
+                        "customer_name": "Mock企业系统客户",
+                        "crm_customer_id": "CRM-MOCK-API",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1000000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                    }
+                },
+            )
+            self.assertEqual(status, 201)
+            case_id = created["case"]["case_id"]
+            status, result = self.request(
+                "POST", f"/api/cases/{case_id}/mock-enterprise-approval", {}
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["mode"], "mock")
+        case = result["case"]
+        self.assertTrue(case["credit"]["effective"])
+        self.assertEqual(len(case["approval_chain"]), 5)
+        phase = case["writeback"]["credit_activation"]
+        for system in ("oa", "crm", "sap"):
+            self.assertEqual(phase[system]["status"], "succeeded")
+            self.assertTrue(phase[system]["response"]["mock"])
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        self.assertTrue(
+            any(
+                item["event_type"] == "integration.mock_enterprise_approval"
+                and item["target_id"] == case_id
+                for item in events
+            )
+        )
+
+        self.create_user("mock.sales", "Mock普通销售", ["sales"])
+        self.activate_user("mock.sales")
+        with patch.dict(os.environ, {"DONGJIANG_INTEGRATION_MODE": "mock"}):
+            self.assertEqual(
+                self.request(
+                    "POST",
+                    f"/api/cases/{case_id}/mock-enterprise-approval",
+                    {},
+                )[0],
+                403,
+            )
 
 
 if __name__ == "__main__":

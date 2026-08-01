@@ -658,6 +658,24 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .agent-audit-issues b { margin-right: 8px; }
 .agent-security-note { margin-top: 16px; padding: 13px 15px; color: var(--muted); font-size: 12px; background: var(--surface-soft); border-left: 3px solid var(--ink); }
 .candidate-reviews { margin-top: 24px; }
+.structured-extractions { margin-bottom: 24px; padding: 18px 20px; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.structured-extraction-list { display: grid; gap: 10px; }
+.structured-extraction-card { overflow: hidden; border: 1px solid var(--hairline); background: var(--canvas); }
+.structured-extraction-card > header, .structured-extraction-card > footer { padding: 13px 15px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.structured-extraction-card > header { border-bottom: 1px solid var(--hairline-soft); }
+.structured-extraction-card > header h4 { margin: 3px 0; font-size: 14px; }
+.structured-extraction-card > header p, .structured-extraction-card > header small, .structured-extraction-card > footer small { margin: 0; color: var(--muted); font-size: 10px; }
+.structured-field-list { padding: 4px 15px; }
+.structured-field-row { min-height: 48px; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--hairline-soft); cursor: pointer; }
+.structured-field-row:last-child { border-bottom: 0; }
+.structured-field-row input { width: 16px; min-height: 16px; margin: 0; }
+.structured-field-row b, .structured-field-row small { display: block; }
+.structured-field-row b { font-size: 11px; }
+.structured-field-row small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.structured-extraction-card > footer { align-items: center; background: var(--surface-soft); }
+.structured-extraction-card > footer > div { display: flex; gap: 7px; }
+.extraction-evidence-dialog { width: min(760px, 100%); }
+.extraction-evidence-dialog .evidence-viewer { position: static; max-height: 65vh; }
 .candidate-list { display: grid; gap: 12px; }
 .candidate-card { overflow: hidden; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
 .candidate-card > header { padding: 16px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--hairline-soft); }
@@ -697,6 +715,12 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .writeback-metrics .metric-card:hover { transform: none; box-shadow: none; }
 .integration-error { max-width: 360px; color: var(--red); overflow-wrap: anywhere; }
 .agent-ops-metrics { grid-template-columns: repeat(5, 1fr); }
+.model-health-bar { margin-bottom: 16px; padding: 14px 16px; display: grid; grid-template-columns: 1.2fr .7fr 1.2fr .7fr .8fr; gap: 14px; border: 1px solid var(--hairline); border-left: 3px solid var(--green); background: var(--surface-soft); }
+.model-health-bar.critical { border-left-color: var(--red); }
+.model-health-bar.pending { border-left-color: var(--orange); }
+.model-health-bar small, .model-health-bar b { display: block; }
+.model-health-bar small { color: var(--muted); font-size: 10px; }
+.model-health-bar b { margin-top: 3px; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
 .agent-ops-panel { overflow: hidden; }
 .agent-ops-toolbar { padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; gap: 14px; border-bottom: 1px solid var(--hairline-soft); }
 .agent-ops-toolbar > div { display: grid; grid-template-columns: minmax(220px, 1fr) 150px 150px; gap: 8px; flex: 1; }
@@ -812,6 +836,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .contract-review-layout, .document-layout, .overview-layout, .approval-layout { grid-template-columns: 1fr; }
   .agent-lane { grid-template-columns: 1fr; }
   .operations-layout, .analytics-layout { grid-template-columns: minmax(0, 1fr); }
+  .model-health-bar { grid-template-columns: repeat(3, 1fr); }
   .benchmark-dimension-grid { grid-template-columns: repeat(2, 1fr); }
   .benchmark-result-head, .benchmark-suite-main { align-items: stretch; flex-direction: column; }
   .case-rail { padding: 22px 0 0; border-top: 1px solid var(--hairline-soft); border-left: 0; }
@@ -854,6 +879,7 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .benchmark-checks[open] { min-width: 250px; }
   .benchmark-disclaimer { align-items: flex-start; flex-direction: column; }
   .agent-ops-toolbar { align-items: stretch; flex-direction: column; }
+  .model-health-bar { grid-template-columns: 1fr 1fr; }
   .agent-ops-toolbar > div { grid-template-columns: 1fr; width: 100%; }
   .metric-grid { gap: 10px; }
   .metric-card { min-height: 96px; padding: 16px; }
@@ -896,6 +922,10 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .agent-audit { grid-template-columns: 1fr; }
   .agent-node-grid { grid-template-columns: 1fr; }
   .candidate-card > header, .candidate-card > footer, .candidate-approval-banner { align-items: stretch; flex-direction: column; }
+  .structured-extractions { padding: 15px 12px; }
+  .structured-extractions > .section-heading, .structured-extraction-card > header, .structured-extraction-card > footer { align-items: stretch; flex-direction: column; }
+  .structured-field-row { grid-template-columns: 18px minmax(0, 1fr); padding: 8px 0; }
+  .structured-field-row .text-button { grid-column: 2; justify-self: start; }
   .candidate-card > footer > div { display: grid; }
   .candidate-diff-head, .candidate-diff-row { grid-template-columns: minmax(86px, 1fr) minmax(80px, 1fr) minmax(80px, 1fr); gap: 7px; }
   .candidate-contract-row { grid-template-columns: 1fr 1fr; }

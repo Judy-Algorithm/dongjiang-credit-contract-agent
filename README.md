@@ -34,7 +34,7 @@ python3 scripts/evaluate.py --cases /path/to/cases.json
 ## HKGAI 服务配置
 
 复制`.env.example`为`.env`并填写凭证。`.env`已加入`.gitignore`，CLI和Web
-启动时会自动加载它，且不会覆盖部署环境中已经设置的变量。
+启动时会自动加载它，且默认不会覆盖部署环境中已经设置的变量。本机长期运行进程若残留旧变量，可显式设置 `DONGJIANG_ENV_FILE_OVERRIDE=true` 让项目 `.env` 优先；容器和正式生产环境保持 `false`。
 
 ```text
 OPENAI_BASE_URL      HKGAI文本模型OpenAI兼容地址
@@ -54,6 +54,10 @@ HKGAI_APP_KEY        Toolhub/Agenthub共用App-Key
 合同AI辅助审查默认关闭。设置 `DONGJIANG_AI_ASSISTANCE_ENABLED=true` 后，
 系统会把已经本地可逆脱敏的合同文本发送给配置的文本模型，并要求返回结构化JSON。
 模型发现与制度规则分栏显示，模型调用失败时自动回退到现有规则链，且不会改变审批结论。
+
+管理员可在“Agent运维”查看文本模型最近状态、调用耗时、成功率和失败类型，并点击“探测文本模型”主动检查 `/models`。健康记录只保存模型 ID、状态、耗时、HTTP 状态和错误类型，不保存 API 密钥、提示词或资料正文。
+
+案件“Agent运行”页支持对信用资料或合同生成 AI 结构化字段候选。每个候选必须通过字段白名单、Schema、置信度和 `document_id + fragment_id` 证据定位核验；只有信用、财务、法务或管理员人工采纳后才会写入业务字段并重新生成冻结计划。生成、拒绝或核验失败均不改变正式字段，采纳也不会自动批准授信或合同。
 
 可以执行以下命令检查配置；输出只包含布尔状态和模型ID，不会显示密钥：
 
@@ -84,11 +88,15 @@ python3 scripts/check_hkgai_config.py
 - `POST /api/cases/{case_id}/credit-actions`
 - `POST /api/cases/{case_id}/contracts`
 - `POST /api/cases/{case_id}/contract-actions`
+- `POST /api/cases/{case_id}/structured-extractions`
+- `POST /api/cases/{case_id}/structured-extraction-actions`
+- `POST /api/cases/{case_id}/mock-enterprise-approval`（管理员、仅 Mock 模式）
 - `POST /api/cases/{case_id}/revisions`
 - `GET /api/cases/{case_id}/revisions/{revision_id}/redline|clean`
 - `POST /api/cases/{case_id}/revisions/{revision_id}/submit`
 - `GET /api/operations/writebacks`（管理员）
 - `GET /api/operations/agents`（管理员，跨案件Agent执行健康）
+- `POST /api/operations/model/probe`（管理员，文本模型主动探测）
 - `GET /api/operations/analytics?days=30`（管理员）
 - `GET /api/operations/analytics/export.csv|xlsx?days=30`（管理员）
 - `POST /api/cases/{case_id}/writeback-retries`（管理员，仅重试失败目标）
@@ -137,6 +145,8 @@ AI 辅助发现引用到原文片段时，可点击证据位置，在受控查�
 Agent异常处置采用独立运维闭环。只有分析阶段白名单节点允许“候选重跑”；评分、业务决策、独立核验、审批和回写节点禁止直接重跑。候选任务在案件状态的隔离副本中重新执行分析、汇总和独立核验，结果仅作为异常处置证据，不覆盖正式授信或合同结论，也不改变审批状态和业务待办。处置动作写入案件 Trace 和安全审计；运维接口不会返回处理备注历史、节点原始输入输出、合同正文、完整哈希或密钥。
 
 后台会按照受控异常指纹自动发现计划完整性失败、执行/独立核验偏差、节点失败和连续分析降级，并为新的异常事实自动开单。同一异常指纹只开一次；关闭后如果异常事实没有变化，不会重复开单。比赛建议时效为严重异常2小时响应、24小时解决，需要关注异常4小时响应、48小时解决，配置位于 `dongjiang_agent/config/agent_operations_policy.json`，标记为比赛建议而非东江正式制度。管理员可在“Agent运维”点击“立即扫描”，后台也沿用15分钟运营扫描周期生成去重提醒。
+
+比赛演示可在 `.env` 设置 `DONGJIANG_INTEGRATION_MODE=mock`。管理员随后可在等待信用审批的案件“系统回写”页点击“运行 Mock OA 审批”，系统会生成带 `mock: true` 标记的完整 OA 审批链、批准范围、有效期和证据 ID，并沿用正式工作流激活授信、执行 OA/CRM/SAP 幂等回写。Mock 记录保存到已忽略的 `data/mock-enterprise/`，只含允许字段摘要；它证明端到端编排可运行，不代表泛微 OA、真实 CRM 或 SAP 已完成联调。生产环境必须清空该模式并配置真实接口。
 
 比赛演示可用合成数据一键准备三条固定路径：
 

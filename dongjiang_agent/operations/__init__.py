@@ -2,6 +2,7 @@ from .analytics import AnalyticsService, task_intervals
 from .benchmark import BenchmarkService
 from .agent_incidents import AgentIncidentService
 from .agent_health import AgentOperationsService, agent_incident_view
+from .model_health import ModelHealthService
 from .sla import SLAMonitor, SLAService, case_sla, load_sla_policy
 
 __all__ = [
@@ -9,6 +10,7 @@ __all__ = [
     "BenchmarkService",
     "AgentOperationsService",
     "AgentIncidentService",
+    "ModelHealthService",
     "agent_incident_view",
     "SLAMonitor",
     "SLAService",

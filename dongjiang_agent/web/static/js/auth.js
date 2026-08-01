@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260801-display-fix"
+import {api, setCsrfToken} from "./api.js?v=20260801-core3"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

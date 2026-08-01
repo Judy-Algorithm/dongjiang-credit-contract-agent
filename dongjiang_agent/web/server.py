@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import tempfile
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,7 @@ from ..operations import (
     AgentOperationsService,
     AnalyticsService,
     BenchmarkService,
+    ModelHealthService,
     SLAMonitor,
     SLAService,
     agent_incident_view,
@@ -493,7 +495,14 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/operations/agents":
                 self._require_roles(user, "admin")
-                self._json(200, {"ok": True, **AgentOperationsService().report()})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        **AgentOperationsService().report(),
+                        "model_health": ModelHealthService().summary(),
+                    },
+                )
                 return
             if path == "/api/operations/analytics":
                 self._require_roles(user, "admin")
@@ -773,6 +782,25 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     )
                 self._json(200, result)
                 return
+            if path == "/api/operations/model/probe":
+                self._require_roles(user, "admin")
+                result = ModelHealthService().probe()
+                with AuthStore() as store:
+                    store.audit(
+                        "operations.model_probe",
+                        actor=user,
+                        target_type="model_health",
+                        detail={
+                            "status": (result.get("latest") or {}).get("status"),
+                            "model": result.get("model"),
+                            "http_status": (result.get("latest") or {}).get(
+                                "http_status"
+                            ),
+                        },
+                        remote_address=self._remote_address(),
+                    )
+                self._json(200, {"ok": True, **result})
+                return
             if path == "/api/operations/benchmarks/run":
                 self._require_roles(user, "admin")
                 repeats = int(payload.get("repeats") or 2)
@@ -850,6 +878,15 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     return
                 if resource == "revisions":
                     self._create_contract_revision(case_id, payload, user)
+                    return
+                if resource == "structured-extractions":
+                    self._generate_structured_extraction(case_id, payload, user)
+                    return
+                if resource == "structured-extraction-actions":
+                    self._manage_structured_extraction(case_id, payload, user)
+                    return
+                if resource == "mock-enterprise-approval":
+                    self._run_mock_enterprise_approval(case_id, payload, user)
                     return
                 if resource == "writeback-retries":
                     self._retry_writeback(case_id, payload, user)
@@ -1313,6 +1350,171 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "review": review_view,
+                "case": self._workflow_view(run, user),
+            },
+        )
+
+    def _generate_structured_extraction(
+        self, case_id: str, payload: dict[str, Any], user: dict[str, Any]
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "admin", "credit", "finance", "legal")
+        document_kind = str(payload.get("document_kind") or "")
+        with DongjiangWorkflowHarness() as harness:
+            run, extraction = harness.generate_structured_extraction(
+                case_id,
+                document_kind=document_kind,
+                actor=self._actor(user),
+            )
+        with AuthStore() as store:
+            store.audit(
+                "agent.extraction.generated",
+                actor=user,
+                target_type="structured_extraction",
+                target_id=str(extraction.get("extraction_id") or ""),
+                detail={
+                    "case_id": case_id,
+                    "document_kind": document_kind,
+                    "candidate_count": len(extraction.get("candidates") or []),
+                    "verification_status": (
+                        extraction.get("verification") or {}
+                    ).get("status"),
+                    "official_state_changed": False,
+                },
+                remote_address=self._remote_address(),
+            )
+        self._json(
+            200,
+            {"ok": True, "extraction": extraction, "case": self._workflow_view(run, user)},
+        )
+
+    def _manage_structured_extraction(
+        self, case_id: str, payload: dict[str, Any], user: dict[str, Any]
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "admin", "credit", "finance", "legal")
+        action = str(payload.get("action") or "")
+        with DongjiangWorkflowHarness() as harness:
+            run, extraction = harness.manage_structured_extraction(
+                case_id,
+                extraction_id=str(payload.get("extraction_id") or ""),
+                action=action,
+                actor=self._actor(user),
+                candidate_ids=[
+                    str(item) for item in payload.get("candidate_ids") or []
+                ],
+                reason=str(payload.get("reason") or ""),
+            )
+        with AuthStore() as store:
+            store.audit(
+                f"agent.extraction.{action}",
+                actor=user,
+                target_type="structured_extraction",
+                target_id=str(extraction.get("extraction_id") or ""),
+                detail={
+                    "case_id": case_id,
+                    "document_kind": extraction.get("document_kind"),
+                    "candidate_count": len(
+                        (extraction.get("decision") or {}).get("candidate_ids") or []
+                    ),
+                    "official_state_changed": bool(
+                        (extraction.get("decision") or {}).get(
+                            "official_state_changed"
+                        )
+                    ),
+                },
+                remote_address=self._remote_address(),
+            )
+        self._json(
+            200,
+            {"ok": True, "extraction": extraction, "case": self._workflow_view(run, user)},
+        )
+
+    def _run_mock_enterprise_approval(
+        self, case_id: str, payload: dict[str, Any], user: dict[str, Any]
+    ) -> None:
+        from ..workflow import DongjiangWorkflowHarness
+
+        self._require_roles(user, "admin")
+        if os.getenv("DONGJIANG_INTEGRATION_MODE", "").strip().lower() != "mock":
+            raise PermissionError("企业系统Mock模式未启用。")
+        with DongjiangWorkflowHarness() as harness:
+            current = harness.get(case_id)
+            if current.waiting_for != "credit_approval":
+                raise ValueError("Mock OA审批仅支持等待信用审批的案件。")
+            assessment = dict(current.state.get("credit_assessment") or {})
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            oa_evidence_id = f"MOCK-OA-EVIDENCE-{case_id}"
+            chain = [
+                item
+                for item in current.state.get("approval_chain") or []
+                if str(item.get("stage") or "") == "applicant"
+            ] + [
+                {
+                    "stage": stage,
+                    "status": "approved",
+                    "acted_at": now,
+                    "actor": {
+                        "actor_id": f"mock-{stage}",
+                        "display_name": label,
+                        "source_system": "mock-oa",
+                    },
+                    "comment": "比赛演示Mock审批通过",
+                    "oa_evidence_id": oa_evidence_id,
+                }
+                for stage, label in (
+                    ("marketing_director", "Mock所属市场总监"),
+                    ("credit_control", "Mock信用管理"),
+                    ("senior_finance_manager", "Mock高级财务经理"),
+                    ("group_finance_director", "Mock集团财务总监"),
+                )
+            ]
+            run = harness.resume(
+                case_id,
+                {
+                    "action": "approve",
+                    "approved_credit_limit": assessment.get(
+                        "approved_credit_limit"
+                    ),
+                    "approved_term_days": assessment.get(
+                        "recommended_term_days"
+                    ),
+                    "purchase_exemption_approved": bool(
+                        assessment.get("purchase_exemption_requested")
+                    ),
+                    "approval_scope": str(payload.get("approval_scope") or "")
+                    or f"Mock比赛演示案件 {case_id}",
+                    "validity_days": int(payload.get("validity_days") or 180),
+                    "oa_evidence_id": oa_evidence_id,
+                    "approval_chain": chain,
+                    "comment": "Mock OA完整审批链自动回调",
+                },
+                actor=self._actor(user),
+            )
+        with AuthStore() as store:
+            store.audit(
+                "integration.mock_enterprise_approval",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={
+                    "mode": "mock",
+                    "approval_chain_count": len(chain),
+                    "oa_evidence_id": oa_evidence_id,
+                    "credit_status": run.state.get("credit_status"),
+                    "official_state_changed": True,
+                },
+                remote_address=self._remote_address(),
+            )
+        self._notify_case_waiting(run, user)
+        self._notify_failed_writebacks(run)
+        self._json(
+            200,
+            {
+                "ok": True,
+                "mode": "mock",
                 "case": self._workflow_view(run, user),
             },
         )

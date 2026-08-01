@@ -20,4 +20,6 @@ data/runtime/
 data/executions/
 data/deployment-backups/
 data/benchmarks/
+data/operations/
+data/mock-enterprise/
 output/

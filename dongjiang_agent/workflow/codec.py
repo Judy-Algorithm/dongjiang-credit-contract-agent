@@ -49,6 +49,7 @@ def case_from_state(state: dict[str, Any]) -> AuditCase:
         execution_audits=list(state.get("execution_audits") or []),
         agent_incidents=list(state.get("agent_incidents") or []),
         agent_candidate_reviews=list(state.get("agent_candidate_reviews") or []),
+        structured_extractions=list(state.get("structured_extractions") or []),
         credit_verification=dict(state.get("credit_verification") or {}),
         contract_verifications=list(state.get("contract_verifications") or []),
         applicant=dict(state.get("applicant") or {}),
