@@ -829,6 +829,18 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .revision-version small { margin-top: 4px; color: var(--muted); }
 .revision-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .revision-actions .secondary, .revision-actions .primary { min-height: 38px; padding: 8px 12px; font-size: 12px; }
+.translation-workbench { margin-top: 24px; }
+.translation-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto; align-items: end; gap: 12px; }
+.translation-toolbar label { margin: 0; }
+.translation-list { margin-top: 14px; display: grid; gap: 10px; }
+.translation-version { padding: 15px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.translation-version b, .translation-version small { display: block; }
+.translation-version small { margin-top: 4px; color: var(--muted); }
+.translation-dialog { width: min(960px, 100%); max-height: calc(100vh - 40px); overflow: auto; }
+.translation-segments { margin: 18px 0; display: grid; gap: 14px; }
+.translation-segments article { padding: 16px; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.translation-segments small { color: var(--muted); }
+.translation-segments pre { margin: 8px 0 12px; max-height: 160px; overflow: auto; color: var(--body); font-family: inherit; line-height: 1.6; white-space: pre-wrap; }
 
 @media (max-width: 900px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
@@ -840,6 +852,8 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .operations-layout, .analytics-layout { grid-template-columns: minmax(0, 1fr); }
   .model-health-bar { grid-template-columns: repeat(3, 1fr); }
   .benchmark-dimension-grid { grid-template-columns: repeat(2, 1fr); }
+  .translation-toolbar { grid-template-columns: 1fr 1fr; }
+  .translation-toolbar button { grid-column: 1 / -1; }
   .benchmark-result-head, .benchmark-suite-main { align-items: stretch; flex-direction: column; }
   .case-rail { padding: 22px 0 0; border-top: 1px solid var(--hairline-soft); border-left: 0; }
   .evidence-viewer { position: relative; top: auto; max-height: none; }
@@ -910,6 +924,9 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
   .revision-finding > header { grid-template-columns: 1fr; }
   .revision-version { align-items: stretch; flex-direction: column; }
   .revision-actions > * { flex: 1; text-align: center; }
+  .translation-toolbar { grid-template-columns: 1fr; }
+  .translation-toolbar button { grid-column: auto; }
+  .translation-version { align-items: stretch; flex-direction: column; }
   .toast { right: 12px; bottom: 12px; max-width: calc(100% - 24px); }
   .registration-card { padding: 20px 16px; }
   .registration-actions { flex-direction: column-reverse; }

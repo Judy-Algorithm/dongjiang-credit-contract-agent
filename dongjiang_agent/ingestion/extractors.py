@@ -5,11 +5,14 @@ from __future__ import annotations
 import csv
 import html
 import io
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
@@ -61,9 +64,18 @@ class DocumentExtractor:
             text, extractor, warnings, fragments = self._pdf_content(target)
             return ExtractedDocument(str(target), "pdf", text, extractor, warnings, fragments)
         if suffix in self.IMAGE_EXTENSIONS:
-            text, warnings = self._image_text(target)
+            text, confidence, warnings = self._image_text(target)
             fragments = [
-                DocumentFragment("image-1", text, {"kind": "image", "image": 1})
+                DocumentFragment(
+                    "image-1",
+                    text,
+                    {
+                        "kind": "image",
+                        "image": 1,
+                        "ocr": True,
+                        "ocr_confidence": confidence,
+                    },
+                )
             ] if text.strip() else []
             return ExtractedDocument(
                 str(target), suffix.lstrip("."), text, "tesseract", warnings, fragments
@@ -93,22 +105,119 @@ class DocumentExtractor:
             xml = archive.read("word/document.xml")
         root = ElementTree.fromstring(xml)
         namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-        paragraphs: list[str] = []
+        lines: list[str] = []
         fragments: list[DocumentFragment] = []
+        table_paragraphs = {
+            paragraph
+            for table in root.findall(".//w:tbl", namespace)
+            for paragraph in table.findall(".//w:p", namespace)
+        }
+        paragraph_number = 0
         for paragraph in root.findall(".//w:p", namespace):
-            chunks = [node.text or "" for node in paragraph.findall(".//w:t", namespace)]
-            text = "".join(chunks).strip()
-            if text:
-                paragraphs.append(text)
-                number = len(paragraphs)
+            text = DocumentExtractor._word_paragraph_text(paragraph, namespace)
+            if not text:
+                continue
+            paragraph_number += 1
+            if paragraph not in table_paragraphs:
+                lines.append(text)
                 fragments.append(
                     DocumentFragment(
-                        f"paragraph-{number}",
+                        f"paragraph-{paragraph_number}",
                         text,
-                        {"kind": "paragraph", "paragraph": number},
+                        {"kind": "paragraph", "paragraph": paragraph_number},
                     )
                 )
-        return "\n".join(paragraphs), fragments
+
+        for table_number, table in enumerate(root.findall(".//w:tbl", namespace), start=1):
+            table_lines: list[str] = []
+            vertical_merges: dict[int, DocumentFragment] = {}
+            for row_number, row in enumerate(table.findall("./w:tr", namespace), start=1):
+                column = 1
+                row_values: list[str] = []
+                for cell in row.findall("./w:tc", namespace):
+                    properties = cell.find("./w:tcPr", namespace)
+                    grid_span_node = (
+                        properties.find("./w:gridSpan", namespace)
+                        if properties is not None
+                        else None
+                    )
+                    try:
+                        column_span = max(
+                            1,
+                            int(
+                                grid_span_node.get(
+                                    f"{{{namespace['w']}}}val", "1"
+                                )
+                                if grid_span_node is not None
+                                else 1
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        column_span = 1
+                    merge_node = (
+                        properties.find("./w:vMerge", namespace)
+                        if properties is not None
+                        else None
+                    )
+                    merge_value = (
+                        merge_node.get(f"{{{namespace['w']}}}val", "continue")
+                        if merge_node is not None
+                        else ""
+                    )
+                    cell_text = "\n".join(
+                        value
+                        for value in (
+                            DocumentExtractor._word_paragraph_text(paragraph, namespace)
+                            for paragraph in cell.findall("./w:p", namespace)
+                        )
+                        if value
+                    ).strip()
+                    if merge_node is not None and merge_value != "restart":
+                        origin = vertical_merges.get(column)
+                        if origin is not None:
+                            origin.location["row_span"] = (
+                                int(origin.location.get("row_span") or 1) + 1
+                            )
+                        column += column_span
+                        continue
+                    location = {
+                        "kind": "word_table_cell",
+                        "table": table_number,
+                        "row": row_number,
+                        "column": column,
+                        "row_span": 1,
+                        "column_span": column_span,
+                    }
+                    if cell_text:
+                        fragment = DocumentFragment(
+                            f"table-{table_number}-row-{row_number}-column-{column}",
+                            cell_text,
+                            location,
+                        )
+                        fragments.append(fragment)
+                        row_values.append(cell_text.replace("\n", " "))
+                        if merge_node is not None:
+                            for merged_column in range(column, column + column_span):
+                                vertical_merges[merged_column] = fragment
+                    elif merge_node is None:
+                        for merged_column in range(column, column + column_span):
+                            vertical_merges.pop(merged_column, None)
+                    column += column_span
+                if row_values:
+                    table_lines.append(" | ".join(row_values))
+            if table_lines:
+                lines.append(f"[Word表格 {table_number}]")
+                lines.extend(table_lines)
+        return "\n".join(lines), fragments
+
+    @staticmethod
+    def _word_paragraph_text(
+        paragraph: ElementTree.Element,
+        namespace: dict[str, str],
+    ) -> str:
+        return "".join(
+            node.text or "" for node in paragraph.findall(".//w:t", namespace)
+        ).strip()
 
     @staticmethod
     def _xlsx_content(path: Path) -> tuple[str, list[DocumentFragment]]:
@@ -183,30 +292,53 @@ class DocumentExtractor:
                         lines.append(" | ".join(values))
             return "\n".join(lines), fragments
 
-    @staticmethod
+    @classmethod
     def _pdf_content(
+        cls,
         path: Path,
     ) -> tuple[str, str, list[str], list[DocumentFragment]]:
+        warnings: list[str] = []
         try:
             from pypdf import PdfReader  # type: ignore
             reader = PdfReader(str(path))
             pages = [page.extract_text() or "" for page in reader.pages]
+            empty_pages = [
+                number
+                for number, content in enumerate(pages, start=1)
+                if not content.strip()
+            ]
+            ocr_pages: dict[int, tuple[str, float | None]] = {}
+            if empty_pages:
+                ocr_pages, ocr_warnings = cls._ocr_pdf_pages(path, empty_pages)
+                warnings.extend(ocr_warnings)
+                for number, (content, _confidence) in ocr_pages.items():
+                    pages[number - 1] = content
             text = "\n".join(pages)
             if text.strip():
                 fragments = [
                     DocumentFragment(
                         f"page-{number}",
                         content,
-                        {"kind": "page", "page": number},
+                        {
+                            "kind": "page",
+                            "page": number,
+                            "ocr": number in ocr_pages,
+                            "ocr_confidence": (
+                                ocr_pages[number][1] if number in ocr_pages else None
+                            ),
+                        },
                     )
                     for number, content in enumerate(pages, start=1)
                     if content.strip()
                 ]
-                return text, "pypdf", [], fragments
+                extractor = "pypdf+tesseract" if ocr_pages else "pypdf"
+                return text, extractor, warnings, fragments
+            if empty_pages and not warnings:
+                warnings.append("扫描版 PDF 未识别出可用文本。")
         except ImportError:
             pass
-        except Exception:
-            pass
+        except Exception as exc:
+            warnings.append(f"pypdf 解析失败：{type(exc).__name__}")
         binary = shutil.which("pdftotext")
         if binary:
             result = subprocess.run(
@@ -227,8 +359,87 @@ class DocumentExtractor:
                     for number, content in enumerate(pages, start=1)
                     if content.strip()
                 ]
-                return result.stdout, "pdftotext", [], fragments
-        return "", "none", ["PDF 无可提取文本，请安装 pypdf 或 OCR 依赖。"], []
+                return result.stdout, "pdftotext", warnings, fragments
+        warnings.append("PDF 无可提取文本，请安装 pypdf、pypdfium2 和 Tesseract OCR。")
+        return "", "none", warnings, []
+
+    @classmethod
+    def _ocr_pdf_pages(
+        cls,
+        path: Path,
+        page_numbers: list[int],
+    ) -> tuple[dict[int, tuple[str, float | None]], list[str]]:
+        binary = cls._tesseract_binary()
+        if not binary:
+            return {}, ["扫描页需要 OCR，但当前环境未安装 Tesseract。"]
+        results: dict[int, tuple[str, float | None]] = {}
+        warnings: list[str] = []
+        with tempfile.TemporaryDirectory(prefix="dongjiang-pdf-ocr-") as tmp:
+            root = Path(tmp)
+            for page_number in page_numbers:
+                image_path = root / f"page-{page_number}.png"
+                try:
+                    cls._render_pdf_page(path, page_number, image_path)
+                    text, confidence, page_warnings = cls._tesseract_text(
+                        image_path, binary=binary
+                    )
+                    warnings.extend(
+                        f"第 {page_number} 页：{warning}" for warning in page_warnings
+                    )
+                    if text.strip():
+                        results[page_number] = (text, confidence)
+                    else:
+                        warnings.append(f"第 {page_number} 页 OCR 未识别出文本。")
+                except Exception as exc:
+                    warnings.append(
+                        f"第 {page_number} 页 OCR 失败：{type(exc).__name__}"
+                    )
+        return results, warnings
+
+    @staticmethod
+    def _render_pdf_page(path: Path, page_number: int, target: Path) -> None:
+        try:
+            import pypdfium2 as pdfium  # type: ignore
+
+            document = pdfium.PdfDocument(str(path))
+            try:
+                page = document[page_number - 1]
+                try:
+                    page.render(scale=3).to_pil().save(target, format="PNG")
+                finally:
+                    page.close()
+            finally:
+                document.close()
+            return
+        except ImportError:
+            pass
+        binary = shutil.which("pdftoppm")
+        if not binary:
+            raise RuntimeError("未安装 pypdfium2 或 pdftoppm，无法渲染扫描 PDF。")
+        prefix = target.with_suffix("")
+        result = subprocess.run(
+            [
+                binary,
+                "-f",
+                str(page_number),
+                "-l",
+                str(page_number),
+                "-singlefile",
+                "-r",
+                "300",
+                "-png",
+                str(path),
+                str(prefix),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+        if result.returncode != 0 or not target.is_file():
+            raise RuntimeError(result.stderr.strip() or "PDF 页面渲染失败。")
 
     @staticmethod
     def _line_fragments(text: str) -> list[DocumentFragment]:
@@ -249,17 +460,202 @@ class DocumentExtractor:
             )
         return fragments
 
-    @staticmethod
-    def _image_text(path: Path) -> tuple[str, list[str]]:
-        binary = shutil.which("tesseract")
+    @classmethod
+    def _image_text(cls, path: Path) -> tuple[str, float | None, list[str]]:
+        binary = cls._tesseract_binary()
         if not binary:
-            return "", ["未找到 tesseract，图片已登记但未执行 OCR。"]
+            return "", None, ["未找到 Tesseract，图片已登记但未执行 OCR。"]
+        return cls._tesseract_text(path, binary=binary)
+
+    @classmethod
+    def _tesseract_text(
+        cls,
+        path: Path,
+        *,
+        binary: str,
+    ) -> tuple[str, float | None, list[str]]:
+        environment, tessdata_prefix = cls._tesseract_environment()
+        languages, language_warnings = cls._tesseract_languages(
+            binary, tessdata_prefix
+        )
         result = subprocess.run(
-            [binary, str(path), "stdout", "-l", "chi_sim+eng"],
+            [binary, str(path), "stdout", "-l", languages, "--psm", "6", "tsv"],
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
             timeout=120,
         )
-        warnings = [] if result.returncode == 0 else [result.stderr.strip() or "OCR 失败"]
-        return result.stdout, warnings
+        warnings = list(language_warnings)
+        if result.returncode != 0:
+            fallback = subprocess.run(
+                [binary, str(path), "stdout", "-l", languages, "--psm", "6"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=environment,
+                timeout=120,
+            )
+            if fallback.returncode == 0 and fallback.stdout.strip():
+                warnings.append("OCR 置信度不可用，已回退到纯文本识别。")
+                return fallback.stdout.strip(), None, warnings
+            warnings.append(
+                fallback.stderr.strip()
+                or result.stderr.strip()
+                or "OCR 失败"
+            )
+            return "", None, warnings
+        rows = csv.DictReader(io.StringIO(result.stdout), delimiter="\t")
+        lines: dict[tuple[str, str, str, str], list[str]] = {}
+        confidences: list[float] = []
+        for row in rows:
+            value = str(row.get("text") or "").strip()
+            if not value:
+                continue
+            key = tuple(str(row.get(name) or "0") for name in ("page_num", "block_num", "par_num", "line_num"))
+            lines.setdefault(key, []).append(value)
+            try:
+                confidence = float(row.get("conf") or -1)
+                if confidence >= 0:
+                    confidences.append(confidence)
+            except (TypeError, ValueError):
+                pass
+        text = cls._normalize_ocr_text(
+            "\n".join(" ".join(values) for values in lines.values())
+        )
+        confidence = (
+            round(sum(confidences) / len(confidences) / 100, 3)
+            if confidences
+            else None
+        )
+        return text, confidence, warnings
+
+    @staticmethod
+    def _normalize_ocr_text(text: str) -> str:
+        cjk = r"\u3400-\u9fff\u3040-\u30ff"
+        normalized = re.sub(
+            rf"(?<=[{cjk}])[ \t]+(?=[{cjk}])",
+            "",
+            str(text or ""),
+        )
+        normalized = re.sub(r"[ \t]+([：:，,。；;])", r"\1", normalized)
+        normalized = re.sub(
+            rf"([：:，,。；;])[ \t]+(?=[{cjk}])", r"\1", normalized
+        )
+        return normalized.strip()
+
+    @staticmethod
+    def _tesseract_binary() -> str | None:
+        configured = os.getenv("DONGJIANG_TESSERACT_CMD", "").strip()
+        if configured and Path(configured).is_file():
+            return configured
+        discovered = shutil.which("tesseract")
+        if discovered:
+            return discovered
+        if os.name == "nt":
+            for candidate in (
+                Path(os.getenv("ProgramFiles", "C:/Program Files"))
+                / "Tesseract-OCR/tesseract.exe",
+                Path(os.getenv("LOCALAPPDATA", ""))
+                / "Programs/Tesseract-OCR/tesseract.exe",
+            ):
+                if candidate.is_file():
+                    return str(candidate)
+            try:
+                import winreg
+
+                roots = (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER)
+                paths = (
+                    r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+                    r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+                )
+                for root in roots:
+                    for registry_path in paths:
+                        try:
+                            with winreg.OpenKey(root, registry_path) as uninstall:
+                                for index in range(winreg.QueryInfoKey(uninstall)[0]):
+                                    key_name = winreg.EnumKey(uninstall, index)
+                                    with winreg.OpenKey(uninstall, key_name) as package:
+                                        try:
+                                            display_name = str(
+                                                winreg.QueryValueEx(package, "DisplayName")[0]
+                                            )
+                                            uninstall_string = str(
+                                                winreg.QueryValueEx(package, "UninstallString")[0]
+                                            )
+                                        except OSError:
+                                            continue
+                                        if "tesseract" not in display_name.lower():
+                                            continue
+                                        candidate = (
+                                            Path(uninstall_string.strip('"')).parent
+                                            / "tesseract.exe"
+                                        )
+                                        if candidate.is_file():
+                                            return str(candidate)
+                        except OSError:
+                            continue
+            except (ImportError, OSError):
+                pass
+        return None
+
+    @staticmethod
+    def _tesseract_environment() -> tuple[dict[str, str], str]:
+        environment = dict(os.environ)
+        configured = os.getenv("DONGJIANG_TESSDATA_PREFIX", "").strip()
+        local = Path("data/tessdata").resolve()
+        prefix = configured or (str(local) if local.is_dir() else "")
+        if prefix:
+            environment["TESSDATA_PREFIX"] = prefix
+        return environment, prefix
+
+    @staticmethod
+    @lru_cache(maxsize=8)
+    def _tesseract_languages(
+        binary: str,
+        tessdata_prefix: str = "",
+    ) -> tuple[str, tuple[str, ...]]:
+        requested = [
+            item.strip()
+            for item in re.split(
+                r"[+,]",
+                os.getenv(
+                    "DONGJIANG_OCR_LANGUAGES", "chi_sim+eng+vie+jpn+spa"
+                ),
+            )
+            if item.strip()
+        ]
+        environment = dict(os.environ)
+        if tessdata_prefix:
+            environment["TESSDATA_PREFIX"] = tessdata_prefix
+        result = subprocess.run(
+            [binary, "--list-langs"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=15,
+        )
+        available = {
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip() and "available languages" not in line.lower()
+        }
+        selected = [item for item in requested if item in available]
+        if not selected:
+            selected = ["eng"] if "eng" in available else sorted(available)[:1]
+        if not selected:
+            return "eng", ("无法读取 Tesseract 语言包，已尝试使用英文。",)
+        missing = [item for item in requested if item not in available]
+        warnings = (
+            (f"未安装 OCR 语言包：{', '.join(missing)}；已使用 {', '.join(selected)}。",)
+            if missing
+            else ()
+        )
+        return "+".join(selected), warnings

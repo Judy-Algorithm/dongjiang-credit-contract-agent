@@ -361,6 +361,22 @@ class WorkflowNodes:
                         "media_type": document.media_type,
                         "extractor": document.extractor,
                         "warnings": document.warnings,
+                        "features": {
+                            "ocr_page_count": sum(
+                                bool(fragment.location.get("ocr"))
+                                and fragment.location.get("kind") == "page"
+                                for fragment in document.fragments
+                            ),
+                            "ocr_image_count": sum(
+                                fragment.location.get("kind") == "image"
+                                and bool(fragment.location.get("ocr"))
+                                for fragment in document.fragments
+                            ),
+                            "word_table_cell_count": sum(
+                                fragment.location.get("kind") == "word_table_cell"
+                                for fragment in document.fragments
+                            ),
+                        },
                         "fragments": [
                             {
                                 "fragment_id": fragment.fragment_id,

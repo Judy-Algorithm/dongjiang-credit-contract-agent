@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260801-smooth2"
-import {dateTime, escapeHtml} from "../format.js?v=20260801-smooth2"
+import {api} from "../api.js?v=20260801-docai1"
+import {dateTime, escapeHtml} from "../format.js?v=20260801-docai1"
 
 export async function renderOperationsPage(root) {
   const data = await api.getSlaDashboard()

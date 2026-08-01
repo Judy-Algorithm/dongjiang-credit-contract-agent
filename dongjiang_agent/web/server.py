@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
+from ..contract.translations import ContractTranslationStore
 from ..integrations import IntegrationBundle
 from ..operations import (
     AgentIncidentService,
@@ -205,6 +206,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     def _workflow_view(self, run: Any, user: dict[str, Any]) -> dict[str, Any]:
         view = case_view(dict(run.state), waiting_for=run.waiting_for, actor=user)
         view["contract_revisions"] = ContractRevisionStore().list(str(view["case_id"]))
+        view["contract_translations"] = ContractTranslationStore().list(
+            str(view["case_id"])
+        )
         return view
 
     @staticmethod
@@ -332,6 +336,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 return None
             view = case_view(stored, actor=user)
             view["contract_revisions"] = ContractRevisionStore().list(case_id)
+            view["contract_translations"] = ContractTranslationStore().list(case_id)
             return view
 
     @staticmethod
@@ -604,6 +609,25 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             ):
                 target, filename = ContractRevisionStore().artifact_path(
                     parts[2], parts[4], parts[5]
+                )
+                self._file(target, filename)
+                return
+            if (
+                len(parts) == 5
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "translations"
+            ):
+                detail = ContractTranslationStore().detail(parts[2], parts[4])
+                self._json(200, {"ok": True, "translation": detail})
+                return
+            if (
+                len(parts) == 6
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "translations"
+                and parts[5] == "download"
+            ):
+                target, filename = ContractTranslationStore().artifact_path(
+                    parts[2], parts[4]
                 )
                 self._file(target, filename)
                 return
@@ -901,6 +925,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 if resource == "revisions":
                     self._create_contract_revision(case_id, payload, user)
                     return
+                if resource == "translations":
+                    self._create_contract_translation(case_id, payload, user)
+                    return
                 if resource == "structured-extractions":
                     self._generate_structured_extraction(case_id, payload, user)
                     return
@@ -926,6 +953,16 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 and parts[5] == "submit"
             ):
                 self._submit_contract_revision(parts[2], parts[4], user)
+                return
+            if (
+                len(parts) == 6
+                and parts[:2] == ["api", "cases"]
+                and parts[3] == "translations"
+                and parts[5] == "confirm"
+            ):
+                self._confirm_contract_translation(
+                    parts[2], parts[4], payload, user
+                )
                 return
             self._json(404, {"ok": False, "error": "API 不存在"})
         except AuthenticationError as exc:
@@ -1100,6 +1137,74 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 remote_address=self._remote_address(),
             )
         self._json(201, {"ok": True, "revision": revision})
+
+    def _create_contract_translation(
+        self,
+        case_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        self._require_roles(user, "sales", "finance", "legal")
+        actor = {
+            "actor_id": user.get("user_id"),
+            "display_name": user.get("display_name") or user.get("username"),
+        }
+        translation = ContractTranslationStore().create(
+            self._case_state(case_id),
+            document_id=str(payload.get("document_id") or ""),
+            target_language=str(payload.get("target_language") or ""),
+            actor=actor,
+        )
+        with AuthStore() as store:
+            store.audit(
+                "contract.translation_created",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={
+                    "translation_id": translation["translation_id"],
+                    "document_id": translation["document_id"],
+                    "target_language": translation["target_language"],
+                    "segment_count": translation["segment_count"],
+                    "model": translation["model"],
+                },
+                remote_address=self._remote_address(),
+            )
+        self._json(201, {"ok": True, "translation": translation})
+
+    def _confirm_contract_translation(
+        self,
+        case_id: str,
+        translation_id: str,
+        payload: dict[str, Any],
+        user: dict[str, Any],
+    ) -> None:
+        self._require_roles(user, "sales", "finance", "legal")
+        actor = {
+            "actor_id": user.get("user_id"),
+            "display_name": user.get("display_name") or user.get("username"),
+        }
+        translation = ContractTranslationStore().confirm(
+            case_id,
+            translation_id,
+            entries=list(payload.get("entries") or []),
+            review_note=str(payload.get("review_note") or ""),
+            actor=actor,
+        )
+        with AuthStore() as store:
+            store.audit(
+                "contract.translation_confirmed",
+                actor=user,
+                target_type="case",
+                target_id=case_id,
+                detail={
+                    "translation_id": translation_id,
+                    "target_language": translation["target_language"],
+                    "segment_count": translation["segment_count"],
+                },
+                remote_address=self._remote_address(),
+            )
+        self._json(200, {"ok": True, "translation": translation})
 
     def _retry_writeback(
         self,

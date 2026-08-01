@@ -731,6 +731,20 @@ def case_view(
                 )
             ),
         },
+        "translation_permissions": {
+            "can_manage": bool(
+                actor
+                and {"admin", "sales", "finance", "legal"}.intersection(
+                    set(actor.get("roles") or [])
+                )
+                and any(
+                    item.get("document_kind") == "contract"
+                    and item.get("parse_status") == "parsed"
+                    and item.get("fragments")
+                    for item in case.get("source_documents") or []
+                )
+            )
+        },
         "records": records,
         "documents": documents,
         "source_documents": [
@@ -745,6 +759,7 @@ def case_view(
                 "media_type": item.get("media_type"),
                 "extractor": item.get("extractor"),
                 "warnings": list(item.get("warnings") or []),
+                "features": dict(item.get("features") or {}),
                 "fragment_count": len(item.get("fragments") or []),
             }
             for item in case.get("source_documents") or []

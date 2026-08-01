@@ -17,24 +17,24 @@ const navigationSummary = {unread:0, pendingRegistrations:0, loadedAt:0, inFligh
 const NAVIGATION_SUMMARY_TTL = 15000
 let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260801-smooth2",
-  register: "./pages/auth.js?v=20260801-smooth2",
-  "forgot-password": "./pages/auth.js?v=20260801-smooth2",
-  setup: "./pages/auth.js?v=20260801-smooth2",
-  "change-password": "./pages/auth.js?v=20260801-smooth2",
-  cases: "./pages/cases.js?v=20260801-smooth2",
-  "case-new": "./pages/case-new.js?v=20260801-smooth2",
-  "case-detail": "./pages/case-detail.js?v=20260801-smooth2",
-  "case-action": "./pages/case-action.js?v=20260801-smooth2",
-  users: "./pages/users.js?v=20260801-smooth2",
-  audit: "./pages/audit.js?v=20260801-smooth2",
-  writebacks: "./pages/writebacks.js?v=20260801-smooth2",
-  registrations: "./pages/registrations.js?v=20260801-smooth2",
-  notifications: "./pages/notifications.js?v=20260801-smooth2",
-  operations: "./pages/operations.js?v=20260801-smooth2",
-  "agent-operations": "./pages/agent-operations.js?v=20260801-smooth2",
-  analytics: "./pages/analytics.js?v=20260801-smooth2",
-  benchmarks: "./pages/benchmark.js?v=20260801-smooth2",
+  login: "./pages/auth.js?v=20260801-docai1",
+  register: "./pages/auth.js?v=20260801-docai1",
+  "forgot-password": "./pages/auth.js?v=20260801-docai1",
+  setup: "./pages/auth.js?v=20260801-docai1",
+  "change-password": "./pages/auth.js?v=20260801-docai1",
+  cases: "./pages/cases.js?v=20260801-docai1",
+  "case-new": "./pages/case-new.js?v=20260801-docai1",
+  "case-detail": "./pages/case-detail.js?v=20260801-docai1",
+  "case-action": "./pages/case-action.js?v=20260801-docai1",
+  users: "./pages/users.js?v=20260801-docai1",
+  audit: "./pages/audit.js?v=20260801-docai1",
+  writebacks: "./pages/writebacks.js?v=20260801-docai1",
+  registrations: "./pages/registrations.js?v=20260801-docai1",
+  notifications: "./pages/notifications.js?v=20260801-docai1",
+  operations: "./pages/operations.js?v=20260801-docai1",
+  "agent-operations": "./pages/agent-operations.js?v=20260801-docai1",
+  analytics: "./pages/analytics.js?v=20260801-docai1",
+  benchmarks: "./pages/benchmark.js?v=20260801-docai1",
 }
 
 async function loadModule(path) {
@@ -58,9 +58,9 @@ async function loadPageModule(routeName) {
 
 async function bootstrap() {
   const [authModule, apiModule, routerModule] = await Promise.all([
-    loadModule("./auth.js?v=20260801-smooth2"),
-    loadModule("./api.js?v=20260801-smooth2"),
-    loadModule("./router.js?v=20260801-smooth2"),
+    loadModule("./auth.js?v=20260801-docai1"),
+    loadModule("./api.js?v=20260801-docai1"),
+    loadModule("./router.js?v=20260801-docai1"),
   ])
   ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
   api = apiModule.api

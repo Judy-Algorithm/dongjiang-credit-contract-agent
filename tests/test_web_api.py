@@ -691,7 +691,7 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn("运行风险演示案例", html)
             self.assertNotIn("华南精密制造示例有限公司", html)
 
-        self.connection.request("GET", "/js/app.js?v=20260801-smooth2")
+        self.connection.request("GET", "/js/app.js?v=20260801-docai1")
         response = self.connection.getresponse()
         javascript = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
@@ -959,6 +959,99 @@ class WebApiTests(unittest.TestCase):
         status, detail = self.request("GET", f"/api/cases/{case_id}")
         self.assertEqual(status, 200)
         self.assertEqual(detail["case"]["contract_revisions"][0]["status"], "submitted")
+
+    @patch("dongjiang_agent.web.server.ContractTranslationStore")
+    def test_contract_translation_routes_confirm_download_and_audit(self, store_class):
+        case_id = "DJ-TRANSLATE1"
+        Path("data/cases").mkdir(parents=True)
+        Path(f"data/cases/{case_id}.json").write_text(
+            json.dumps(
+                {
+                    "case_id": case_id,
+                    "status": "approved",
+                    "credit_status": "effective",
+                    "customer": {
+                        "customer_name": "翻译接口客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                    },
+                    "source_documents": [],
+                    "trace": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        artifact = Path("translation.docx")
+        artifact.write_bytes(b"PK\x03\x04translated")
+        draft = {
+            "translation_id": "TR-API1",
+            "document_id": "DOC-API1",
+            "target_language": "en",
+            "target_language_label": "英文",
+            "segment_count": 2,
+            "model": "test-model",
+            "status": "draft",
+            "entries": [
+                {
+                    "fragment_id": "paragraph-1",
+                    "source_text": "原文",
+                    "translated_text": "Source",
+                }
+            ],
+        }
+        confirmed = {**draft, "status": "confirmed"}
+        store = store_class.return_value
+        store.list.return_value = []
+        store.create.return_value = draft
+        store.detail.return_value = draft
+        store.confirm.return_value = confirmed
+        store.artifact_path.return_value = (artifact.resolve(), "合同-英文-双语.docx")
+
+        status, created = self.request(
+            "POST",
+            f"/api/cases/{case_id}/translations",
+            {"document_id": "DOC-API1", "target_language": "en"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(created["translation"]["translation_id"], "TR-API1")
+        store.create.assert_called_once_with(
+            ANY,
+            document_id="DOC-API1",
+            target_language="en",
+            actor={"actor_id": ANY, "display_name": "测试管理员"},
+        )
+
+        status, detail = self.request(
+            "GET", f"/api/cases/{case_id}/translations/TR-API1"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["translation"]["status"], "draft")
+
+        status, result = self.request(
+            "POST",
+            f"/api/cases/{case_id}/translations/TR-API1/confirm",
+            {
+                "entries": [
+                    {"fragment_id": "paragraph-1", "translated_text": "Source"}
+                ],
+                "review_note": "已逐段核对。",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["translation"]["status"], "confirmed")
+
+        status, body, headers = self.download(
+            f"/api/cases/{case_id}/translations/TR-API1/download"
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"PK"))
+        self.assertIn("attachment", headers["Content-Disposition"])
+        status, audit = self.request("GET", "/api/audit")
+        self.assertEqual(status, 200)
+        event_types = {item["event_type"] for item in audit["events"]}
+        self.assertIn("contract.translation_created", event_types)
+        self.assertIn("contract.translation_confirmed", event_types)
 
     def test_admin_can_list_and_retry_failed_writeback(self):
         case_id = "DJ-WRITEBACK1"
@@ -1560,7 +1653,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260801-smooth2", html)
+        self.assertIn(b"20260801-docai1", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -1576,7 +1669,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260801-smooth2"
+            "/js/app.js?v=20260801-docai1"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -1594,7 +1687,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
 
         status, api_module, headers = self.download(
-            "/js/api.js?v=20260801-smooth2"
+            "/js/api.js?v=20260801-docai1"
         )
         self.assertEqual(status, 200)
         self.assertIn(b"responseCache", api_module)

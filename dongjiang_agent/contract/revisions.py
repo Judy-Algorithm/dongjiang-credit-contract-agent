@@ -205,6 +205,54 @@ def _replace_paragraph_content(
     _append_run(inserted, replacement, properties, deleted=False, color="2463EB")
 
 
+def _replace_table_cell_content(
+    cell: ElementTree.Element,
+    replacement: str,
+    *,
+    redline: bool,
+    author: str,
+    change_id: int,
+    changed_at: str,
+) -> None:
+    paragraphs = cell.findall(f"./{W}p")
+    if not paragraphs:
+        paragraphs = [ElementTree.SubElement(cell, f"{W}p")]
+    primary = paragraphs[0]
+    original = "\n".join(
+        value for value in (_paragraph_text(paragraph) for paragraph in paragraphs) if value
+    )
+    properties = _run_properties(primary)
+    ppr = primary.find(f"{W}pPr")
+    for child in list(primary):
+        if child is not ppr:
+            primary.remove(child)
+    for paragraph in paragraphs[1:]:
+        paragraph_properties = paragraph.find(f"{W}pPr")
+        for child in list(paragraph):
+            if child is not paragraph_properties:
+                paragraph.remove(child)
+    if not redline:
+        run = ElementTree.SubElement(primary, f"{W}r")
+        if properties is not None:
+            run.append(properties)
+        text = ElementTree.SubElement(run, f"{W}t")
+        text.text = replacement
+        return
+    attributes = {
+        f"{W}id": str(change_id),
+        f"{W}author": author or "东江集团",
+        f"{W}date": changed_at,
+    }
+    deleted = ElementTree.SubElement(primary, f"{W}del", attributes)
+    _append_run(deleted, original, properties, deleted=True, color="C83D4F")
+    inserted = ElementTree.SubElement(
+        primary,
+        f"{W}ins",
+        {**attributes, f"{W}id": str(change_id + 1)},
+    )
+    _append_run(inserted, replacement, properties, deleted=False, color="2463EB")
+
+
 def _patch_docx(
     source: Path,
     target: Path,
@@ -213,6 +261,7 @@ def _patch_docx(
     redline: bool,
     author: str,
     count_empty: bool = False,
+    table_replacements: dict[tuple[int, int, int], str] | None = None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     changed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -238,6 +287,35 @@ def _patch_docx(
             change_id += 2
         if current < max(replacements, default=0):
             raise ValueError("修订位置超出合同正文范围。")
+        pending_table_replacements = dict(table_replacements or {})
+        for table_number, table in enumerate(document_xml.iter(f"{W}tbl"), start=1):
+            for row_number, row in enumerate(table.findall(f"./{W}tr"), start=1):
+                column = 1
+                for cell in row.findall(f"./{W}tc"):
+                    properties = cell.find(f"./{W}tcPr")
+                    span = properties.find(f"./{W}gridSpan") if properties is not None else None
+                    try:
+                        column_span = max(
+                            1,
+                            int(span.get(f"{W}val", "1") if span is not None else 1),
+                        )
+                    except (TypeError, ValueError):
+                        column_span = 1
+                    key = (table_number, row_number, column)
+                    replacement = pending_table_replacements.pop(key, None)
+                    if replacement is not None:
+                        _replace_table_cell_content(
+                            cell,
+                            replacement,
+                            redline=redline,
+                            author=author,
+                            change_id=change_id,
+                            changed_at=changed_at,
+                        )
+                        change_id += 2
+                    column += column_span
+        if pending_table_replacements:
+            raise ValueError("表格修订位置超出合同正文范围。")
         settings_xml: bytes | None = None
         if redline and "word/settings.xml" in input_archive.namelist():
             settings = ElementTree.fromstring(input_archive.read("word/settings.xml"))
@@ -352,6 +430,7 @@ class ContractRevisionStore:
         extracted = DocumentExtractor().extract(source)
         fragments = {item.fragment_id: item for item in extracted.fragments}
         replacements: dict[int, str] = {}
+        table_replacements: dict[tuple[int, int, int], str] = {}
         resolved: list[dict[str, Any]] = []
         modified_fragments: set[str] = set()
         for key, finding in editable.items():
@@ -381,10 +460,20 @@ class ContractRevisionStore:
                     raise ValueError("同一原文片段包含多个风险，请合并为一次人工修改，其余风险选择保留并说明。")
                 modified_fragments.add(fragment_id)
                 location = dict(fragment.location or {})
-                position = int(location.get("paragraph") or location.get("line") or 0)
-                if position <= 0:
-                    raise ValueError("当前风险位置不支持自动修订。")
-                replacements[position] = replacement
+                if location.get("kind") == "word_table_cell":
+                    table_position = (
+                        int(location.get("table") or 0),
+                        int(location.get("row") or 0),
+                        int(location.get("column") or 0),
+                    )
+                    if min(table_position) <= 0:
+                        raise ValueError("当前表格风险位置不支持自动修订。")
+                    table_replacements[table_position] = replacement
+                else:
+                    position = int(location.get("paragraph") or location.get("line") or 0)
+                    if position <= 0:
+                        raise ValueError("当前风险位置不支持自动修订。")
+                    replacements[position] = replacement
             resolved.append(
                 {
                     "finding_key": key,
@@ -409,8 +498,22 @@ class ContractRevisionStore:
         author = str(actor.get("display_name") or actor.get("actor_id") or "东江集团")
 
         if media_type == "docx":
-            _patch_docx(source, clean_path, replacements, redline=False, author=author)
-            _patch_docx(source, redline_path, replacements, redline=True, author=author)
+            _patch_docx(
+                source,
+                clean_path,
+                replacements,
+                redline=False,
+                author=author,
+                table_replacements=table_replacements,
+            )
+            _patch_docx(
+                source,
+                redline_path,
+                replacements,
+                redline=True,
+                author=author,
+                table_replacements=table_replacements,
+            )
         else:
             original_text = source.read_text(encoding="utf-8", errors="replace")
             revised_lines = original_text.splitlines()

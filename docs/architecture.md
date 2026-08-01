@@ -63,10 +63,10 @@ Cloudflare Dynamic Workflows尚未成为运行依赖。后续可用于公网事�
 ```text
 dongjiang_agent/
 ├── workflow/       Harness、动态计划白名单、LangGraph父图/子图、Interrupt与Checkpoint
-├── ingestion/      DOCX/PDF/XLSX/图片/文本提取
+├── ingestion/      DOCX表格/PDF逐页OCR/XLSX/图片/文本提取与证据坐标
 ├── security/       可逆本地脱敏和隔离 Vault
 ├── credit/         信用事实提取与可解释评分子 Agent
-├── contract/       合同事实提取与规则审查子 Agent
+├── contract/       合同事实提取、规则审查、Word修订与多语言版本
 ├── config/         版本化信用政策与合同规则
 ├── persistence/    案件、有效信审与节点幂等执行缓存
 ├── operations/     节点SLA、逾期提醒、历史分析及管理报表导出

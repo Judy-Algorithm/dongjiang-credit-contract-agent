@@ -25,6 +25,9 @@
 | 可视化后台 | 多文件上传、案件统计、案件列表和详情回看 | `scripts/run_web.sh`、`test_web_api.py` |
 | 文件证据定位 | PDF页码、DOCX段落、XLSX工作表/单元格、文本行号；风险卡片联动受控原文预览 | `test_document_locations.py`、`test_contract_risk_exposes_line_location_and_controlled_preview` |
 | 合同修订闭环 | 风险逐项采用建议/人工修改/保留说明；生成Word修订稿与清洁稿；清洁稿重新审查并保留版本链 | `test_contract_revisions.py`、`test_contract_revision_generates_downloads_and_resubmits_clean_version` |
+| 扫描件 OCR | PDF逐页判断，无文本页渲染后执行中/英/越/日/西语 OCR；保留页码、OCR标记、平均置信度和降级提示 | `test_scanned_pdf_ocr_keeps_page_number_and_confidence`、真实扫描PDF验收 |
+| 复杂 Word 表格 | 表格号/行/列、横纵合并跨度、单元格级证据定位；整单元格条款支持保留表格结构的清洁稿和修订痕迹稿 | `test_docx_table_cells_keep_structure_and_merge_spans`、`test_docx_table_cell_revision_preserves_table_and_tracks_change` |
+| 多语言合同 | 识别中/英/越/日/西语；脱敏后按片段翻译，严格校验片段和令牌；逐段人工复核后生成案件级双语Word，不改变正式审查结论 | `test_contract_translations.py`、`test_contract_translation_routes_confirm_download_and_audit` |
 | 脱敏AI辅助审查 | 显式开启后，仅发送本地可逆脱敏合同；要求结构化JSON，模型发现独立展示且不参与制度裁决；失败自动回退规则链 | `test_contract_ai_assistant.py` |
 | AI证据定位 | AI发现保留文档ID、片段ID和坐标，可在受控查看器中定位对应原文 | `test_structured_findings_are_normalized_and_located`、浏览器验收 |
 | AI结构化提取与人工采纳 | 信用/合同字段严格白名单和Schema校验；候选必须绑定案件证据并通过独立核验；生成和拒绝不改正式状态，人工采纳后重建冻结计划但不自动批准 | `test_model_health_and_extraction.py`、`test_structured_extraction_workflow.py`、`test_structured_extraction_api_enforces_roles_and_redacts_audit` |
@@ -49,11 +52,11 @@
 | 泛微 OA 流程 | HTTP适配器和显式Mock闭环已完成，尚未绑定真实表单字段 | 测试地址、鉴权、流程 ID、字段字典、回调规范 |
 | CRM/SAP 信审回写 | HTTP适配器、失败重试和显式Mock闭环已完成 | 客户主键、额度/账期字段、接口鉴权、SAP业务对象与返回码规范 |
 | 第三方评级自动抓取 | 支持上传报告；未做生产级站点采集 | 数据授权、站点许可或企业订阅接口 |
-| OCR | 有 Tesseract 路径和失败提示 | 生产 OCR 服务或内网模型 |
+| OCR生产化 | 本地与Docker五语Tesseract链路已完成；低清、手写或复杂印章仍会降级 | 如需更高准确率，提供生产 OCR 服务或内网视觉模型 |
 | LLM 增强 | 仅允许脱敏文本；规则链不依赖 LLM | 企业批准模型、网关地址、数据处理协议 |
 
 ## 比赛前仍需补强
 
-当前已补齐TKM业务子类型、首期采购款豁免、总信用额、一年无订单自动失活、OA审批链数据、批准范围/有效期、HTTP回写适配器、原件案件级归档、内部用户权限、文件证据定位、AI结构化提取与人工采纳、文本模型健康监控，以及显式Mock企业系统闭环。真实企业联调仍需东江提供测试地址、鉴权、流程ID、字段字典和SAP业务对象规范。
+当前已补齐TKM业务子类型、首期采购款豁免、总信用额、一年无订单自动失活、OA审批链数据、批准范围/有效期、HTTP回写适配器、原件案件级归档、内部用户权限、文件证据定位、扫描PDF OCR、Word表格单元格解析/修订、多语言译稿人工确认、AI结构化提取与人工采纳、文本模型健康监控，以及显式Mock企业系统闭环。真实企业联调仍需东江提供测试地址、鉴权、流程ID、字段字典和SAP业务对象规范。
 
-原 Word 合同已支持段落级格式保留和修订痕迹；后续继续补表格内局部文字修订和条款级多语言。结构化LLM抽取已经完成受控候选闭环，不再列为缺口。
+原 Word 合同已支持段落和表格整单元格级格式保留与修订痕迹；多语言已完成五语片段对齐、人工确认和双语导出。后续增强集中在任意 run 级局部修订、原始PDF画布高亮、低清/手写OCR质量和仅重译受影响条款。结构化LLM抽取已经完成受控候选闭环，不再列为缺口。

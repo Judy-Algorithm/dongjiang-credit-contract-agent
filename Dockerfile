@@ -10,7 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim \
+    && apt-get install --yes --no-install-recommends \
+        tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
+        tesseract-ocr-vie tesseract-ocr-jpn tesseract-ocr-spa \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid "${APP_GID}" dongjiang \

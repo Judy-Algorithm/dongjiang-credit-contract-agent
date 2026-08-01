@@ -16,6 +16,33 @@ def _excerpt(text: str, start: int, end: int, radius: int = 80) -> str:
     return re.sub(r"\s+", " ", text[max(0, start - radius): min(len(text), end + radius)]).strip()
 
 
+def _detect_language(text: str, fallback: str) -> str:
+    content = str(text or "")
+    if len(re.findall(r"[\u3040-\u30ff]", content)) >= 4:
+        return "ja"
+    lowered = content.lower()
+    words = re.findall(r"[a-zÀ-ỹ]+", lowered)
+    vietnamese_marks = len(re.findall(r"[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]", lowered))
+    vietnamese_words = sum(
+        word in {"bên", "hợp", "đồng", "thanh", "toán", "trách", "nhiệm", "điều", "khoản"}
+        for word in words
+    )
+    if vietnamese_marks >= 3 or vietnamese_words >= 3:
+        return "vi"
+    spanish_marks = len(re.findall(r"[áéíóúüñ¿¡]", lowered))
+    spanish_words = sum(
+        word in {"contrato", "pago", "comprador", "vendedor", "responsabilidad", "confidencial", "terminación", "jurisdicción"}
+        for word in words
+    )
+    if spanish_marks >= 3 or spanish_words >= 3:
+        return "es"
+    english_words = len(re.findall(r"\b[A-Za-z]{4,}\b", content))
+    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", content))
+    if english_words >= 12 and english_words > chinese_chars:
+        return "en"
+    return fallback
+
+
 class ContractFactExtractor:
     _AMOUNT = re.compile(
         r"(?:合同(?:总)?金额|总价|价款|含税金额)\s*[：:为]?\s*(?:人民币|RMB|CNY|¥|￥)?\s*"
@@ -80,11 +107,7 @@ class ContractFactExtractor:
         language: str = "zh",
     ) -> ContractFacts:
         content = str(text or "")
-        english_words = len(re.findall(r"\b[A-Za-z]{4,}\b", content))
-        chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", content))
-        detected_language = (
-            "en" if english_words >= 12 and english_words > chinese_chars else language
-        )
+        detected_language = _detect_language(content, language)
         facts = ContractFacts(
             contract_name=contract_name,
             customer_name=customer_name,

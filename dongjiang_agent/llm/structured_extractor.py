@@ -245,7 +245,8 @@ class StructuredFieldExtractor:
         }:
             raise ValueError("评级展望无效")
         if kind == "language" and text.lower() not in {
-            "zh", "en", "bilingual", "中文", "英文", "中英双语"
+            "zh", "en", "vi", "ja", "es", "bilingual",
+            "中文", "英文", "越南语", "日语", "西班牙语", "中英双语"
         }:
             raise ValueError("合同语言无效")
         if kind == "date" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):

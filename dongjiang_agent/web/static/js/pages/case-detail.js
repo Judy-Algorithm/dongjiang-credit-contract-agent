@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260801-smooth2"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260801-smooth2"
+import {api} from "../api.js?v=20260801-docai1"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260801-docai1"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],
@@ -39,7 +39,10 @@ export async function renderCaseDetailPage(root, route) {
       overview:overviewTab(item), credit:creditTab(item), contract:contractTab(item),
       agents:agentExecutionTab(item), approval:approvalTab(item), documents:documentsTab(item), writeback:writebackTab(item),
     })[tab]
-    if (tab === "contract") installEvidenceViewer(root, item)
+    if (tab === "contract") {
+      installEvidenceViewer(root, item)
+      installTranslationActions(root, item, renderTab)
+    }
     if (tab === "documents") installDocumentViewer(root, item)
     if (tab === "writeback") installWritebackRetry(root, item, renderTab)
     if (tab === "agents") {
@@ -114,7 +117,90 @@ function contractTab(item) {
       ${item.findings.length ? item.findings.map((finding, index) => findingCard(finding, index)).join("") : `<div class="empty-note">未发现需要处理的合同风险。</div>`}
     </section>
     <aside id="evidenceViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>原文证据</strong><p>点击风险事项中的“查看原文”，这里会显示对应页码、段落或单元格。</p></div></aside>
-  </div>${aiAssistance(item)}${revisionArchive(item)}`
+  </div>${aiAssistance(item)}${revisionArchive(item)}${translationWorkbench(item)}`
+}
+
+function translationWorkbench(item) {
+  const contracts = (item.source_documents || []).filter((doc) => doc.document_kind === "contract" && doc.parse_status === "parsed" && doc.fragment_count)
+  const translations = item.contract_translations || []
+  if (!contracts.length) return ""
+  const canManage = item.translation_permissions?.can_manage
+  return `<section class="translation-workbench form-section">
+    <div class="section-heading"><div><h3>多语言合同</h3><span>译文逐段绑定原文，人工确认后才可导出</span></div><span>${translations.length} 个版本</span></div>
+    ${canManage ? `<form id="translationForm" class="translation-toolbar">
+      <label>合同<select id="translationDocument">${contracts.map((doc) => `<option value="${escapeHtml(doc.document_id)}">${escapeHtml(doc.name)}</option>`).join("")}</select></label>
+      <label>目标语言<select id="translationLanguage"><option value="en">英文</option><option value="zh">中文</option><option value="vi">越南语</option><option value="ja">日语</option><option value="es">西班牙语</option></select></label>
+      <button type="submit" class="secondary">生成对齐译稿</button>
+    </form>` : ""}
+    ${translations.length ? `<div class="translation-list">${translations.map((translation) => translationRow(item, translation, canManage)).join("")}</div>` : `<div class="empty-note">尚未生成合同译稿。</div>`}
+  </section>`
+}
+
+function translationRow(item, translation, canManage) {
+  const confirmed = translation.status === "confirmed"
+  return `<article class="translation-version"><div><b>${escapeHtml(translation.target_language_label)} · ${escapeHtml(translation.source_name)}</b><small>${escapeHtml(translation.translation_id)} · ${translation.segment_count || 0} 个对齐片段 · ${confirmed ? `已由 ${escapeHtml(translation.confirmed_by?.display_name || "人工")} 确认` : "等待人工复核"}</small></div><div class="revision-actions">${confirmed ? `<a class="secondary" href="${api.translationDownloadUrl(item.case_id, translation.translation_id)}">下载双语 Word</a>` : canManage ? `<button type="button" class="primary" data-translation-review="${escapeHtml(translation.translation_id)}">复核译稿</button>` : `<span class="badge pending">待确认</span>`}</div></article>`
+}
+
+function installTranslationActions(root, item, renderTab) {
+  root.querySelector("#translationForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault()
+    const button = event.submitter
+    button.disabled = true
+    button.textContent = "正在翻译..."
+    try {
+      const data = await api.createContractTranslation(item.case_id, {
+        document_id:root.querySelector("#translationDocument").value,
+        target_language:root.querySelector("#translationLanguage").value,
+      })
+      item.contract_translations = [data.translation, ...(item.contract_translations || [])]
+      showTranslationDialog(root, item, data.translation, renderTab)
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+      button.textContent = "生成对齐译稿"
+    }
+  })
+  root.querySelector(".translation-list")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-translation-review]")
+    if (!button) return
+    button.disabled = true
+    try {
+      const data = await api.getContractTranslation(item.case_id, button.dataset.translationReview)
+      showTranslationDialog(root, item, data.translation, renderTab)
+    } catch (reason) {
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:reason.message || String(reason)}))
+      button.disabled = false
+    }
+  })
+}
+
+function showTranslationDialog(root, item, translation, renderTab) {
+  root.querySelector("#translationDialog")?.remove()
+  root.insertAdjacentHTML("beforeend", `<div id="translationDialog" class="modal-backdrop"><form class="modal-panel translation-dialog"><div class="section-heading"><div><h3>${escapeHtml(translation.target_language_label)}译稿复核</h3><span>${translation.entries.length} 个原文对齐片段</span></div><button type="button" class="text-button" data-close>关闭</button></div><p class="field-hint">逐段核对并修正译文。确认后生成双语 Word，原合同不会被覆盖。</p><div class="translation-segments">${translation.entries.map((entry) => `<article data-translation-fragment="${escapeHtml(entry.fragment_id)}"><small>${escapeHtml(entry.location_label)}</small><pre>${escapeHtml(entry.source_text)}</pre><label>译文<textarea rows="4" required>${escapeHtml(entry.translated_text)}</textarea></label></article>`).join("")}</div><label>人工复核说明<textarea id="translationReviewNote" rows="3" required placeholder="填写复核范围、依据或需要继续确认的事项"></textarea></label><div id="translationError" class="error-box hidden"></div><div class="form-actions"><span>机器翻译仅作辅助，法律效力以签署原文为准。</span><button type="submit" class="primary">确认并生成双语稿</button></div></form></div>`)
+  const dialog = root.querySelector("#translationDialog")
+  dialog.querySelector("[data-close]").addEventListener("click", () => { dialog.remove(); renderTab("contract") })
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) { dialog.remove(); renderTab("contract") } })
+  dialog.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    const button = event.submitter
+    const error = dialog.querySelector("#translationError")
+    button.disabled = true
+    error.classList.add("hidden")
+    try {
+      const data = await api.confirmContractTranslation(item.case_id, translation.translation_id, {
+        review_note:dialog.querySelector("#translationReviewNote").value,
+        entries:Array.from(dialog.querySelectorAll("[data-translation-fragment]")).map((row) => ({fragment_id:row.dataset.translationFragment, translated_text:row.querySelector("textarea").value})),
+      })
+      item.contract_translations = (item.contract_translations || []).map((entry) => entry.translation_id === data.translation.translation_id ? data.translation : entry)
+      dialog.remove()
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:"译稿已确认，双语 Word 已归档"}))
+      renderTab("contract")
+    } catch (reason) {
+      error.textContent = reason.message || String(reason)
+      error.classList.remove("hidden")
+      button.disabled = false
+    }
+  })
 }
 
 function aiAssistance(item) {
@@ -353,7 +439,15 @@ function duration(value) {
 
 function documentsTab(item) {
   const docs = item.source_documents || []
-  return docs.length ? `<div class="document-layout"><section class="document-list"><div class="section-heading"><h3>案件原件</h3><span>${docs.length} 份</span></div>${docs.map((doc, index) => `<button class="document-row" ${doc.document_id && doc.fragment_count ? `data-document-index="${index}"` : "disabled"}><span class="document-icon">${escapeHtml((doc.media_type || "FILE").slice(0,4).toUpperCase())}</span><span><b>${escapeHtml(doc.name)}</b><small>${doc.document_kind === "contract" ? "合同" : "信用资料"} · ${parseStatus(doc.parse_status)} · ${doc.document_id ? `${doc.fragment_count || 0} 个可定位片段` : "历史文件需重新解析"}</small></span></button>`).join("")}</section><aside id="documentViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>资料预览</strong><p>选择左侧文件查看首个可解析片段。</p></div></aside></div>` : emptyState("暂无原始资料", "当前案件没有上传文件。")
+  return docs.length ? `<div class="document-layout"><section class="document-list"><div class="section-heading"><h3>案件原件</h3><span>${docs.length} 份</span></div>${docs.map((doc, index) => `<button class="document-row" ${doc.document_id && doc.fragment_count ? `data-document-index="${index}"` : "disabled"}><span class="document-icon">${escapeHtml((doc.media_type || "FILE").slice(0,4).toUpperCase())}</span><span><b>${escapeHtml(doc.name)}</b><small>${doc.document_kind === "contract" ? "合同" : "信用资料"} · ${parseStatus(doc.parse_status)} · ${doc.document_id ? `${doc.fragment_count || 0} 个可定位片段` : "历史文件需重新解析"}</small>${documentFeatures(doc)}</span></button>`).join("")}</section><aside id="documentViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>资料预览</strong><p>选择左侧文件查看首个可解析片段。</p></div></aside></div>` : emptyState("暂无原始资料", "当前案件没有上传文件。")
+}
+
+function documentFeatures(doc) {
+  const features = doc.features || {}, labels = []
+  if (features.ocr_page_count) labels.push(`OCR ${features.ocr_page_count} 页`)
+  if (features.ocr_image_count) labels.push(`OCR 图片 ${features.ocr_image_count} 张`)
+  if (features.word_table_cell_count) labels.push(`Word 表格 ${features.word_table_cell_count} 个单元格`)
+  return labels.length ? `<small>${labels.map(escapeHtml).join(" · ")}</small>` : ""
 }
 
 function writebackTab(item) {

@@ -64,6 +64,17 @@ def location_label(location: dict[str, Any] | None) -> str:
         return f"第 {item.get('paragraph')} 段"
     if kind == "cell":
         return f"{item.get('sheet')}!{item.get('cell')}"
+    if kind == "word_table_cell":
+        label = (
+            f"Word 表格 {item.get('table')} · "
+            f"第 {item.get('row')} 行第 {item.get('column')} 列"
+        )
+        spans: list[str] = []
+        if int(item.get("row_span") or 1) > 1:
+            spans.append(f"跨 {item.get('row_span')} 行")
+        if int(item.get("column_span") or 1) > 1:
+            spans.append(f"跨 {item.get('column_span')} 列")
+        return f"{label}（{'、'.join(spans)}）" if spans else label
     if kind == "line":
         return f"第 {item.get('line')} 行"
     if kind == "image":

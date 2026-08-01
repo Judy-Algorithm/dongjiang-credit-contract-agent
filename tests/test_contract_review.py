@@ -152,6 +152,23 @@ class ContractReviewTests(unittest.TestCase):
         self.assertTrue(facts.has_payment)
         self.assertTrue(facts.has_dispute_resolution)
 
+    def test_vietnamese_japanese_and_spanish_contract_languages_are_detected(self):
+        extractor = ContractFactExtractor()
+        vietnamese = extractor.extract(
+            "Hợp đồng mua bán quy định các bên, điều khoản thanh toán, trách nhiệm "
+            "và nghĩa vụ bảo mật thông tin."
+        )
+        japanese = extractor.extract(
+            "本契約は商品の供給、支払条件、秘密保持および契約終了について定めるものとします。"
+        )
+        spanish = extractor.extract(
+            "El comprador y el vendedor celebran este contrato. El pago, la "
+            "responsabilidad, la confidencialidad y la jurisdicción quedan regulados."
+        )
+        self.assertEqual(vietnamese.language, "vi")
+        self.assertEqual(japanese.language, "ja")
+        self.assertEqual(spanish.language, "es")
+
 
 if __name__ == "__main__":
     unittest.main()
