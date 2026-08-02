@@ -173,7 +173,7 @@ class WebApiTests(unittest.TestCase):
             "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
         )
         self.assertEqual(status, 403)
-        self.assertIn("角色", forbidden["error"])
+        self.assertIn("没有执行该操作的权限", forbidden["error"])
 
         self.activate_user("credit.a")
         status, credit_notices = self.request("GET", "/api/notifications")
@@ -200,6 +200,47 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(sales_notices["unread"], 1)
         self.assertEqual(sales_notices["items"][0]["link"], f"/cases/{case_id}/action")
+
+    def test_new_case_reuses_credit_only_when_explicitly_requested(self):
+        self.create_user("sales.cache", "复用测试业务", ["sales"])
+        self.create_user("credit.cache", "复用测试信用", ["credit"])
+        self.activate_user("sales.cache")
+        customer = {
+            "customer_name": "有效授信复用测试客户",
+            "unified_social_credit_code": "91440300CACHE000001",
+            "customer_type": "new",
+            "business_type": "TKP",
+            "monthly_order_amount": 1_000_000,
+            "external_rating": "AA",
+            "asset_liability_ratio": 0.45,
+            "current_ratio": 1.5,
+        }
+        status, first = self.request(
+            "POST", "/api/cases", {"customer": customer, "use_cached_credit": False}
+        )
+        self.assertEqual(status, 201)
+
+        self.activate_user("credit.cache")
+        status, approved = self.request(
+            "POST",
+            f"/api/cases/{first['case']['case_id']}/credit-actions",
+            {"action": "approve"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(approved["case"]["credit"]["effective"])
+
+        self.assertEqual(self.login("sales.cache", "ActivePass456")[0], 200)
+        status, independent = self.request("POST", "/api/cases", {"customer": customer})
+        self.assertEqual(status, 201)
+        self.assertEqual(independent["case"]["status"], "credit_pending_approval")
+        self.assertFalse(independent["case"]["credit"]["effective"])
+
+        status, reused = self.request(
+            "POST", "/api/cases", {"customer": customer, "use_cached_credit": True}
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(reused["case"]["status"], "awaiting_contract")
+        self.assertTrue(reused["case"]["credit"]["effective"])
 
     def test_admin_user_management_rejects_multiple_roles_and_password_change(self):
         user = self.create_user("finance.a", "财务甲", ["credit"])
@@ -240,6 +281,89 @@ class WebApiTests(unittest.TestCase):
         self.assertFalse(unauthenticated["ok"])
         self.assertEqual(self.login("credit.renamed", "UpdatedPass456")[0], 200)
 
+    def test_admin_can_switch_accounts_with_persistent_audited_impersonation(self):
+        sales = self.create_user("sales.switch", "切换业务", ["sales"])
+        credit = self.create_user("credit.switch", "切换信用", ["credit"])
+        self.activate_user("sales.switch")
+
+        status, denied = self.request("GET", "/api/auth/impersonation/users")
+        self.assertEqual(status, 403)
+        self.assertIn("系统管理员", denied["error"])
+
+        self.activate_user("credit.switch")
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
+        status, users = self.request("GET", "/api/auth/impersonation/users")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            {item["username"] for item in users["users"]},
+            {"sales.switch", "credit.switch"},
+        )
+
+        status, switched = self.request(
+            "POST", "/api/auth/impersonate", {"user_id": sales["user_id"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(switched["user"]["username"], "sales.switch")
+        self.assertEqual(switched["user"]["impersonated_by"]["username"], "admin")
+        self.csrf_token = switched["csrf_token"]
+
+        status, refreshed = self.request("GET", "/api/auth/status")
+        self.assertEqual(status, 200)
+        self.assertEqual(refreshed["user"]["username"], "sales.switch")
+        self.assertEqual(refreshed["user"]["impersonated_by"]["username"], "admin")
+
+        status, created = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "管理员切换账户测试客户",
+                    "unified_social_credit_code": "91440300SWITCH00001",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 1_000_000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                    "current_ratio": 1.5,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        case_id = created["case"]["case_id"]
+        self.assertEqual(created["case"]["applicant"]["user_id"], sales["user_id"])
+
+        status, switched = self.request(
+            "POST", "/api/auth/impersonate", {"user_id": credit["user_id"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(switched["user"]["username"], "credit.switch")
+        self.csrf_token = switched["csrf_token"]
+        status, approved = self.request(
+            "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(approved["case"]["credit"]["effective"])
+
+        status, restored = self.request("POST", "/api/auth/impersonation/stop", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(restored["user"]["username"], "admin")
+        self.assertNotIn("impersonated_by", restored["user"])
+        self.csrf_token = restored["csrf_token"]
+
+        status, audit = self.request("GET", "/api/audit")
+        self.assertEqual(status, 200)
+        case_event = next(
+            item
+            for item in audit["events"]
+            if item["event_type"] == "case.created" and item["target_id"] == case_id
+        )
+        self.assertEqual(case_event["username"], "admin")
+        self.assertEqual(
+            case_event["detail"]["impersonation"]["effective_username"],
+            "sales.switch",
+        )
+
     def test_admin_can_assign_case_owner_to_sales_user(self):
         sales = self.create_user("owner.sales", "案件销售", ["sales"])
         self.activate_user("owner.sales")
@@ -275,19 +399,17 @@ class WebApiTests(unittest.TestCase):
             {"temporary_password": "ResetPass789"},
         )
         self.assertEqual(status, 200)
-        self.assertTrue(reset["user"]["must_change_password"])
+        self.assertFalse(reset["user"]["must_change_password"])
         status, denied = self.login("legal.reset", "InitialPass123")
         self.assertEqual(status, 401)
         self.assertFalse(denied["ok"])
         status, authenticated = self.login("legal.reset", "ResetPass789")
         self.assertEqual(status, 200)
-        self.assertTrue(authenticated["user"]["must_change_password"])
-        status, blocked = self.request("GET", "/api/cases")
-        self.assertEqual(status, 403)
-        self.assertIn("首次登录", blocked["error"])
+        self.assertFalse(authenticated["user"]["must_change_password"])
+        self.assertEqual(self.request("GET", "/api/cases")[0], 200)
 
     @patch("dongjiang_agent.web.server.SecurityEmailSender")
-    def test_verified_registration_requires_admin_review(self, sender_class):
+    def test_verified_registration_is_immediately_active(self, sender_class):
         sender = sender_class.return_value
         sender.configured = True
         captured = {}
@@ -334,78 +456,17 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         self.assertEqual(registered["user"]["roles"], ["case_submitter"])
-        self.assertFalse(registered["user"]["active"])
-        self.assertEqual(registered["user"]["registration_status"], "pending")
+        self.assertTrue(registered["user"]["active"])
+        self.assertEqual(registered["user"]["registration_status"], "approved")
+        self.assertFalse(registered["user"]["must_change_password"])
         self.assertNotIn("csrf_token", registered)
-        self.assertEqual(self.login("registered.sales", "Registered123")[0], 401)
-
-        status, applications = self.request("GET", "/api/registrations")
-        self.assertEqual(status, 200)
-        self.assertEqual(len(applications["applications"]), 1)
-        status, admin_notifications = self.request("GET", "/api/notifications")
-        self.assertEqual(status, 200)
-        self.assertEqual(admin_notifications["unread"], 1)
-        self.assertEqual(admin_notifications["items"][0]["category"], "registration")
-
-        user_id = registered["user"]["user_id"]
-        status, reviewed = self.request(
-            "POST",
-            f"/api/registrations/{user_id}/review",
-            {
-                "decision": "approve",
-                "roles": ["case_submitter", "credit_approver"],
-            },
-        )
-        self.assertEqual(status, 400)
-        self.assertIn("单个角色", reviewed["error"])
-        status, reviewed = self.request(
-            "POST",
-            f"/api/registrations/{user_id}/review",
-            {"decision": "approve", "roles": ["credit_approver"]},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(reviewed["user"]["active"])
-        self.assertEqual(reviewed["user"]["registration_status"], "approved")
-        self.assertEqual(reviewed["user"]["roles"], ["credit_approver"])
-        sender.send_registration_review.assert_called_once_with(
-            "sales@example.com", approved=True, username="registered.sales"
-        )
         self.assertEqual(self.login("registered.sales", "Registered123")[0], 200)
-        status, user_notifications = self.request("GET", "/api/notifications")
-        self.assertEqual(status, 200)
-        self.assertEqual(user_notifications["unread"], 1)
-        notice_id = user_notifications["items"][0]["notification_id"]
-        self.assertEqual(self.request("POST", f"/api/notifications/{notice_id}/read", {})[0], 200)
-        self.assertEqual(self.request("GET", "/api/notifications")[1]["unread"], 0)
-
-    def test_registration_review_is_admin_only_and_rejection_blocks_login(self):
-        with AuthStore() as store:
-            pending = store.create_user(
-                username="pending.user",
-                display_name="待审核用户",
-                email="pending@example.com",
-                password="PendingPass123",
-                roles=["sales"],
-                active=False,
-                registration_status="pending",
-                must_change_password=False,
-            )
-        self.create_user("review.sales", "普通销售", ["sales"])
-        self.activate_user("review.sales")
-        status, denied = self.request("GET", "/api/registrations")
-        self.assertEqual(status, 403)
-        self.assertFalse(denied["ok"])
-
-        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
-        status, rejected = self.request(
-            "POST",
-            f"/api/registrations/{pending['user_id']}/review",
-            {"decision": "reject", "roles": ["sales"]},
+        self.assertEqual(self.request("GET", "/api/cases")[0], 200)
+        self.assertEqual(self.request("GET", "/api/registrations")[0], 404)
+        self.assertEqual(
+            self.request("POST", f"/api/registrations/{registered['user']['user_id']}/review", {})[0],
+            404,
         )
-        self.assertEqual(status, 200)
-        self.assertEqual(rejected["user"]["registration_status"], "rejected")
-        self.assertFalse(rejected["user"]["active"])
-        self.assertEqual(self.login("pending.user", "PendingPass123")[0], 401)
 
     def test_notifications_are_scoped_to_recipient_and_support_read_all(self):
         first = self.create_user("notice.first", "通知甲", ["sales"])
@@ -606,7 +667,10 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(detail["case"]["customer"]["customer_name"], "文件上传测试客户")
 
     def test_contract_submission_uses_business_route(self):
-        _, created = self.request(
+        self.create_user("sales.contract", "合同业务", ["sales"])
+        self.create_user("credit.contract", "合同信用", ["credit"])
+        self.activate_user("sales.contract")
+        status, created = self.request(
             "POST",
             "/api/cases",
             {
@@ -621,6 +685,7 @@ class WebApiTests(unittest.TestCase):
                 "use_cached_credit": False,
             },
         )
+        self.assertEqual(status, 201)
         case_id = created["case"]["case_id"]
         contract = """销售合同
 甲方：东江集团；乙方：合同接口测试客户。
@@ -636,6 +701,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("尚未审批生效", denied["error"])
 
+        self.activate_user("credit.contract")
         status, approved = self.request(
             "POST",
             f"/api/cases/{case_id}/credit-actions",
@@ -643,8 +709,20 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(approved["case"]["credit"]["effective"])
-        self.assertTrue(approved["case"]["permissions"]["can_upload_contract"])
+        self.assertFalse(approved["case"]["permissions"]["can_upload_contract"])
 
+        status, forbidden = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contracts",
+            {"contract_texts": [contract]},
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("没有执行该操作的权限", forbidden["error"])
+
+        self.assertEqual(self.login("sales.contract", "ActivePass456")[0], 200)
+        status, detail = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(detail["case"]["permissions"]["can_upload_contract"])
         status, submitted = self.request(
             "POST",
             f"/api/cases/{case_id}/contracts",
@@ -713,7 +791,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(missing["ok"])
 
-        for route in ("/cases/new", "/registrations", "/notifications", "/operations", "/agent-operations", "/analytics"):
+        for route in ("/cases/new", "/notifications", "/operations", "/agent-operations", "/analytics"):
             self.connection.request("GET", route)
             response = self.connection.getresponse()
             html = response.read().decode("utf-8")
@@ -722,7 +800,7 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn("运行风险演示案例", html)
             self.assertNotIn("华南精密制造示例有限公司", html)
 
-        self.connection.request("GET", "/js/app.js?v=20260801-core2")
+        self.connection.request("GET", "/js/app.js?v=20260802-auth-simplified")
         response = self.connection.getresponse()
         javascript = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
@@ -734,10 +812,10 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn('href="/users" data-link data-nav="users">用户', javascript)
         self.assertNotIn('class="primary small" href="/cases/new"', javascript)
         account_start = javascript.index('<div id="accountPopover"')
-        account_end = javascript.index('</div>', account_start) + len('</div>')
+        account_end = javascript.index('</nav>', account_start)
         self.assertIn('系统管理', javascript[account_start:account_end])
         self.assertIn('href="/users"', javascript[account_start:account_end])
-        self.assertIn('href="/registrations"', javascript[account_start:account_end])
+        self.assertNotIn('href="/registrations"', javascript[account_start:account_end])
 
         self.connection.request("GET", "/cases")
         response = self.connection.getresponse()
@@ -745,7 +823,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store, max-age=0")
 
-    def test_navigation_summary_is_lightweight_scoped_and_admin_aware(self):
+    def test_navigation_summary_only_returns_unread_count(self):
         with AuthStore() as store:
             store.create_notification(
                 self.request("GET", "/api/auth/status")[1]["user"]["user_id"],
@@ -753,24 +831,14 @@ class WebApiTests(unittest.TestCase):
                 title="导航摘要测试",
                 body="只统计未读数量",
             )
-            store.create_user(
-                username="summary.pending",
-                display_name="待审核摘要用户",
-                password="InitialPass123",
-                roles=["sales"],
-                active=False,
-                registration_status="pending",
-            )
         status, summary = self.request("GET", "/api/navigation-summary")
         self.assertEqual(status, 200)
         self.assertEqual(summary["unread_notifications"], 1)
-        self.assertEqual(summary["pending_registrations"], 1)
         self.assertEqual(
             set(summary),
             {
                 "ok",
                 "unread_notifications",
-                "pending_registrations",
             },
         )
 
@@ -778,7 +846,7 @@ class WebApiTests(unittest.TestCase):
         self.activate_user("summary.sales")
         status, sales_summary = self.request("GET", "/api/navigation-summary")
         self.assertEqual(status, 200)
-        self.assertEqual(sales_summary["pending_registrations"], 0)
+        self.assertEqual(set(sales_summary), {"ok", "unread_notifications"})
 
     def test_oa_callback_requires_token_and_complete_approval_chain(self):
         _, created = self.request(
@@ -1790,7 +1858,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260801-core2", html)
+        self.assertIn(b"20260802-auth-simplified", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -1806,7 +1874,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260801-core2"
+            "/js/app.js?v=20260802-auth-simplified"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -1824,7 +1892,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
 
         status, api_module, headers = self.download(
-            "/js/api.js?v=20260801-core2"
+            "/js/api.js?v=20260802-auth-simplified"
         )
         self.assertEqual(status, 200)
         self.assertIn(b"responseCache", api_module)

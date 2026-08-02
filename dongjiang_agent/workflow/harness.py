@@ -62,6 +62,8 @@ class ActorContext:
     roles: tuple[str, ...] = ("system",)
     source_system: str = "local"
     display_name: str = ""
+    administrator_id: str = ""
+    administrator_display_name: str = ""
 
 
 @dataclass(slots=True)

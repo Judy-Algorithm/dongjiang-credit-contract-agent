@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260802-user-editor"
-import {escapeHtml} from "../format.js?v=20260802-user-editor"
-import {navigate} from "../router.js?v=20260802-user-editor"
+import {api, encodeFiles} from "../api.js?v=20260802-auth-simplified"
+import {escapeHtml} from "../format.js?v=20260802-auth-simplified"
+import {navigate} from "../router.js?v=20260802-auth-simplified"
 
 const draftKey = "dongjiang:new-case-draft"
 
@@ -40,6 +40,8 @@ export async function renderNewCasePage(root) {
           <label>结算币种<select id="currency"><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option><option value="EUR">欧元 EUR</option><option value="HKD">港币 HKD</option></select></label>
           <label class="full">申请说明<textarea id="applicationReason" rows="4" placeholder="填写合作背景、特殊条件或额度账期申请原因"></textarea></label>
           <label class="full checkbox-row"><input id="purchaseExemptionRequested" type="checkbox">申请TKM首期采购款豁免</label>
+          <label class="full checkbox-row"><input id="reuseEffectiveCredit" type="checkbox">复用该客户180天内的有效授信</label>
+          <p class="field-hint full">仅在统一社会信用代码或CRM客户编号匹配时生效；勾选后可能直接跳过本次信用审批。独立测试案件请不要勾选。</p>
         </div>
       </section>
 
@@ -128,7 +130,11 @@ export async function renderNewCasePage(root) {
     if (!validateBasics(root)) { showStep(1); return }
     const customer = collectForm(root)
     const files = await encodeFiles(root.querySelector("#creditFiles").files)
-    const data = await api.createCase({customer, files, use_cached_credit:true})
+    const data = await api.createCase({
+      customer,
+      files,
+      use_cached_credit:root.querySelector("#reuseEffectiveCredit").checked,
+    })
     sessionStorage.removeItem(draftKey)
     navigate(`/cases/${encodeURIComponent(data.case.case_id)}`, {replace:true})
   })
@@ -206,7 +212,10 @@ function validateBasics(root) {
 }
 
 function saveDraft(root) {
-  sessionStorage.setItem(draftKey, JSON.stringify(collectForm(root)))
+  sessionStorage.setItem(draftKey, JSON.stringify({
+    ...collectForm(root),
+    use_cached_credit:root.querySelector("#reuseEffectiveCredit").checked,
+  }))
 }
 
 function restoreDraft(root, draft) {
@@ -227,6 +236,7 @@ function restoreDraft(root, draft) {
     lastOrderDate:"last_order_date",
   }
   root.querySelector("#purchaseExemptionRequested").checked = Boolean(draft.purchase_exemption_requested)
+  root.querySelector("#reuseEffectiveCredit").checked = Boolean(draft.use_cached_credit)
   for (const [id, key] of Object.entries(mapping)) {
     let item = draft[key]
     if (["assetLiabilityRatio","netMargin","revenueGrowth","onTimeRate"].includes(id) && item != null) item *= 100
@@ -252,6 +262,7 @@ function renderReview(root, customer) {
     ["第三方评级", customer.external_ratings.length ? `${customer.external_ratings.length} 条` : "未填写"],
     ["当前授信占用", `¥${Number((customer.outstanding_receivables_amount || 0) + (customer.open_order_amount || 0)).toLocaleString("zh-CN")}`],
     ["当前逾期", customer.current_overdue_days == null ? "未填写" : `${customer.current_overdue_days} 天`],
+    ["已有授信复用", root.querySelector("#reuseEffectiveCredit").checked ? "启用，命中后跳过信用审批" : "关闭，本案重新信用审批"],
     ["上传资料", `${root.querySelector("#creditFiles").files.length} 个文件`],
   ]
   root.querySelector("#caseReview").innerHTML = labels.map(([label, item]) => `<div class="review-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(item)}</b></div>`).join("")

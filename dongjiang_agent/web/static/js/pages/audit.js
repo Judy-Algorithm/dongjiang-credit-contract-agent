@@ -1,10 +1,10 @@
-import {api} from "../api.js?v=20260802-user-editor"
-import {dateTime, escapeHtml} from "../format.js?v=20260802-user-editor"
+import {api} from "../api.js?v=20260802-auth-simplified"
+import {dateTime, escapeHtml} from "../format.js?v=20260802-auth-simplified"
 
 const labels = {
   "auth.login":"登录","auth.logout":"退出登录","auth.password_changed":"修改密码","auth.password_reset":"管理员重置密码","contract.translation_created":"生成合同译稿","contract.translation_confirmed":"确认合同译稿",
   "auth.password_reset_requested":"请求找回密码","auth.password_reset_confirmed":"确认找回密码","auth.registration_code_requested":"请求注册验证码","auth.registration_code_confirmed":"确认注册验证码","user.registered":"提交注册申请","user.registration_reviewed":"审核注册申请","operations.sla_sweep":"执行时效扫描",
-  "user.created":"创建用户","user.updated":"调整用户","case.created":"发起信审","case.action":"处理案件",
+  "user.created":"创建用户","user.updated":"调整用户","case.created":"发起信审","case.action":"处理案件","auth.impersonation_started":"管理员切换账户","auth.impersonation_stopped":"管理员返回原账户",
   "case.owner_assigned":"调整负责人",
   "integration.writeback_retried":"重试系统回写",
   "agent.incident.acknowledge":"确认Agent异常","agent.incident.assign":"分派Agent异常","agent.incident.rerun":"候选重跑Agent节点","agent.incident.resolve":"关闭Agent异常",

@@ -129,7 +129,7 @@ class AuthStore:
                 password_hash TEXT NOT NULL,
                 roles_json TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
-                must_change_password INTEGER NOT NULL DEFAULT 1,
+                must_change_password INTEGER NOT NULL DEFAULT 0,
                 failed_attempts INTEGER NOT NULL DEFAULT 0,
                 locked_until TEXT,
                 last_login_at TEXT,
@@ -139,11 +139,13 @@ class AuthStore:
             CREATE TABLE IF NOT EXISTS sessions (
                 session_hash TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
+                impersonator_user_id TEXT,
                 csrf_token TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
-                FOREIGN KEY(user_id) REFERENCES users(user_id)
+                FOREIGN KEY(user_id) REFERENCES users(user_id),
+                FOREIGN KEY(impersonator_user_id) REFERENCES users(user_id)
             );
             CREATE TABLE IF NOT EXISTS security_audit (
                 event_id TEXT PRIMARY KEY,
@@ -167,6 +169,14 @@ class AuthStore:
         }
         if "email" not in columns:
             self.connection.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        session_columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "impersonator_user_id" not in session_columns:
+            self.connection.execute(
+                "ALTER TABLE sessions ADD COLUMN impersonator_user_id TEXT"
+            )
         self.connection.executescript(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
@@ -235,6 +245,25 @@ class AuthStore:
             ON notifications(user_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL AND dedupe_key != ''
             """
+        )
+        self.connection.execute(
+            """
+            UPDATE users SET active = 1, registration_status = 'approved',
+                must_change_password = 0, updated_at = ?
+            WHERE registration_status = 'pending'
+            """,
+            (_iso(),),
+        )
+        self.connection.execute(
+            "UPDATE users SET must_change_password = 0 WHERE must_change_password != 0"
+        )
+        self.connection.execute(
+            """
+            UPDATE users SET registration_status = 'approved', active = 0,
+                must_change_password = 0, updated_at = ?
+            WHERE registration_status = 'rejected'
+            """,
+            (_iso(),),
         )
         self.connection.commit()
         self._migrate_roles()
@@ -327,7 +356,7 @@ class AuthStore:
         email: str = "",
         active: bool = True,
         registration_status: str = "approved",
-        must_change_password: bool = True,
+        must_change_password: bool = False,
         actor: dict[str, Any] | None = None,
         remote_address: str = "",
     ) -> dict[str, Any]:
@@ -427,8 +456,8 @@ class AuthStore:
             email=email,
             password=password,
             roles=["case_submitter"],
-            active=False,
-            registration_status="pending",
+            active=True,
+            registration_status="approved",
             must_change_password=False,
             remote_address=remote_address,
         )
@@ -439,13 +468,6 @@ class AuthStore:
             target_id=str(user["user_id"]),
             detail={"role": "case_submitter"},
             remote_address=remote_address,
-        )
-        self.notify_roles(
-            ["system_admin"],
-            category="registration",
-            title="新的注册申请",
-            body=f"{user['display_name']}（{user['username']}）已完成邮箱验证，等待审核。",
-            link="/registrations",
         )
         return user
 
@@ -643,78 +665,6 @@ class AuthStore:
         ).fetchall()
         return [_public_user(row) for row in rows]
 
-    def list_registration_applications(self) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            """
-            SELECT * FROM users
-            WHERE registration_status IN ('pending', 'rejected')
-            ORDER BY CASE registration_status WHEN 'pending' THEN 0 ELSE 1 END,
-                     created_at DESC
-            """
-        ).fetchall()
-        return [_public_user(row) for row in rows]
-
-    def pending_registration_count(self) -> int:
-        row = self.connection.execute(
-            "SELECT COUNT(*) AS count FROM users WHERE registration_status = 'pending'"
-        ).fetchone()
-        return int(row["count"]) if row else 0
-
-    def review_registration(
-        self,
-        user_id: str,
-        *,
-        decision: str,
-        roles: list[str] | None,
-        actor: dict[str, Any],
-        remote_address: str = "",
-    ) -> dict[str, Any]:
-        row = self.connection.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        if not row:
-            raise KeyError("注册申请不存在。")
-        if str(row["registration_status"] or "") != "pending":
-            raise ValueError("该注册申请已经处理。")
-        normalized = decision.strip().lower()
-        if normalized not in {"approve", "reject"}:
-            raise ValueError("审核决定必须是批准或拒绝。")
-        next_roles = self.validate_roles(roles or ["case_submitter"])
-        active = normalized == "approve"
-        status = "approved" if active else "rejected"
-        self.connection.execute(
-            """
-            UPDATE users SET roles_json = ?, active = ?, registration_status = ?,
-                failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?
-            """,
-            (json.dumps(next_roles), int(active), status, _iso(), user_id),
-        )
-        self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
-        self.connection.commit()
-        user = self.get_user(user_id) or {}
-        title = "注册申请已通过" if active else "注册申请未通过"
-        body = (
-            f"管理员已批准账号 {user['username']}，现在可以登录系统。"
-            if active
-            else f"管理员未批准账号 {user['username']}，如有疑问请联系管理员。"
-        )
-        self.create_notification(
-            user_id,
-            category="registration",
-            title=title,
-            body=body,
-            link="/login" if active else "",
-        )
-        self.audit(
-            "user.registration_reviewed",
-            actor=actor,
-            target_type="user",
-            target_id=user_id,
-            detail={"decision": normalized, "roles": next_roles},
-            remote_address=remote_address,
-        )
-        return user
-
     def update_user(
         self,
         user_id: str,
@@ -746,8 +696,6 @@ class AuthStore:
             raise ValueError("请填写昵称。")
         next_roles = self.validate_roles(roles) if roles is not None else existing["roles"]
         next_active = bool(active) if active is not None else bool(existing["active"])
-        if existing.get("registration_status") != "approved" and next_active:
-            raise ValueError("注册申请必须在审核中心批准后才能启用。")
         next_email = (
             self.normalize_email(email, required=True)
             if email is not None
@@ -782,7 +730,10 @@ class AuthStore:
         except sqlite3.IntegrityError as exc:
             raise ValueError("用户名或邮箱已被其他账号使用。") from exc
         if not next_active:
-            self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            self.connection.execute(
+                "DELETE FROM sessions WHERE user_id = ? OR impersonator_user_id = ?",
+                (user_id, user_id),
+            )
         self.connection.commit()
         self.audit(
             "user.updated",
@@ -815,7 +766,7 @@ class AuthStore:
         self.connection.execute(
             """
             UPDATE users SET password_salt = ?, password_hash = ?,
-                must_change_password = 1, failed_attempts = 0, locked_until = NULL,
+                must_change_password = 0, failed_attempts = 0, locked_until = NULL,
                 updated_at = ? WHERE user_id = ?
             """,
             (
@@ -825,7 +776,10 @@ class AuthStore:
                 user_id,
             ),
         )
-        self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        self.connection.execute(
+            "DELETE FROM sessions WHERE user_id = ? OR impersonator_user_id = ?",
+            (user_id, user_id),
+        )
         self.connection.commit()
         self.audit(
             "auth.password_reset",
@@ -977,7 +931,10 @@ class AuthStore:
             "UPDATE password_reset_codes SET consumed_at = ? WHERE reset_id = ?",
             (_iso(now), reset["reset_id"]),
         )
-        self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user["user_id"],))
+        self.connection.execute(
+            "DELETE FROM sessions WHERE user_id = ? OR impersonator_user_id = ?",
+            (user["user_id"], user["user_id"]),
+        )
         self.connection.commit()
         self.audit(
             "auth.password_reset_confirmed",
@@ -1058,8 +1015,9 @@ class AuthStore:
         self.connection.execute(
             """
             INSERT INTO sessions (
-                session_hash, user_id, csrf_token, created_at, expires_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                session_hash, user_id, impersonator_user_id, csrf_token,
+                created_at, expires_at, last_seen_at
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?)
             """,
             (
                 _token_digest(token),
@@ -1078,7 +1036,7 @@ class AuthStore:
             return None
         row = self.connection.execute(
             """
-            SELECT s.csrf_token, s.expires_at, u.*
+            SELECT s.csrf_token, s.expires_at, s.impersonator_user_id, u.*
             FROM sessions s JOIN users u ON u.user_id = s.user_id
             WHERE s.session_hash = ?
             """,
@@ -1098,7 +1056,87 @@ class AuthStore:
             (_iso(now), _token_digest(token)),
         )
         self.connection.commit()
-        return _public_user(row), str(row["csrf_token"])
+        user = _public_user(row)
+        impersonator_id = str(row["impersonator_user_id"] or "")
+        if impersonator_id:
+            administrator = self.get_user(impersonator_id)
+            if (
+                not administrator
+                or not administrator.get("active")
+                or "system_admin" not in set(administrator.get("roles") or [])
+            ):
+                self.connection.execute(
+                    "DELETE FROM sessions WHERE session_hash = ?",
+                    (_token_digest(token),),
+                )
+                self.connection.commit()
+                return None
+            user["impersonated_by"] = {
+                "user_id": administrator["user_id"],
+                "username": administrator["username"],
+                "display_name": administrator["display_name"],
+            }
+        return user, str(row["csrf_token"])
+
+    def start_impersonation(self, token: str, target_user_id: str) -> dict[str, Any]:
+        session = self.connection.execute(
+            "SELECT * FROM sessions WHERE session_hash = ?",
+            (_token_digest(token),),
+        ).fetchone()
+        if not session:
+            raise PermissionError("管理员会话已失效，请重新登录。")
+        administrator_id = str(
+            session["impersonator_user_id"] or session["user_id"]
+        )
+        administrator = self.get_user(administrator_id)
+        if not administrator or "system_admin" not in set(
+            administrator.get("roles") or []
+        ):
+            raise PermissionError("只有系统管理员可以切换账户。")
+        target = self.get_user(str(target_user_id))
+        if (
+            not target
+            or not target.get("active")
+            or target.get("registration_status") != "approved"
+        ):
+            raise ValueError("只能切换到已启用并审核通过的账号。")
+        if "system_admin" in set(target.get("roles") or []):
+            raise ValueError("无需模拟其他系统管理员账号。")
+        self.connection.execute(
+            """
+            UPDATE sessions SET user_id = ?, impersonator_user_id = ?, last_seen_at = ?
+            WHERE session_hash = ?
+            """,
+            (
+                target["user_id"],
+                administrator["user_id"],
+                _iso(),
+                _token_digest(token),
+            ),
+        )
+        self.connection.commit()
+        return target
+
+    def stop_impersonation(self, token: str) -> dict[str, Any]:
+        session = self.connection.execute(
+            "SELECT * FROM sessions WHERE session_hash = ?",
+            (_token_digest(token),),
+        ).fetchone()
+        if not session or not session["impersonator_user_id"]:
+            raise ValueError("当前未处于管理员模拟状态。")
+        administrator = self.get_user(str(session["impersonator_user_id"]))
+        if not administrator or not administrator.get("active"):
+            raise PermissionError("原管理员账号不可用，请重新登录。")
+        self.connection.execute(
+            """
+            UPDATE sessions SET user_id = impersonator_user_id,
+                impersonator_user_id = NULL, last_seen_at = ?
+            WHERE session_hash = ?
+            """,
+            (_iso(), _token_digest(token)),
+        )
+        self.connection.commit()
+        return administrator
 
     def delete_session(self, token: str) -> None:
         if token:
@@ -1134,7 +1172,10 @@ class AuthStore:
             """,
             (salt.hex(), _password_digest(new_password, salt), _iso(), user_id),
         )
-        self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        self.connection.execute(
+            "DELETE FROM sessions WHERE user_id = ? OR impersonator_user_id = ?",
+            (user_id, user_id),
+        )
         self.connection.commit()
         self.audit(
             "auth.password_changed",
@@ -1302,6 +1343,16 @@ class AuthStore:
         detail: dict[str, Any] | None = None,
         remote_address: str = "",
     ) -> None:
+        actor_payload = dict(actor or {})
+        impersonator = dict(actor_payload.get("impersonated_by") or {})
+        audit_detail = dict(detail or {})
+        if impersonator:
+            audit_detail["impersonation"] = {
+                "administrator_user_id": impersonator.get("user_id"),
+                "administrator_username": impersonator.get("username"),
+                "effective_user_id": actor_payload.get("user_id"),
+                "effective_username": actor_payload.get("username"),
+            }
         self.connection.execute(
             """
             INSERT INTO security_audit (
@@ -1312,13 +1363,13 @@ class AuthStore:
             (
                 f"EVT-{uuid4().hex[:16].upper()}",
                 event_type,
-                (actor or {}).get("user_id"),
-                (actor or {}).get("username") or username,
+                impersonator.get("user_id") or actor_payload.get("user_id"),
+                impersonator.get("username") or actor_payload.get("username") or username,
                 target_type,
                 target_id,
                 outcome,
                 remote_address,
-                json.dumps(detail or {}, ensure_ascii=False),
+                json.dumps(audit_detail, ensure_ascii=False),
                 _iso(),
             ),
         )

@@ -198,11 +198,14 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     def _actor(user: dict[str, Any]) -> Any:
         from ..workflow import ActorContext
 
+        administrator = dict(user.get("impersonated_by") or {})
         return ActorContext(
             str(user["user_id"]),
             tuple(user.get("roles") or ()),
             "web",
             str(user.get("display_name") or user.get("username") or ""),
+            str(administrator.get("user_id") or ""),
+            str(administrator.get("display_name") or ""),
         )
 
     @staticmethod
@@ -314,7 +317,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         requested = relative.lstrip("/")
         is_page_route = (
             not requested
-            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "registrations", "notifications", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks"}
+            or requested in {"login", "register", "forgot-password", "setup", "change-password", "cases", "cases/new", "users", "notifications", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks"}
             or (requested.startswith("cases/") and "." not in Path(requested).name)
         )
         name = "index.html" if is_page_route else requested
@@ -562,19 +565,11 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             session = self._session()
             assert session is not None
             user = session[0]
-            if user.get("must_change_password"):
-                raise PermissionError("首次登录必须先修改初始密码。")
             if path == "/api/users":
                 self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     users = store.list_users()
                 self._json(200, {"ok": True, "users": users})
-                return
-            if path == "/api/registrations":
-                self._require_roles(user, "system_admin")
-                with AuthStore() as store:
-                    applications = store.list_registration_applications()
-                self._json(200, {"ok": True, "applications": applications})
                 return
             if path == "/api/notifications":
                 with AuthStore() as store:
@@ -584,19 +579,26 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/navigation-summary":
                 with AuthStore() as store:
                     unread = store.unread_notification_count(str(user["user_id"]))
-                    pending_registrations = (
-                        store.pending_registration_count()
-                        if "system_admin" in set(user.get("roles") or [])
-                        else 0
-                    )
                 self._json(
                     200,
                     {
                         "ok": True,
                         "unread_notifications": unread,
-                        "pending_registrations": pending_registrations,
                     },
                 )
+                return
+            if path == "/api/auth/impersonation/users":
+                administrator = dict(user.get("impersonated_by") or {})
+                if not administrator and "system_admin" not in set(user.get("roles") or []):
+                    raise PermissionError("只有系统管理员可以切换账户。")
+                with AuthStore() as store:
+                    users = [
+                        item
+                        for item in store.list_users()
+                        if item.get("active")
+                        and "system_admin" not in set(item.get("roles") or [])
+                    ]
+                self._json(200, {"ok": True, "users": users})
                 return
             if path == "/api/audit":
                 self._require_roles(user, "system_admin")
@@ -814,16 +816,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         verification_code=str(payload.get("verification_code") or ""),
                         remote_address=self._remote_address(),
                     )
-                    administrators = store.users_for_roles(["system_admin"])
-                self._send_notification_emails(
-                    administrators,
-                    "新的注册申请",
-                    f"{user['display_name']}（{user['username']}）已完成邮箱验证，等待审核。",
-                    "/registrations",
-                )
                 self._json(
                     201,
-                    {"ok": True, "user": user, "message": "注册申请已提交，请等待管理员启用账号。"},
+                    {"ok": True, "user": user, "message": "注册成功，请使用新账号登录。"},
                 )
                 return
             if path == "/api/auth/registration-code":
@@ -908,7 +903,66 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     headers={"Set-Cookie": self._session_cookie("", clear=True)},
                 )
                 return
+            if path == "/api/auth/impersonate":
+                administrator = dict(user.get("impersonated_by") or {})
+                if not administrator:
+                    self._require_roles(user, "system_admin")
+                    administrator = dict(user)
+                target_user_id = str(payload.get("user_id") or "")
+                with AuthStore() as store:
+                    target = store.start_impersonation(token, target_user_id)
+                    store.audit(
+                        "auth.impersonation_started",
+                        actor=administrator,
+                        target_type="user",
+                        target_id=str(target["user_id"]),
+                        detail={
+                            "effective_username": target.get("username"),
+                            "effective_role": (target.get("roles") or [""])[0],
+                        },
+                        remote_address=self._remote_address(),
+                    )
+                    resolved = store.session_user(token)
+                assert resolved is not None
+                effective_user, effective_csrf = resolved
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "user": effective_user,
+                        "csrf_token": effective_csrf,
+                    },
+                )
+                return
+            if path == "/api/auth/impersonation/stop":
+                administrator = dict(user.get("impersonated_by") or {})
+                if not administrator:
+                    raise PermissionError("当前未处于管理员模拟状态。")
+                with AuthStore() as store:
+                    restored = store.stop_impersonation(token)
+                    store.audit(
+                        "auth.impersonation_stopped",
+                        actor=restored,
+                        target_type="user",
+                        target_id=str(user.get("user_id") or ""),
+                        detail={"effective_username": user.get("username")},
+                        remote_address=self._remote_address(),
+                    )
+                    resolved = store.session_user(token)
+                assert resolved is not None
+                restored_user, restored_csrf = resolved
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "user": restored_user,
+                        "csrf_token": restored_csrf,
+                    },
+                )
+                return
             if path == "/api/auth/change-password":
+                if user.get("impersonated_by"):
+                    raise PermissionError("管理员模拟期间不能修改目标账号密码。")
                 with AuthStore() as store:
                     store.change_password(
                         str(user["user_id"]),
@@ -923,8 +977,6 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     headers={"Set-Cookie": self._session_cookie("", clear=True)},
                 )
                 return
-            if user.get("must_change_password"):
-                raise PermissionError("首次登录必须先修改初始密码。")
             if path == "/api/notifications/read-all":
                 with AuthStore() as store:
                     store.mark_all_notifications_read(str(user["user_id"]))
@@ -1012,27 +1064,6 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     store.mark_notification_read(str(user["user_id"]), parts[2])
                 self._json(200, {"ok": True})
                 return
-            if len(parts) == 4 and parts[:2] == ["api", "registrations"] and parts[3] == "review":
-                self._require_roles(user, "system_admin")
-                decision = str(payload.get("decision") or "").strip().lower()
-                with AuthStore() as store:
-                    reviewed = store.review_registration(
-                        parts[2],
-                        decision=decision,
-                        roles=list(payload.get("roles") or ["case_submitter"]),
-                        actor=user,
-                        remote_address=self._remote_address(),
-                    )
-                try:
-                    SecurityEmailSender().send_registration_review(
-                        str(reviewed.get("email") or ""),
-                        approved=decision == "approve",
-                        username=str(reviewed.get("username") or ""),
-                    )
-                except Exception:
-                    pass
-                self._json(200, {"ok": True, "user": reviewed})
-                return
             if path == "/api/users":
                 self._require_roles(user, "system_admin")
                 with AuthStore() as store:
@@ -1042,7 +1073,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         password=str(payload.get("password") or ""),
                         email=str(payload.get("email") or ""),
                         roles=list(payload.get("roles") or []),
-                        must_change_password=True,
+                        must_change_password=False,
                         actor=user,
                         remote_address=self._remote_address(),
                     )
@@ -1117,8 +1148,6 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             assert session is not None
             user, csrf_token, _ = session
             self._require_csrf(csrf_token)
-            if user.get("must_change_password"):
-                raise PermissionError("首次登录必须先修改初始密码。")
             parts = [item for item in path.split("/") if item]
             if len(parts) == 3 and parts[:2] == ["api", "users"]:
                 self._require_roles(user, "system_admin")
@@ -1241,7 +1270,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 run = harness.start(
                     customer,
                     file_paths=paths,
-                    use_cached_credit=bool(payload.get("use_cached_credit", True)),
+                    use_cached_credit=bool(payload.get("use_cached_credit", False)),
                     actor=self._actor(user),
                 )
         with AuthStore() as store:
@@ -1893,6 +1922,23 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             paths = _stage_uploads(payload.get("files") or [], temp_dir)
             with DongjiangWorkflowHarness() as harness:
                 current = harness.get(case_id)
+                if resource in {"credit-documents", "contracts"}:
+                    self._require_roles(user, "case_submitter")
+                elif resource == "credit-actions":
+                    if current.waiting_for == "credit_approval":
+                        self._require_roles(user, "credit_approver")
+                    elif current.waiting_for == "credit_supplement":
+                        self._require_roles(user, "case_submitter")
+                elif resource == "contract-actions":
+                    required_role = {
+                        "contract_upload": "case_submitter",
+                        "sales_revision": "case_submitter",
+                        "manager_approval": "exception_approver",
+                        "special_release": "exception_approver",
+                        "finance_legal_review": "legal_reviewer",
+                    }.get(str(current.waiting_for or ""))
+                    if required_role:
+                        self._require_roles(user, required_role)
                 self._assert_owner(current, user)
                 if resource == "credit-documents":
                     if current.waiting_for != "credit_supplement":

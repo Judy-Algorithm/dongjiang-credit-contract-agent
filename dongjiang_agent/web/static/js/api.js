@@ -70,6 +70,9 @@ function patch(path, payload) {
 
 export const api = {
   authStatus:() => request("/api/auth/status"),
+  listImpersonationUsers:() => request("/api/auth/impersonation/users"),
+  startImpersonation:(userId) => post("/api/auth/impersonate", {user_id:userId}),
+  stopImpersonation:() => post("/api/auth/impersonation/stop", {}),
   setup:(payload) => post("/api/auth/setup", payload),
   login:(payload) => post("/api/auth/login", payload),
   requestRegistrationCode:(payload) => post("/api/auth/registration-code", payload),
@@ -81,8 +84,6 @@ export const api = {
   listUsers:() => cached("/api/users"),
   createUser:(payload) => post("/api/users", payload),
   updateUser:(userId, payload) => patch(`/api/users/${encodeURIComponent(userId)}`, payload),
-  listRegistrations:() => cached("/api/registrations", 8000),
-  reviewRegistration:(userId, payload) => post(`/api/registrations/${encodeURIComponent(userId)}/review`, payload),
   listNotifications:() => cached("/api/notifications", 8000),
   navigationSummary:(refresh = false) => refresh ? request("/api/navigation-summary") : cached("/api/navigation-summary", 15000),
   markNotificationRead:(notificationId) => post(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {}),

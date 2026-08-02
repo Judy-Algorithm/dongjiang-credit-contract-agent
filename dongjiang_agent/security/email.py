@@ -48,17 +48,6 @@ class SecurityEmailSender:
             code=code,
         )
 
-    def send_registration_review(
-        self, recipient: str, *, approved: bool, username: str
-    ) -> None:
-        title = "注册申请已通过" if approved else "注册申请未通过"
-        body = (
-            f"您好：\n\n您的账号 {username} 已通过管理员审核，现在可以登录东江信审与合同评审平台。"
-            if approved
-            else f"您好：\n\n您的账号 {username} 暂未通过管理员审核，如有疑问请联系管理员。"
-        )
-        self._send(recipient, title, body)
-
     def send_notification(
         self, recipient: str, *, title: str, body: str, link: str = ""
     ) -> None:

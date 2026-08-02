@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-user-editor"
-import {escapeHtml, dateTime} from "../format.js?v=20260802-user-editor"
+import {api} from "../api.js?v=20260802-auth-simplified"
+import {escapeHtml, dateTime} from "../format.js?v=20260802-auth-simplified"
 
 const roles = [
   ["case_submitter","业务经办人"],
@@ -36,7 +36,7 @@ function userRow(user) {
   return `<tr>
     <td><b>${escapeHtml(user.display_name)}</b><small>${escapeHtml(user.username)}</small><small>${escapeHtml(user.email || "未绑定邮箱")}</small></td>
     <td><div class="role-list">${user.role_labels.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div></td>
-    <td><span class="badge ${user.active ? "approved" : ""}">${user.active ? "启用" : "已停用"}</span>${user.must_change_password ? `<small>等待修改初始密码</small>` : ""}</td>
+    <td><span class="badge ${user.active ? "approved" : ""}">${user.active ? "启用" : "已停用"}</span></td>
     <td>${dateTime(user.last_login_at)}</td>
     <td><button class="text-button" data-user-action="edit" data-user-id="${escapeHtml(user.user_id)}">编辑</button><button class="text-button ${user.active ? "danger-text" : ""}" data-user-action="toggle" data-user-id="${escapeHtml(user.user_id)}">${user.active ? "停用" : "启用"}</button></td>
   </tr>`
@@ -47,9 +47,9 @@ function showCreateForm(root) {
   editor.classList.remove("hidden")
   editor.innerHTML = `<form class="inline-editor">
     <div class="form-section-title"><h3>创建内部用户</h3><button type="button" class="text-button" data-close>关闭</button></div>
-    <div class="form-grid two"><label>昵称<input id="displayName" required></label><label>用户名<input id="username" minlength="3" required></label><label>邮箱<input id="email" type="email" required></label><label>初始密码<input id="password" type="password" minlength="10" required></label></div>
+    <div class="form-grid two"><label>昵称<input id="displayName" required></label><label>用户名<input id="username" minlength="3" required></label><label>邮箱<input id="email" type="email" required></label><label>登录密码<input id="password" type="password" minlength="10" required></label></div>
     ${roleOptions([])}<div id="editorError" class="error-box hidden"></div>
-    <div class="form-actions"><span class="field-hint">用户首次登录后必须修改初始密码。</span><button class="primary" type="submit">创建用户</button></div>
+    <div class="form-actions"><span class="field-hint">创建后账号立即启用，可直接使用该密码登录。</span><button class="primary" type="submit">创建用户</button></div>
   </form>`
   bindClose(editor)
   editor.querySelector("form").addEventListener("submit", async (event) => {
@@ -74,7 +74,7 @@ function showEditForm(root, user) {
     <div class="form-section-title"><h3>编辑用户</h3><button type="button" class="text-button" data-close>关闭</button></div>
     <div class="form-grid two"><label>昵称<input id="displayName" value="${escapeHtml(user.display_name)}" required></label><label>用户名<input id="username" value="${escapeHtml(user.username)}" minlength="3" required></label><label>邮箱<input id="email" type="email" value="${escapeHtml(user.email || "")}" required></label><label>重置密码（选填）<input id="temporaryPassword" type="password" minlength="10" autocomplete="new-password"><span class="field-hint">留空则不修改密码</span></label></div>
     ${roleOptions(user.roles)}
-    <p class="field-hint">填写临时密码后，该用户的现有会话会立即失效，下次登录必须修改密码。</p>
+    <p class="field-hint">填写新密码后，该用户的现有会话会立即失效，可直接使用新密码登录。</p>
     <div id="editorError" class="error-box hidden"></div>
     <div class="form-actions"><span></span><button class="primary" type="submit">保存修改</button></div>
   </form>`

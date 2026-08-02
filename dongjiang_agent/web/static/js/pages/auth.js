@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260802-user-editor"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260802-user-editor"
-import {navigate} from "../router.js?v=20260802-user-editor"
-import {escapeHtml} from "../format.js?v=20260802-user-editor"
+import {api} from "../api.js?v=20260802-auth-simplified"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260802-auth-simplified"
+import {navigate} from "../router.js?v=20260802-auth-simplified"
+import {escapeHtml} from "../format.js?v=20260802-auth-simplified"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `
@@ -20,13 +20,13 @@ export function renderLoginPage(root) {
         password:root.querySelector("#password").value,
       })
       setAuthenticated(data)
-      navigate(data.user.must_change_password ? "/change-password" : "/cases", {replace:true})
+      navigate("/cases", {replace:true})
     })
   })
 }
 
 export function renderRegisterPage(root) {
-  root.innerHTML = authLayout("注册账号", "验证邮箱后提交账号申请", `
+  root.innerHTML = authLayout("注册账号", "验证邮箱后立即创建业务账号", `
     <form id="registerForm" class="auth-form">
       <label>昵称<input id="displayName" autocomplete="nickname" required autofocus></label>
       <label>用户名<input id="username" autocomplete="username" minlength="3" maxlength="40" required></label>
@@ -34,9 +34,9 @@ export function renderRegisterPage(root) {
       <label>邮箱验证码<input id="verificationCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6位数字" required></label>
       <label>密码<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>
       <label>确认密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" required></label>
-      <p class="field-hint">验证码10分钟内有效。申请提交后由管理员审核并分配角色，结果会发送到该邮箱。</p>
+      <p class="field-hint">验证码10分钟内有效。注册成功后账号立即启用，默认角色为业务经办人。</p>
       <div id="authError" class="error-box hidden"></div>
-      <button class="primary auth-submit" type="submit">提交注册申请</button>
+      <button class="primary auth-submit" type="submit">完成注册</button>
       <div class="auth-links single"><a href="/login" data-link>返回登录</a></div>
     </form>`)
   const codeButton = root.querySelector("#sendRegistrationCode")
@@ -164,7 +164,7 @@ export function renderSetupPage(root) {
 }
 
 export function renderChangePasswordPage(root) {
-  root.innerHTML = authLayout("修改密码", "初始密码仅用于首次登录", `
+  root.innerHTML = authLayout("修改密码", "定期更新密码有助于保护账号安全", `
     <form id="passwordForm" class="auth-form">
       <label>当前密码<input id="currentPassword" type="password" autocomplete="current-password" required autofocus></label>
       <label>新密码<input id="newPassword" type="password" autocomplete="new-password" minlength="10" required></label>
