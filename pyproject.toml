@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-documents = ["pypdf>=5,<6", "pypdfium2>=4,<5", "openpyxl>=3.1,<4", "pillow>=11,<12", "pytesseract>=0.3.13,<1"]
+documents = ["pypdf>=6.14.2,<7", "pypdfium2>=4,<5", "openpyxl>=3.1,<4", "pillow>=12.3,<13", "pytesseract>=0.3.13,<1"]
 
 [project.scripts]
 dongjiang-agent = "dongjiang_agent.cli:main"

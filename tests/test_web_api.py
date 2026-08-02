@@ -122,6 +122,21 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 201)
         return data["user"]
 
+    def impersonate(self, user):
+        """Run the next business action as one explicit five-role account."""
+        status, data = self.request(
+            "POST", "/api/auth/impersonate", {"user_id": user["user_id"]}
+        )
+        self.assertEqual(status, 200)
+        self.csrf_token = data["csrf_token"]
+        return data["user"]
+
+    def return_to_admin(self):
+        status, data = self.request("POST", "/api/auth/impersonation/stop", {})
+        self.assertEqual(status, 200)
+        self.csrf_token = data["csrf_token"]
+        return data["user"]
+
     def test_authentication_csrf_and_role_task_filtering(self):
         sales = self.create_user("sales.a", "销售甲", ["sales"])
         self.create_user("credit.a", "信用甲", ["credit"])
@@ -491,6 +506,7 @@ class WebApiTests(unittest.TestCase):
     @patch("dongjiang_agent.web.server.SecurityEmailSender")
     def test_case_notification_email_failure_does_not_block_workflow(self, sender_class):
         credit = self.create_user("notice.credit", "邮件信用审批", ["credit"])
+        submitter = self.create_user("notice.submitter", "邮件案件经办", ["sales"])
         self.assertEqual(
             self.request(
                 "PATCH", f"/api/users/{credit['user_id']}", {"email": "credit-notice@example.com"}
@@ -500,6 +516,7 @@ class WebApiTests(unittest.TestCase):
         sender = sender_class.return_value
         sender.configured = True
         sender.send_notification.side_effect = RuntimeError("SMTP unavailable")
+        self.impersonate(submitter)
         status, created = self.request(
             "POST",
             "/api/cases",
@@ -619,6 +636,8 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("邮件服务尚未配置", response["error"])
 
     def test_business_api_accepts_real_file_and_exposes_no_workflow_state(self):
+        submitter = self.create_user("upload.submitter", "文件上传经办", ["sales"])
+        self.impersonate(submitter)
         report = (
             "中诚信国际主体评级报告\n"
             "主体评级：AA+\n评级展望：稳定\n评级日期：2026-07-03\n"
@@ -645,7 +664,8 @@ class WebApiTests(unittest.TestCase):
         case = created["case"]
         case_id = case["case_id"]
         self.assertEqual(case["status_label"], "等待信用审批")
-        self.assertEqual(case["next_action"]["label"], "处理信用审批")
+        self.assertIsNone(case["next_action"])
+        self.assertEqual(case["pending_action"]["label"], "处理信用审批")
         self.assertFalse(case["permissions"]["can_upload_contract"])
         self.assertEqual(
             case["credit"]["rating_resolution"]["selected"]["agency"],
@@ -734,6 +754,10 @@ class WebApiTests(unittest.TestCase):
         self.assertIsNone(submitted["case"]["next_action"])
 
     def test_overdue_lock_requires_archived_special_release_evidence(self):
+        submitter = self.create_user("release.submitter", "特别放行经办", ["sales"])
+        credit = self.create_user("release.credit", "特别放行信用", ["credit"])
+        approver = self.create_user("release.approver", "特别放行授权", ["director"])
+        self.impersonate(submitter)
         _, created = self.request(
             "POST",
             "/api/cases",
@@ -752,6 +776,7 @@ class WebApiTests(unittest.TestCase):
             },
         )
         case_id = created["case"]["case_id"]
+        self.impersonate(credit)
         status, locked = self.request(
             "POST",
             f"/api/cases/{case_id}/credit-actions",
@@ -759,9 +784,11 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(locked["case"]["status"], "credit_control_locked")
-        self.assertEqual(locked["case"]["next_action"]["type"], "special_release")
+        self.assertIsNone(locked["case"]["next_action"])
+        self.assertEqual(locked["case"]["pending_action"]["type"], "special_release")
         self.assertFalse(locked["case"]["permissions"]["can_upload_contract"])
 
+        self.impersonate(approver)
         status, denied = self.request(
             "POST",
             f"/api/cases/{case_id}/contract-actions",
@@ -781,10 +808,14 @@ class WebApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
-        self.assertTrue(released["case"]["permissions"]["can_upload_contract"])
+        self.assertFalse(released["case"]["permissions"]["can_upload_contract"])
         self.assertEqual(len(released["case"]["approval_evidence"]), 1)
         self.assertEqual(released["case"]["approval_evidence"][0]["name"], "特别放行批准.txt")
         self.assertNotIn("archived_path", released["case"]["approval_evidence"][0])
+        self.impersonate(submitter)
+        status, detail = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertTrue(detail["case"]["permissions"]["can_upload_contract"])
 
     def test_no_demo_endpoint_and_frontend_routes_support_refresh(self):
         status, missing = self.request("POST", "/api/demo", {})
@@ -849,6 +880,8 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(set(sales_summary), {"ok", "unread_notifications"})
 
     def test_oa_callback_requires_token_and_complete_approval_chain(self):
+        submitter = self.create_user("oa.submitter", "OA回调经办", ["sales"])
+        self.impersonate(submitter)
         _, created = self.request(
             "POST",
             "/api/cases",
@@ -904,6 +937,9 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(approved["case"]["credit"]["effective"])
 
     def test_contract_risk_exposes_line_location_and_controlled_preview(self):
+        submitter = self.create_user("location.submitter", "证据定位经办", ["sales"])
+        credit = self.create_user("location.credit", "证据定位信用", ["credit"])
+        self.impersonate(submitter)
         _, created = self.request(
             "POST",
             "/api/cases",
@@ -921,12 +957,14 @@ class WebApiTests(unittest.TestCase):
             },
         )
         case_id = created["case"]["case_id"]
+        self.impersonate(credit)
         self.assertEqual(
             self.request(
                 "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
             )[0],
             200,
         )
+        self.impersonate(submitter)
         contract = """销售合同
 甲方：东江集团；乙方：证据定位客户。
 合同标的：精密组件。合同金额：100万元。信用额度：100万元。
@@ -968,6 +1006,9 @@ class WebApiTests(unittest.TestCase):
     def test_xlsx_contract_upload_and_image_asset_preview(self):
         import openpyxl
 
+        submitter = self.create_user("xlsx.submitter", "多格式经办", ["sales"])
+        credit = self.create_user("xlsx.credit", "多格式信用", ["credit"])
+        self.impersonate(submitter)
         _, created = self.request(
             "POST",
             "/api/cases",
@@ -985,9 +1026,11 @@ class WebApiTests(unittest.TestCase):
             },
         )
         case_id = created["case"]["case_id"]
+        self.impersonate(credit)
         self.assertEqual(self.request(
             "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
         )[0], 200)
+        self.impersonate(submitter)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "销售合同.xlsx"
@@ -1070,6 +1113,9 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("inline", headers["Content-Disposition"])
 
     def test_contract_revision_generates_downloads_and_resubmits_clean_version(self):
+        submitter = self.create_user("revision.submitter", "合同修订经办", ["sales"])
+        credit = self.create_user("revision.credit", "合同修订信用", ["credit"])
+        self.impersonate(submitter)
         _, created = self.request(
             "POST",
             "/api/cases",
@@ -1087,12 +1133,14 @@ class WebApiTests(unittest.TestCase):
             },
         )
         case_id = created["case"]["case_id"]
+        self.impersonate(credit)
         self.assertEqual(
             self.request(
                 "POST", f"/api/cases/{case_id}/credit-actions", {"action": "approve"}
             )[0],
             200,
         )
+        self.impersonate(submitter)
         contract = """销售合同
 甲方：东江集团；乙方：合同修订闭环客户。
 合同标的：精密组件。合同金额：100万元。信用额度：100万元。
@@ -1165,6 +1213,8 @@ class WebApiTests(unittest.TestCase):
 
     @patch("dongjiang_agent.web.server.ContractTranslationStore")
     def test_contract_translation_routes_confirm_download_and_audit(self, store_class):
+        reviewer = self.create_user("translation.legal", "合同翻译法务", ["legal"])
+        self.impersonate(reviewer)
         case_id = "DJ-TRANSLATE1"
         Path("data/cases").mkdir(parents=True)
         Path(f"data/cases/{case_id}.json").write_text(
@@ -1224,7 +1274,7 @@ class WebApiTests(unittest.TestCase):
             target_language="en",
             target_languages=[],
             base_translation_id="",
-            actor={"actor_id": ANY, "display_name": "测试管理员"},
+            actor={"actor_id": ANY, "display_name": "合同翻译法务"},
         )
 
         status, detail = self.request(
@@ -1252,6 +1302,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body.startswith(b"PK"))
         self.assertIn("attachment", headers["Content-Disposition"])
+        self.return_to_admin()
         status, audit = self.request("GET", "/api/audit")
         self.assertEqual(status, 200)
         event_types = {item["event_type"] for item in audit["events"]}
@@ -1399,6 +1450,8 @@ class WebApiTests(unittest.TestCase):
 
     def test_agent_incident_api_enforces_permissions_audits_notifies_and_redacts(self):
         assignee = self.create_user("agent.assignee", "异常责任人", ["credit"])
+        submitter = self.create_user("agent.incident.submitter", "异常案件经办", ["sales"])
+        self.impersonate(submitter)
         status, created = self.request(
             "POST",
             "/api/cases",
@@ -1417,6 +1470,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         case_id = created["case"]["case_id"]
+        self.return_to_admin()
         with DongjiangWorkflowHarness() as harness:
             workflow_run = harness.get(case_id)
             plan = workflow_run.state["workflow_plans"][-1]
@@ -1522,6 +1576,8 @@ class WebApiTests(unittest.TestCase):
         self.assertFalse(denied["ok"])
 
     def test_agent_incident_api_rejects_healthy_plan(self):
+        submitter = self.create_user("agent.healthy.submitter", "健康案件经办", ["sales"])
+        self.impersonate(submitter)
         status, created = self.request(
             "POST",
             "/api/cases",
@@ -1541,6 +1597,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 201)
         case_id = created["case"]["case_id"]
         plan_id = created["case"]["agent_execution"]["plans"][-1]["plan_id"]
+        self.return_to_admin()
         status, rejected = self.request(
             "POST",
             f"/api/cases/{case_id}/agent-incidents",
@@ -1550,6 +1607,9 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("未发现可处置", rejected["error"])
 
     def test_agent_candidate_api_is_redacted_and_formal_approval_controls_adoption(self):
+        submitter = self.create_user("candidate.submitter", "候选案件经办", ["sales"])
+        credit = self.create_user("candidate.credit", "候选案件信用", ["credit"])
+        self.impersonate(submitter)
         status, created = self.request(
             "POST",
             "/api/cases",
@@ -1608,6 +1668,7 @@ class WebApiTests(unittest.TestCase):
                 harness._config(case_id), {"agent_incidents": [incident]}
             )
 
+        self.impersonate(credit)
         status, detail = self.request("GET", f"/api/cases/{case_id}")
         self.assertEqual(status, 200)
         self.assertEqual(len(detail["case"]["agent_candidates"]), 1)
@@ -1937,6 +1998,9 @@ class WebApiTests(unittest.TestCase):
     def test_structured_extraction_api_enforces_roles_and_redacts_audit(
         self, extractor_class
     ):
+        credit = self.create_user("extraction.credit", "提取信用", ["credit"])
+        submitter = self.create_user("extraction.sales", "提取销售", ["sales"])
+        self.impersonate(submitter)
         report = (
             "客户：敏感客户名称\n"
             "资产负债率为45%，流动比率为1.8。\n"
@@ -2004,9 +2068,7 @@ class WebApiTests(unittest.TestCase):
             },
         }
 
-        self.create_user("extraction.credit", "提取信用", ["credit"])
-        self.create_user("extraction.sales", "提取销售", ["sales"])
-        self.activate_user("extraction.credit")
+        self.impersonate(credit)
 
         status, generated = self.request(
             "POST",
@@ -2060,7 +2122,7 @@ class WebApiTests(unittest.TestCase):
         self.assertNotIn(reason, serialized)
         self.assertNotIn("流动比率为1.8", serialized)
 
-        self.activate_user("extraction.sales")
+        self.impersonate(submitter)
         self.assertEqual(
             self.request(
                 "POST",

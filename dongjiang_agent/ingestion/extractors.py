@@ -38,6 +38,9 @@ class ExtractedDocument:
 class DocumentExtractor:
     TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm"}
     IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+    MAX_OOXML_MEMBERS = 10_000
+    MAX_OOXML_MEMBER_BYTES = 64 * 1024 * 1024
+    MAX_OOXML_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 
     def extract(self, path: str | Path) -> ExtractedDocument:
         target = Path(path).expanduser().resolve()
@@ -55,9 +58,11 @@ class DocumentExtractor:
                 self._line_fragments(text),
             )
         if suffix == ".docx":
+            self._validate_ooxml_archive(target)
             text, fragments = self._docx_content(target)
             return ExtractedDocument(str(target), "docx", text, "ooxml", [], fragments)
         if suffix == ".xlsx":
+            self._validate_ooxml_archive(target)
             text, fragments = self._xlsx_content(target)
             return ExtractedDocument(str(target), "xlsx", text, "ooxml", [], fragments)
         if suffix == ".pdf":
@@ -82,6 +87,34 @@ class DocumentExtractor:
                 str(target), suffix.lstrip("."), text, "tesseract", warnings, fragments
             )
         raise ValueError(f"暂不支持的文件格式：{suffix or '无扩展名'}")
+
+    @classmethod
+    def _validate_ooxml_archive(
+        cls,
+        path: Path,
+        *,
+        max_members: int | None = None,
+        max_member_bytes: int | None = None,
+        max_uncompressed_bytes: int | None = None,
+    ) -> None:
+        """Reject malformed or expansion-heavy DOCX/XLSX files before parsing."""
+        member_limit = max_members or cls.MAX_OOXML_MEMBERS
+        member_size_limit = max_member_bytes or cls.MAX_OOXML_MEMBER_BYTES
+        total_limit = max_uncompressed_bytes or cls.MAX_OOXML_UNCOMPRESSED_BYTES
+        try:
+            with zipfile.ZipFile(path) as archive:
+                members = archive.infolist()
+        except (OSError, zipfile.BadZipFile) as exc:
+            raise ValueError("DOCX/XLSX文件损坏或不是有效的OOXML文档。") from exc
+        if len(members) > member_limit:
+            raise ValueError("DOCX/XLSX内部文件过多，已拒绝解析。")
+        total = 0
+        for member in members:
+            if member.file_size < 0 or member.file_size > member_size_limit:
+                raise ValueError("DOCX/XLSX内部单个文件过大，已拒绝解析。")
+            total += member.file_size
+            if total > total_limit:
+                raise ValueError("DOCX/XLSX解压后内容过大，已拒绝解析。")
 
     @staticmethod
     def _read_text(path: Path) -> str:

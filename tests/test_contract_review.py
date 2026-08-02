@@ -220,6 +220,14 @@ class ContractReviewTests(unittest.TestCase):
             item.rule_id == "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE"
             for item in result.findings
         ))
+        suggested_replacement = complete_contract(
+            "知识产权：东江的背景知识产权仍归东江所有，仅就履行本合同之目的向客户提供免费且不可转让的许可，许可有效期为本合同有效期。"
+        )
+        result = ContractReviewEngine().review(suggested_replacement, credit())
+        self.assertFalse(any(
+            item.rule_id == "DJ-IP-LICENSE-BOUNDARY-INCOMPLETE"
+            for item in result.findings
+        ))
 
     def test_exclusive_jurisdiction_is_not_misclassified_as_business_exclusivity(self):
         facts = complete_contract(

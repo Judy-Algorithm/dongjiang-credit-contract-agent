@@ -8,7 +8,7 @@
 |---|---|---|
 | 信审与合同评审联动 | 合同审查强制读取 `CreditAssessment` | 示例合同同时显示信用分、额度、账期与合同结论 |
 | 新/存量客户 | 新客户关闭合作维度并归一化；存量客户计入历史合作 | `test_credit_model.py` |
-| TKP/TKM差异规则 | TKP超过Net 90天、TKM超过40%尾款或180天尾款账期进入市场总监特批；保留终端项目统一账期例外 | `test_contract_review.py` |
+| TKP/TKM差异规则 | TKP超过Net 90天、TKM超过40%尾款或180天尾款账期进入授权审批人特批；保留终端项目统一账期例外 | `test_contract_review.py` |
 | 批量/多格式解析 | TXT/CSV/DOCX/PDF/XLSX/PNG/JPG；OCR按本机能力降级 | Web 多文件上传、`DocumentExtractor` |
 | 第三方评级报告上传 | 本地报告文本提取，识别主体评级与展望 | `CreditFactExtractor` |
 | 多评级归一化与冲突处理 | 机构别名、评级、展望、日期统一；保守取值、过期告警、重大冲突人工复核 | `test_multiple_agency_ratings_use_conservative_result_and_keep_conflict` |

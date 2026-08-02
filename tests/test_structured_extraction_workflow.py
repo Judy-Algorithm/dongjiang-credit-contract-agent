@@ -50,7 +50,13 @@ class StructuredExtractionWorkflowTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.credit_file = self.root / "credit-profile.txt"
         self.credit_file.write_text(
-            "流动比率为1.8，资产负债率为45%，主体评级AA。",
+            (
+                "企业信用资料\n"
+                "客户为制造业企业，目前经营状态正常，未见重大诉讼与失信预警。\n"
+                "最近一期财务报表显示：流动比率为1.8，资产负债率为45%，盈利与现金流稳定。\n"
+                "第三方主体评级为AA，评级展望稳定，评级报告仍在有效期内。\n"
+                "历史付款记录正常，暂无当前逾期应收账款。"
+            ),
             encoding="utf-8",
         )
         self.harness = DongjiangWorkflowHarness(

@@ -150,6 +150,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
+        if length < 0:
+            raise ValueError("Content-Length不能为负数。")
         if length > MAX_REQUEST_BYTES:
             raise ValueError("单次请求不能超过30MB。")
         return json.loads(self.rfile.read(length).decode("utf-8") or "{}")

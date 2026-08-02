@@ -8,6 +8,25 @@ from dongjiang_agent.ingestion import DocumentExtractor, locate_excerpt
 
 
 class DocumentLocationTests(unittest.TestCase):
+    def test_ooxml_expansion_limits_are_checked_before_parsing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "oversized.docx"
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("word/document.xml", "A" * 2048)
+            with self.assertRaisesRegex(ValueError, "解压后内容过大"):
+                DocumentExtractor._validate_ooxml_archive(
+                    path,
+                    max_member_bytes=4096,
+                    max_uncompressed_bytes=1024,
+                )
+
+    def test_invalid_ooxml_is_rejected_with_business_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "invalid.docx"
+            path.write_bytes(b"not-a-zip")
+            with self.assertRaisesRegex(ValueError, "文件损坏"):
+                DocumentExtractor().extract(path)
+
     def test_text_fragments_keep_line_numbers(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "contract.txt"

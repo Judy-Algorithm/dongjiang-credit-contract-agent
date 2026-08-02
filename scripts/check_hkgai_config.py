@@ -16,10 +16,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dongjiang_agent.config import load_local_env  # noqa: E402
 
 
-REQUIRED = (
+CORE_REQUIRED = (
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_MODEL",
+)
+OPTIONAL = (
     "HKGAI_SPEECH_BASE_URL",
     "HKGAI_SPEECH_API_KEY",
     "HKGAI_TOOLHUB_BASE_URL",
@@ -27,6 +29,7 @@ REQUIRED = (
     "HKGAI_APP_NAME",
     "HKGAI_APP_KEY",
 )
+KNOWN_KEYS = CORE_REQUIRED + OPTIONAL
 
 
 def _env_file_keys(path: Path) -> set[str]:
@@ -46,28 +49,33 @@ def _env_file_keys(path: Path) -> set[str]:
 
 
 def main() -> int:
-    process_keys = {name for name in REQUIRED if os.getenv(name)}
+    process_keys = {name for name in KNOWN_KEYS if os.getenv(name)}
     loaded = load_local_env()
     file_keys = _env_file_keys(loaded) if loaded else set()
-    missing = [name for name in REQUIRED if not os.getenv(name)]
+    missing_required = [name for name in CORE_REQUIRED if not os.getenv(name)]
+    missing_optional = [name for name in OPTIONAL if not os.getenv(name)]
     result: dict[str, object] = {
         "env_file_loaded": bool(loaded),
-        "configured": {name: bool(os.getenv(name)) for name in REQUIRED},
+        "configured": {name: bool(os.getenv(name)) for name in KNOWN_KEYS},
         "source": {
             name: "process_environment"
             if name in process_keys
             else "env_file"
             if name in file_keys
             else "missing"
-            for name in REQUIRED
+            for name in KNOWN_KEYS
         },
         "text_model": os.getenv("OPENAI_MODEL") or "",
+        "optional_capabilities_complete": not missing_optional,
     }
-    if missing:
+    if missing_required:
         result["ok"] = False
-        result["missing"] = missing
+        result["missing_required"] = missing_required
+        result["missing_optional"] = missing_optional
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1
+    if missing_optional:
+        result["missing_optional"] = missing_optional
 
     request = Request(
         f"{os.environ['OPENAI_BASE_URL'].rstrip('/')}/models",

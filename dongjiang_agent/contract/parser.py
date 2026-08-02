@@ -346,7 +346,7 @@ class ContractFactExtractor:
         if license_clauses:
             facts.ip_license_present = True
             facts.ip_license_purpose_limited = any(re.search(
-                    r"(?:仅限|仅许可).{0,20}(?:履约|履行本合同|本合同目的)|solely for.{0,30}(?:perform|purpose)|"
+                    r"(?:仅限|仅许可|仅就).{0,20}(?:履约|履行本合同|本合同目的)|solely for.{0,30}(?:perform|purpose)|"
                     r"only for.{0,30}(?:perform|purpose)",
                     clause,
                     flags=re.IGNORECASE,
