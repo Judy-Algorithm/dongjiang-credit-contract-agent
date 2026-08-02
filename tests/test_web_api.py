@@ -714,7 +714,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("immutable", response.headers["Cache-Control"])
         self.assertNotIn('data-nav="tasks">我的待办', javascript)
         self.assertIn('href="/cases/new" data-link data-nav="new">发起信审', javascript)
-        self.assertIn('href="/agent-operations" data-link data-nav="agent-operations">Agent运维', javascript)
+        self.assertIn('href="/agent-operations" data-link data-account-nav="agent-operations">Agent运维', javascript)
         self.assertNotIn('href="/users" data-link data-nav="users">用户', javascript)
         self.assertNotIn('class="primary small" href="/cases/new"', javascript)
         account_start = javascript.index('<div id="accountPopover"')

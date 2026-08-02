@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260801-core2"
-import {navigate} from "../router.js?v=20260801-core2"
-import {escapeHtml, dateTime} from "../format.js?v=20260801-core2"
+import {api} from "../api.js?v=20260802-five-role"
+import {navigate} from "../router.js?v=20260802-five-role"
+import {escapeHtml, dateTime} from "../format.js?v=20260802-five-role"
 
 const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", sla:"时效", agent_incident:"Agent异常", system:"系统"}
 

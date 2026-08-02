@@ -17,24 +17,24 @@ const navigationSummary = {unread:0, pendingRegistrations:0, loadedAt:0, inFligh
 const NAVIGATION_SUMMARY_TTL = 15000
 let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260801-core2",
-  register: "./pages/auth.js?v=20260801-core2",
-  "forgot-password": "./pages/auth.js?v=20260801-core2",
-  setup: "./pages/auth.js?v=20260801-core2",
-  "change-password": "./pages/auth.js?v=20260801-core2",
-  cases: "./pages/cases.js?v=20260801-core2",
-  "case-new": "./pages/case-new.js?v=20260801-core2",
-  "case-detail": "./pages/case-detail.js?v=20260801-core2",
-  "case-action": "./pages/case-action.js?v=20260801-approval-fix",
-  users: "./pages/users.js?v=20260801-core2",
-  audit: "./pages/audit.js?v=20260801-core2",
-  writebacks: "./pages/writebacks.js?v=20260801-core2",
-  registrations: "./pages/registrations.js?v=20260801-core2",
-  notifications: "./pages/notifications.js?v=20260801-core2",
-  operations: "./pages/operations.js?v=20260801-core2",
-  "agent-operations": "./pages/agent-operations.js?v=20260801-core2",
-  analytics: "./pages/analytics.js?v=20260801-core2",
-  benchmarks: "./pages/benchmark.js?v=20260801-core2",
+  login: "./pages/auth.js?v=20260802-five-role",
+  register: "./pages/auth.js?v=20260802-five-role",
+  "forgot-password": "./pages/auth.js?v=20260802-five-role",
+  setup: "./pages/auth.js?v=20260802-five-role",
+  "change-password": "./pages/auth.js?v=20260802-five-role",
+  cases: "./pages/cases.js?v=20260802-five-role",
+  "case-new": "./pages/case-new.js?v=20260802-five-role",
+  "case-detail": "./pages/case-detail.js?v=20260802-five-role",
+  "case-action": "./pages/case-action.js?v=20260802-five-role",
+  users: "./pages/users.js?v=20260802-five-role",
+  audit: "./pages/audit.js?v=20260802-five-role",
+  writebacks: "./pages/writebacks.js?v=20260802-five-role",
+  registrations: "./pages/registrations.js?v=20260802-five-role",
+  notifications: "./pages/notifications.js?v=20260802-five-role",
+  operations: "./pages/operations.js?v=20260802-five-role",
+  "agent-operations": "./pages/agent-operations.js?v=20260802-five-role",
+  analytics: "./pages/analytics.js?v=20260802-five-role",
+  benchmarks: "./pages/benchmark.js?v=20260802-five-role",
 }
 
 async function loadModule(path) {
@@ -58,9 +58,9 @@ async function loadPageModule(routeName) {
 
 async function bootstrap() {
   const [authModule, apiModule, routerModule] = await Promise.all([
-    loadModule("./auth.js?v=20260801-core2"),
-    loadModule("./api.js?v=20260801-core2"),
-    loadModule("./router.js?v=20260801-core2"),
+    loadModule("./auth.js?v=20260802-five-role"),
+    loadModule("./api.js?v=20260802-five-role"),
+    loadModule("./router.js?v=20260802-five-role"),
   ])
   ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
   api = apiModule.api

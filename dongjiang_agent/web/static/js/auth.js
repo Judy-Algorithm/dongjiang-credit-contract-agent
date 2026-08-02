@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260801-core2"
+import {api, setCsrfToken} from "./api.js?v=20260802-five-role"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 
