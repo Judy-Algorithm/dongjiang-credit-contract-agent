@@ -96,42 +96,42 @@ async function render() {
     if (route.name === "change-password") page.renderChangePasswordPage(nextView)
     if (route.name === "cases") await page.renderCasesPage(nextView, route)
     if (route.name === "case-new") {
-      if (!hasRole("sales")) throw new Error("只有销售角色可以发起信审。")
+      if (!hasRole("case_submitter")) throw new Error("只有业务经办人可以发起信审。")
       await page.renderNewCasePage(nextView, route)
     }
     if (route.name === "case-detail") await page.renderCaseDetailPage(nextView, route)
     if (route.name === "case-action") await page.renderCaseActionPage(nextView, route)
     if (route.name === "users") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以管理用户。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以管理用户。")
       await page.renderUsersPage(nextView)
     }
     if (route.name === "audit") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以查看安全审计。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以查看安全审计。")
       await page.renderAuditPage(nextView)
     }
     if (route.name === "writebacks") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以处理系统回写。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以处理系统回写。")
       await page.renderWritebacksPage(nextView)
     }
     if (route.name === "registrations") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以审核注册申请。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以审核注册申请。")
       await page.renderRegistrationsPage(nextView)
     }
     if (route.name === "notifications") await page.renderNotificationsPage(nextView)
     if (route.name === "operations") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以查看时效运营。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以查看时效运营。")
       await page.renderOperationsPage(nextView)
     }
     if (route.name === "agent-operations") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以查看 Agent 运维。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以查看 Agent 运维。")
       await page.renderAgentOperationsPage(nextView)
     }
     if (route.name === "analytics") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以查看管理分析。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以查看管理分析。")
       await page.renderAnalyticsPage(nextView, route)
     }
     if (route.name === "benchmarks") {
-      if (!hasRole("admin")) throw new Error("只有管理员可以运行质量评测。")
+      if (!hasRole("system_admin")) throw new Error("只有系统管理员可以运行质量评测。")
       await page.renderBenchmarkPage(nextView)
     }
     if (renderId !== renderSequence) return
@@ -169,14 +169,13 @@ function renderHeader(auth, route) {
     <a class="identity" href="/cases" data-link><span class="brand-mark">东江</span><span>信审与合同评审</span></a>
     <nav>
       <a href="/cases" data-link data-nav="cases">案件</a>
-      ${hasRole("sales") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
+      ${hasRole("case_submitter") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
       <a href="/notifications" data-link data-nav="notifications">通知<span id="notificationCount" class="nav-count ${unread ? "" : "hidden"}">${Math.min(unread, 99)}</span></a>
-      ${hasRole("admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/benchmarks" data-link data-nav="benchmarks">质量评测</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b><em id="accountRegistrationCount" class="account-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</em></button>
         <div id="accountPopover" class="account-popover hidden">
           <strong>${escapeText(user.display_name)}</strong><small>${escapeText(user.role_labels.join(" · "))}</small>
-          ${hasRole("admin") ? `<span class="account-section-label">系统管理</span><a class="${route.name === "users" ? "current" : ""}" href="/users" data-link data-account-nav="users">用户管理</a><a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link data-account-nav="registrations">注册审核<span id="registrationMenuCount" class="account-menu-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</span></a>` : ""}
+          ${hasRole("system_admin") ? `<span class="account-section-label">系统管理</span><a class="${route.name === "users" ? "current" : ""}" href="/users" data-link data-account-nav="users">用户管理</a><a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link data-account-nav="registrations">注册审核<span id="registrationMenuCount" class="account-menu-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</span></a><a class="${route.name === "operations" ? "current" : ""}" href="/operations" data-link data-account-nav="operations">时效运营</a><a class="${route.name === "agent-operations" ? "current" : ""}" href="/agent-operations" data-link data-account-nav="agent-operations">Agent运维</a><a class="${route.name === "analytics" ? "current" : ""}" href="/analytics" data-link data-account-nav="analytics">管理分析</a><a class="${route.name === "benchmarks" ? "current" : ""}" href="/benchmarks" data-link data-account-nav="benchmarks">质量评测</a><a class="${route.name === "audit" ? "current" : ""}" href="/audit" data-link data-account-nav="audit">安全审计</a><a class="${route.name === "writebacks" ? "current" : ""}" href="/writebacks" data-link data-account-nav="writebacks">回写运维</a>` : ""}
           <a href="/change-password" data-link>修改密码</a><button id="logoutButton" type="button">退出登录</button>
         </div>
       </div>
@@ -232,8 +231,8 @@ function stopNavigationProgress() {
 
 function warmPageModules() {
   const routes = ["cases", "case-detail", "case-action", "notifications"]
-  if (hasRole("sales")) routes.push("case-new")
-  if (hasRole("admin")) routes.push("users", "registrations", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks")
+  if (hasRole("case_submitter")) routes.push("case-new")
+  if (hasRole("system_admin")) routes.push("users", "registrations", "operations", "agent-operations", "analytics", "benchmarks", "audit", "writebacks")
   const warm = () => {
     routes.forEach((name) => loadPageModule(name).catch(() => {}))
     Promise.allSettled([api.listCases(), api.listNotifications()])

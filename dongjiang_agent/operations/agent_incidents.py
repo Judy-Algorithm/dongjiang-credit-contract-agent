@@ -114,7 +114,7 @@ class AgentIncidentService:
                     title = "Agent运行异常已自动发现"
                     body = f"案件 {case_id} 的Agent运行出现受控异常，请进入运维中心确认。"
                     recipients = store.notify_roles(
-                        ["admin"],
+                        ["system_admin"],
                         category="agent_incident",
                         title=title,
                         body=body,
@@ -161,7 +161,7 @@ class AgentIncidentService:
                         title = f"Agent异常{phase_label}{level_label}"
                         body = f"案件 {case_id} 的Agent异常{phase_label}时限{level_label}，请及时处理。"
                         link = "/agent-operations"
-                        recipients = store.users_for_roles(["admin"])
+                        recipients = store.users_for_roles(["system_admin"])
                         dedupe_key = (
                             f"agent-incident-sla:{incident.get('incident_id')}:{phase}:{level}"
                         )

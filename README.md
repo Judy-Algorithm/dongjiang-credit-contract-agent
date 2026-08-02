@@ -41,6 +41,8 @@ OPENAI_BASE_URL      HKGAI文本模型OpenAI兼容地址
 OPENAI_API_KEY       文本模型API密钥
 OPENAI_MODEL         /v1/models返回的模型ID
 DONGJIANG_AI_ASSISTANCE_ENABLED  是否启用脱敏合同AI辅助审查（true/false）
+DONGJIANG_ORCHESTRATOR_LLM_PLANNING_ENABLED  是否启用主Agent的大模型计划提议层
+DONGJIANG_DOCUMENT_TEXT_ENHANCEMENT_ENABLED  是否对低质量已提取文字启用文本模型字段增强
 HKGAI_SPEECH_*       语音服务地址和API密钥
 HKGAI_TOOLHUB_*      Toolhub服务地址
 HKGAI_AGENTHUB_*     Agenthub搜索服务地址
@@ -48,8 +50,12 @@ HKGAI_APP_NAME       Toolhub/Agenthub共用App-Name
 HKGAI_APP_KEY        Toolhub/Agenthub共用App-Key
 ```
 
-当前代码已具备文本模型网关；语音、Toolhub和Agenthub的环境变量已预留，
-对应客户端及工作流节点仍需按具体API文档接入。
+当前代码已具备文本模型网关，并新增与服务商无关的 `AgentRegistry` 和
+`ToolRegistry` 边界：主流程通过本地注册中心发现和调用信用、合同两个子 Agent，
+文档解析、信用分析、合同规则和合同 AI 辅助能力通过本地工具目录调用。运行记录会保存
+Agent分配来源和工具调用摘要，但不保存资料正文。拿到官方 Agenthub/Toolhub API 文档后，
+只需新增远程适配器并切换provider；现有业务节点、受控动态计划和本地降级路径无需重写。
+语音能力仍只预留环境变量，尚未进入业务工作流。
 
 合同AI辅助审查默认关闭。设置 `DONGJIANG_AI_ASSISTANCE_ENABLED=true` 后，
 系统会把已经本地可逆脱敏的合同文本发送给配置的文本模型，并要求返回结构化JSON。
@@ -70,6 +76,18 @@ python3 scripts/check_hkgai_config.py
 `DongjiangWorkflowHarness` 是CRM、泛微OA、Web和CLI调用的稳定边界，负责案件号、角色权限、信用资料与合同的分阶段暂存、Checkpoint和恢复；LangGraph负责信审/合同子图、条件路由、循环和人工中断。
 
 动态计划采用Plan 2.0执行治理：计划在运行前冻结并校验SHA-256规范摘要，同时快照信用规则、合同规则、模型和提示词版本；节点使用持久幂等键避免重复调用，合同AI失败最多重试一次并回退到制度规则，证据定位不足的发现自动降级剔除。独立核验会审计缺失、越权、重复和证据违规任务，偏差会强制补件或人工复核。前端“Agent运行”页可查看上述状态，但只显示脱敏摘要和截断哈希。
+
+主 Agent 另有案件级动态计划，负责描述资料处理、两个子 Agent 分配、人工审批、
+合同收集、结果汇总、企业回写和归档之间的依赖。默认由确定性规划器生成；设置
+`DONGJIANG_ORCHESTRATOR_LLM_PLANNING_ENABLED=true` 后，文本模型可以从案件任务白名单
+提出计划，但不能删除必需审批、回写和归档任务。模型失败、越权、缺少必需任务或形成
+循环依赖时，系统记录降级原因并自动使用确定性计划，不阻断案件。
+
+项目方当前只提供文本模型，因此文档兜底采用“本地解析质量门禁 + 文本增强”，不是
+多模态识图：Word/PDF/XLSX结构、扫描页OCR和证据坐标仍由本地工具产生。只有本地已经
+提取出文字但质量较低时，系统才可把脱敏文字交给文本模型补充结构化字段，且每个字段
+必须重新定位到原始片段。图片或扫描PDF完全没有OCR文字时，文本模型无法继续处理，
+系统会明确标记为需人工检查，不会伪造解析结果。
 
 模型计算结果不等于正式授信。系统依次区分：
 

@@ -25,12 +25,25 @@ class OpenAICompatibleGateway:
     def analyze_redacted(self, redacted_text: str, instruction: str) -> str:
         if "⟦" not in redacted_text:
             raise ValueError("拒绝发送：输入未经过本地可逆脱敏。")
+        return self.complete_json(
+            f"{instruction}\n\n合同（已脱敏）：\n{redacted_text}",
+            system_prompt="你是制造业合同风控助手。不得猜测缺失数据，结论必须引用原文。",
+            operation="analysis",
+        )
+
+    def complete_json(
+        self,
+        instruction: str,
+        *,
+        system_prompt: str,
+        operation: str = "structured_analysis",
+    ) -> str:
         body = {
             "model": self.model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "你是制造业合同风控助手。不得猜测缺失数据，结论必须引用原文。"},
-                {"role": "user", "content": f"{instruction}\n\n合同（已脱敏）：\n{redacted_text}"},
+                {"role": "system", "content": str(system_prompt)},
+                {"role": "user", "content": str(instruction)},
             ],
         }
         request = Request(
@@ -43,17 +56,17 @@ class OpenAICompatibleGateway:
         try:
             with urlopen(request, timeout=90) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-            self._record("healthy", "analysis", started)
+            self._record("healthy", operation, started)
             return str(payload["choices"][0]["message"]["content"])
         except HTTPError as exc:
             self._record(
-                "unhealthy", "analysis", started,
+                "unhealthy", operation, started,
                 http_status=exc.code, error_type=type(exc).__name__,
             )
             raise
         except Exception as exc:
             self._record(
-                "unhealthy", "analysis", started, error_type=type(exc).__name__
+                "unhealthy", operation, started, error_type=type(exc).__name__
             )
             raise
 

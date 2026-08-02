@@ -31,5 +31,5 @@ export function clearAuth() {
 
 export function hasRole(...roles) {
   const current = new Set(state.user?.roles || [])
-  return current.has("admin") || roles.some((role) => current.has(role))
+  return roles.some((role) => current.has(role))
 }

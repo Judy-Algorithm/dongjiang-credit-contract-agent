@@ -38,10 +38,10 @@ MAX_FILE_BYTES = 15 * 1024 * 1024
 MAX_REQUEST_BYTES = 30 * 1024 * 1024
 SESSION_COOKIE = "dongjiang_session"
 WAITING_ROLES = {
-    "credit_approval": ["credit", "finance"],
-    "special_release": ["director"],
-    "manager_approval": ["director", "ceo"],
-    "finance_legal_review": ["finance", "legal"],
+    "credit_approval": ["credit_approver"],
+    "special_release": ["exception_approver"],
+    "manager_approval": ["exception_approver"],
+    "finance_legal_review": ["legal_reviewer"],
 }
 WAITING_LABELS = {
     "credit_approval": "待处理信用审批",
@@ -181,7 +181,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _require_roles(user: dict[str, Any], *roles: str) -> None:
         current = set(user.get("roles") or [])
-        if "admin" not in current and not current.intersection(roles):
+        if not current.intersection(roles):
             raise PermissionError("当前账号没有执行该操作的权限。")
 
     def _remote_address(self) -> str:
@@ -300,7 +300,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         body = f"案件 {run.case_id} 的 {'、'.join(failures)} 回写失败，请进入回写运维处理。"
         with AuthStore() as store:
             recipients = store.notify_roles(
-                ["admin"],
+                ["system_admin"],
                 category="writeback",
                 title="系统回写失败",
                 body=body,
@@ -565,13 +565,13 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if user.get("must_change_password"):
                 raise PermissionError("首次登录必须先修改初始密码。")
             if path == "/api/users":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     users = store.list_users()
                 self._json(200, {"ok": True, "users": users})
                 return
             if path == "/api/registrations":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     applications = store.list_registration_applications()
                 self._json(200, {"ok": True, "applications": applications})
@@ -586,7 +586,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     unread = store.unread_notification_count(str(user["user_id"]))
                     pending_registrations = (
                         store.pending_registration_count()
-                        if "admin" in set(user.get("roles") or [])
+                        if "system_admin" in set(user.get("roles") or [])
                         else 0
                     )
                 self._json(
@@ -599,13 +599,13 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/audit":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     events = store.list_audit()
                 self._json(200, {"ok": True, "events": events})
                 return
             if path == "/api/operations/writebacks":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 failures: list[dict[str, Any]] = []
                 for case in CaseRepository().list_cases():
                     for phase, phase_result in (case.get("writeback") or {}).items():
@@ -631,11 +631,11 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "failures": failures, "total": len(failures)})
                 return
             if path == "/api/operations/sla":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 self._json(200, {"ok": True, **SLAService().dashboard()})
                 return
             if path == "/api/operations/agents":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 self._json(
                     200,
                     {
@@ -646,19 +646,19 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/operations/analytics":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 days = parse_qs(parsed.query).get("days", ["30"])[0]
                 self._json(200, {"ok": True, **AnalyticsService().report(days=days)})
                 return
             if path == "/api/operations/benchmarks":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 self._json(200, {"ok": True, **BenchmarkService().summary()})
                 return
             if path in {
                 "/api/operations/benchmarks/export.csv",
                 "/api/operations/benchmarks/export.xlsx",
             }:
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 service = BenchmarkService()
                 report = service.summary().get("latest")
                 if not report:
@@ -680,7 +680,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 "/api/operations/analytics/export.csv",
                 "/api/operations/analytics/export.xlsx",
             }:
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 days = parse_qs(parsed.query).get("days", ["30"])[0]
                 service = AnalyticsService()
                 report = service.report(days=days)
@@ -814,7 +814,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         verification_code=str(payload.get("verification_code") or ""),
                         remote_address=self._remote_address(),
                     )
-                    administrators = store.users_for_roles(["admin"])
+                    administrators = store.users_for_roles(["system_admin"])
                 self._send_notification_emails(
                     administrators,
                     "新的注册申请",
@@ -931,7 +931,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
                 return
             if path == "/api/operations/sla/sweep":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 result = SLAService().sweep()
                 with AuthStore() as store:
                     store.audit(
@@ -944,7 +944,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, result)
                 return
             if path == "/api/operations/agents/sweep":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 result = AgentIncidentService().sweep()
                 with AuthStore() as store:
                     store.audit(
@@ -964,7 +964,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, result)
                 return
             if path == "/api/operations/model/probe":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 result = ModelHealthService().probe()
                 with AuthStore() as store:
                     store.audit(
@@ -983,7 +983,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, **result})
                 return
             if path == "/api/operations/benchmarks/run":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 repeats = int(payload.get("repeats") or 2)
                 report = BenchmarkService().run(repeats=repeats)
                 with AuthStore() as store:
@@ -1013,13 +1013,13 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "registrations"] and parts[3] == "review":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 decision = str(payload.get("decision") or "").strip().lower()
                 with AuthStore() as store:
                     reviewed = store.review_registration(
                         parts[2],
                         decision=decision,
-                        roles=list(payload.get("roles") or ["sales"]),
+                        roles=list(payload.get("roles") or ["case_submitter"]),
                         actor=user,
                         remote_address=self._remote_address(),
                     )
@@ -1034,7 +1034,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "user": reviewed})
                 return
             if path == "/api/users":
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     created = store.create_user(
                         username=str(payload.get("username") or ""),
@@ -1121,7 +1121,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 raise PermissionError("首次登录必须先修改初始密码。")
             parts = [item for item in path.split("/") if item]
             if len(parts) == 3 and parts[:2] == ["api", "users"]:
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 with AuthStore() as store:
                     if "temporary_password" in payload:
                         store.reset_password(
@@ -1141,14 +1141,14 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "user": updated})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "cases"]:
-                self._require_roles(user, "admin")
+                self._require_roles(user, "system_admin")
                 owner_id = str(payload.get("owner_user_id") or "")
                 with AuthStore() as store:
                     owner = store.get_user(owner_id)
                     if not owner or not owner.get("active"):
-                        raise ValueError("请选择启用的销售用户。")
-                    if "sales" not in set(owner.get("roles") or []):
-                        raise ValueError("案件负责人必须具有销售角色。")
+                        raise ValueError("请选择启用的业务经办人。")
+                    if "case_submitter" not in set(owner.get("roles") or []):
+                        raise ValueError("案件负责人必须是业务经办人。")
                     from ..workflow import DongjiangWorkflowHarness
 
                     with DongjiangWorkflowHarness() as harness:
@@ -1206,7 +1206,12 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             run = harness.resume(
                 case_id,
                 decision,
-                actor=ActorContext(str(payload.get("actor_id") or "oa-callback"), ("finance",), "oa", "OA审批"),
+                actor=ActorContext(
+                    str(payload.get("actor_id") or "oa-callback"),
+                    ("credit_approver",),
+                    "oa",
+                    "OA审批",
+                ),
             )
         self._notify_case_waiting(run, {"user_id": str(payload.get("actor_id") or "oa-callback")})
         self._notify_failed_writebacks(run)
@@ -1215,7 +1220,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     def _create_case(self, payload: dict[str, Any], user: dict[str, Any]) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "sales")
+        self._require_roles(user, "case_submitter")
         customer = dict(payload.get("customer") or {})
         _validate_customer(customer)
         with tempfile.TemporaryDirectory(prefix="dongjiang-case-upload-") as temp_dir:
@@ -1245,7 +1250,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         payload: dict[str, Any],
         user: dict[str, Any],
     ) -> None:
-        self._require_roles(user, "sales", "legal")
+        self._require_roles(user, "case_submitter", "legal_reviewer")
         actor = {
             "actor_id": user.get("user_id"),
             "display_name": user.get("display_name") or user.get("username"),
@@ -1279,7 +1284,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         payload: dict[str, Any],
         user: dict[str, Any],
     ) -> None:
-        self._require_roles(user, "sales", "finance", "legal")
+        self._require_roles(user, "case_submitter", "legal_reviewer")
         actor = {
             "actor_id": user.get("user_id"),
             "display_name": user.get("display_name") or user.get("username"),
@@ -1325,7 +1330,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         payload: dict[str, Any],
         user: dict[str, Any],
     ) -> None:
-        self._require_roles(user, "sales", "finance", "legal")
+        self._require_roles(user, "case_submitter", "legal_reviewer")
         actor = {
             "actor_id": user.get("user_id"),
             "display_name": user.get("display_name") or user.get("username"),
@@ -1363,7 +1368,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "admin")
+        self._require_roles(user, "system_admin")
         phase = str(payload.get("phase") or "").strip()
         system = str(payload.get("system") or "").strip().lower()
         if not phase or system not in {"oa", "crm", "sap"}:
@@ -1453,7 +1458,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "admin")
+        self._require_roles(user, "system_admin")
         action = str(payload.get("action") or "").strip()
         plan_id = str(payload.get("plan_id") or "").strip()
         note = str(payload.get("note") or "")
@@ -1515,7 +1520,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     recipients = [assignee]
             elif action in {"rerun", "resolve"}:
                 recipients = store.notify_roles(
-                    ["admin"],
+                    ["system_admin"],
                     category="agent_incident",
                     title=(
                         "Agent候选重跑已完成"
@@ -1551,7 +1556,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         from ..workflow import DongjiangWorkflowHarness
         from ..workflow.candidate_reviews import safe_candidate_review_view
 
-        self._require_roles(user, "admin", "credit", "finance", "legal")
+        self._require_roles(
+            user, "credit_approver", "legal_reviewer", "exception_approver"
+        )
         action = str(payload.get("action") or "").strip()
         incident_id = str(payload.get("incident_id") or "").strip()
         request_id = str(payload.get("request_id") or "").strip()
@@ -1587,7 +1594,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             )
             roles = list(
                 WAITING_ROLES.get(str(review.get("eligible_waiting_for") or ""))
-                or ["admin"]
+                or ["system_admin"]
             )
             title = (
                 "Agent候选等待正式审批"
@@ -1635,7 +1642,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "admin", "credit", "finance", "legal")
+        self._require_roles(
+            user, "credit_approver", "legal_reviewer", "exception_approver"
+        )
         document_kind = str(payload.get("document_kind") or "")
         with DongjiangWorkflowHarness() as harness:
             run, extraction = harness.generate_structured_extraction(
@@ -1670,7 +1679,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "admin", "credit", "finance", "legal")
+        self._require_roles(
+            user, "credit_approver", "legal_reviewer", "exception_approver"
+        )
         action = str(payload.get("action") or "")
         with DongjiangWorkflowHarness() as harness:
             run, extraction = harness.manage_structured_extraction(
@@ -1713,7 +1724,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "admin")
+        self._require_roles(user, "credit_approver")
         if os.getenv("DONGJIANG_INTEGRATION_MODE", "").strip().lower() != "mock":
             raise PermissionError("企业系统Mock模式未启用。")
         with DongjiangWorkflowHarness() as harness:
@@ -1803,7 +1814,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         from ..workflow import DongjiangWorkflowHarness
 
-        self._require_roles(user, "sales")
+        self._require_roles(user, "case_submitter")
         store = ContractRevisionStore()
         manifest = store.get(case_id, revision_id)
         if manifest.get("status") != "draft":
@@ -1851,13 +1862,11 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _assert_owner(current: Any, user: dict[str, Any]) -> None:
-        if "admin" in set(user.get("roles") or []):
-            return
         if current.waiting_for not in {"credit_supplement", "contract_upload", "sales_revision"}:
             return
         owner = dict(current.state.get("owner") or current.state.get("applicant") or {})
         if owner.get("user_id") and owner.get("user_id") != user.get("user_id"):
-            raise PermissionError("该销售任务已分配给其他负责人。")
+            raise PermissionError("该业务任务已分配给其他负责人。")
 
     def _handle_case_action(
         self,

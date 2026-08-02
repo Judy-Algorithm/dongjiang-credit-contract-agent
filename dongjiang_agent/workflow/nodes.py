@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
@@ -16,21 +17,37 @@ from ..domain.codec import (
     assessment_from_dict,
     contract_facts_from_dict,
     profile_from_dict,
+    review_from_dict,
 )
 from ..domain.decision import resolve_case_decision
 from ..domain.models import (
     ApprovalRoute,
     AuditDecision,
     ContractReview,
+    Evidence,
     RiskFinding,
     RiskLevel,
     utc_now,
 )
-from ..ingestion import DocumentExtractor, ExtractedDocument, locate_excerpt
+from ..ingestion import (
+    DocumentExtractor,
+    DocumentFragment,
+    DocumentQualityGate,
+    ExtractedDocument,
+    locate_excerpt,
+)
 from ..integrations import IntegrationBundle
-from ..llm import ContractAIAssistant
+from ..llm import CasePlanningAssistant, ContractAIAssistant, DocumentTextEnhancer
 from ..persistence import CaseDocumentArchive, CaseRepository, TaskExecutionStore
 from ..reporting import AuditReporter
+from ..runtime import (
+    InvocationContext,
+    LocalToolRegistry,
+    ToolRegistry,
+    credit_dimension_result,
+    document_payload,
+    register_default_tools,
+)
 from ..security import RedactionVault
 from .codec import case_from_state, checkpoint_dict
 from .dynamic import (
@@ -41,6 +58,15 @@ from .dynamic import (
     canonical_hash,
     plan_task,
     task_idempotency_key,
+)
+from .orchestration import (
+    allowed_case_task_types,
+    build_case_plan,
+    case_plan_has_task,
+    case_plan_snapshot,
+    orchestration_run,
+    orchestration_waiting_run,
+    required_case_task_types,
 )
 from .state import WorkflowState
 
@@ -254,6 +280,9 @@ class WorkflowNodes:
         integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
         ai_assistant: ContractAIAssistant | None = None,
+        case_planner: CasePlanningAssistant | None = None,
+        document_enhancer: DocumentTextEnhancer | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.vault_dir = Path(vault_dir)
@@ -263,12 +292,179 @@ class WorkflowNodes:
         self.executions = TaskExecutionStore(execution_dir)
         self.integrations = integrations or IntegrationBundle.from_environment()
         self.documents = DocumentExtractor()
+        self.document_quality = DocumentQualityGate()
         self.credit_facts = CreditFactExtractor()
         self.credit_engine = CreditScoringEngine(policy)
         self.contract_facts = ContractFactExtractor()
         self.contract_engine = ContractReviewEngine(self.credit_engine.policy)
         self.contract_ai = ai_assistant or ContractAIAssistant()
+        self.case_planner = case_planner or CasePlanningAssistant()
+        self.document_enhancer = document_enhancer or DocumentTextEnhancer()
+        self.tool_registry = tool_registry or register_default_tools(
+            LocalToolRegistry(),
+            documents=self.documents,
+            credit_facts=self.credit_facts,
+            credit_engine=self.credit_engine,
+            contract_facts=self.contract_facts,
+            contract_engine=self.contract_engine,
+            contract_ai=self.contract_ai,
+            document_quality=self.document_quality,
+            document_enhancer=self.document_enhancer,
+        )
         self.reporter = AuditReporter()
+
+    def _call_tool(
+        self,
+        tool_name: str,
+        payload: dict[str, Any],
+        *,
+        context: InvocationContext,
+        records: list[dict[str, Any]],
+        fallback: Any,
+    ) -> Any:
+        registry = getattr(self, "tool_registry", None)
+        if registry is None:
+            return fallback()
+        try:
+            invocation = registry.invoke(tool_name, payload, context=context)
+        except Exception as exc:
+            record = getattr(exc, "registry_record", None)
+            if isinstance(record, dict):
+                records.append(record)
+            raise
+        records.append(invocation.record)
+        return invocation.output
+
+    @staticmethod
+    def _document_from_tool(payload: dict[str, Any]) -> ExtractedDocument:
+        return ExtractedDocument(
+            path=str(payload.get("path") or ""),
+            media_type=str(payload.get("media_type") or ""),
+            text=str(payload.get("text") or ""),
+            extractor=str(payload.get("extractor") or ""),
+            warnings=list(payload.get("warnings") or []),
+            fragments=[
+                DocumentFragment(
+                    fragment_id=str(item.get("fragment_id") or ""),
+                    text=str(item.get("text") or ""),
+                    location=dict(item.get("location") or {}),
+                )
+                for item in payload.get("fragments") or []
+            ],
+        )
+
+    @staticmethod
+    def _text_model_enhancement_enabled() -> bool:
+        return str(
+            os.getenv("DONGJIANG_DOCUMENT_TEXT_ENHANCEMENT_ENABLED", "false")
+        ).lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _apply_credit_text_enhancement(
+        profile: Any,
+        enhancement: dict[str, Any],
+        *,
+        source_name: str,
+    ) -> Any:
+        if enhancement.get("status") != "succeeded":
+            return profile
+        if (enhancement.get("verification") or {}).get("status") != "passed":
+            return profile
+        allowed = {
+            "asset_liability_ratio",
+            "net_margin",
+            "current_ratio",
+            "revenue_growth",
+            "years_in_business",
+            "external_rating",
+            "rating_outlook",
+            "cooperation_years",
+            "overdue_count_12m",
+            "max_overdue_days_12m",
+            "on_time_payment_rate",
+            "current_overdue_days",
+            "last_order_date",
+            "major_litigation",
+            "tax_or_enforcement_alert",
+        }
+        updates: dict[str, Any] = {}
+        evidence = list(profile.evidence)
+        for candidate in enhancement.get("candidates") or []:
+            field = str(candidate.get("field") or "")
+            confidence = float(candidate.get("confidence") or 0)
+            if field not in allowed or confidence < 0.8:
+                continue
+            current = getattr(profile, field, None)
+            if current not in {None, ""} and not (
+                isinstance(current, bool) and current is False
+            ):
+                continue
+            updates[field] = candidate.get("value")
+            evidence.append(
+                Evidence(
+                    source=f"text_model_enhancement:{source_name}",
+                    field=field,
+                    value=candidate.get("value"),
+                    confidence=confidence,
+                    excerpt=str(candidate.get("evidence_query") or ""),
+                    document_id=str(candidate.get("document_id") or ""),
+                    fragment_id=str(candidate.get("fragment_id") or ""),
+                    location=dict(candidate.get("location") or {}),
+                )
+            )
+        if not updates:
+            return profile
+        from dataclasses import replace
+
+        return replace(profile, **updates, evidence=evidence)
+
+    @staticmethod
+    def _apply_contract_text_enhancement(
+        facts: Any,
+        enhancement: dict[str, Any],
+    ) -> None:
+        if enhancement.get("status") != "succeeded":
+            return
+        if (enhancement.get("verification") or {}).get("status") != "passed":
+            return
+        allowed = {
+            "payment_term_days",
+            "tail_payment_ratio",
+            "tail_payment_term_days",
+            "uses_purchase_exemption",
+            "contract_term_years",
+            "max_penalty_ratio",
+            "language",
+            "has_parties",
+            "has_subject",
+            "has_payment",
+            "has_breach",
+            "has_ip",
+            "has_confidentiality",
+            "has_termination",
+            "has_dispute_resolution",
+        }
+        for candidate in enhancement.get("candidates") or []:
+            field = str(candidate.get("field") or "")
+            confidence = float(candidate.get("confidence") or 0)
+            if field not in allowed or confidence < 0.8:
+                continue
+            current = getattr(facts, field, None)
+            if current not in {None, "", False}:
+                continue
+            setattr(facts, field, candidate.get("value"))
+            facts.evidence.append(
+                Evidence(
+                    source="text_model_enhancement",
+                    field=field,
+                    value=candidate.get("value"),
+                    confidence=confidence,
+                    excerpt=str(candidate.get("evidence_query") or ""),
+                    document_id=str(candidate.get("document_id") or facts.document_id),
+                    fragment_id=str(candidate.get("fragment_id") or ""),
+                    location=dict(candidate.get("location") or {}),
+                )
+            )
 
     def _runtime_snapshot(self) -> dict[str, Any]:
         contract_policy = dict(self.contract_engine.contract_policy or {})
@@ -285,7 +481,35 @@ class WorkflowNodes:
                     contract_facts_from_dict({"contract_name": "snapshot"})
                 )
             ),
+            "tool_registry_provider": str(
+                getattr(self.tool_registry, "provider", "unknown")
+            ),
+            "available_tools": [
+                item.get("tool_name")
+                for item in self.tool_registry.discover()
+            ],
         }
+
+    @staticmethod
+    def orchestration_agent_dispatch_run(
+        plan: dict[str, Any],
+        task_type: str,
+        invocation: dict[str, Any],
+    ) -> dict[str, Any]:
+        return orchestration_run(
+            plan,
+            task_type,
+            status=(
+                "completed"
+                if invocation.get("status") not in {"failed", "running"}
+                else str(invocation.get("status"))
+            ),
+            output_summary=(
+                f"通过{invocation.get('provider') or 'local'}注册中心调用"
+                f"{invocation.get('agent_name') or invocation.get('agent_id')}"
+            ),
+            duration_ms=int(invocation.get("duration_ms") or 0),
+        )
 
     @staticmethod
     def _is_contract(document: ExtractedDocument) -> bool:
@@ -303,9 +527,36 @@ class WorkflowNodes:
         return sum(signal.lower() in document.text.lower() for signal in signals) >= 2
 
     def create_case(self, state: WorkflowState) -> dict[str, Any]:
+        runtime_snapshot = self._runtime_snapshot()
+        snapshot = case_plan_snapshot(
+            customer=dict(state.get("customer") or {}),
+            credit_file_count=len(state.get("pending_files") or []),
+            use_cached_credit=bool(state.get("use_cached_credit", True)),
+            runtime_snapshot=runtime_snapshot,
+        )
+        proposal = self.case_planner.propose(
+            snapshot,
+            allowed_task_types=allowed_case_task_types(snapshot),
+            required_task_types=required_case_task_types(snapshot),
+        )
+        plan = build_case_plan(
+            str(state["case_id"]),
+            snapshot,
+            proposal=proposal,
+            runtime_snapshot=runtime_snapshot,
+        )
         return {
             "stage": "intake",
             "status": "processing",
+            "orchestration_plan": plan,
+            "orchestration_runs": [
+                orchestration_run(
+                    plan,
+                    "case_intake",
+                    status="completed",
+                    output_summary="案件身份、申请人和基础目标已登记",
+                )
+            ],
             "approval_chain": [
                 approval_record(
                     "applicant",
@@ -317,7 +568,11 @@ class WorkflowNodes:
                 trace("workflow.started", "Harness 已创建案件并启动 LangGraph。"),
                 trace(
                     "agent.plan",
-                    "已规划资料解析、信审、合同审查、风险路由和报告任务。",
+                    "主 Agent 已生成并冻结案件级动态任务计划。",
+                    plan_id=plan["plan_id"],
+                    task_count=len(plan["tasks"]),
+                    planner=plan["planner"],
+                    planner_assistance=plan["planner_assistance"],
                 ),
             ],
         }
@@ -339,6 +594,7 @@ class WorkflowNodes:
         contract_source_files = list(state.get("contract_source_files") or [])
         traces: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         vault = RedactionVault(str(state["case_id"]), self.vault_dir)
         actor = dict(state.get("actor") or {})
 
@@ -355,19 +611,53 @@ class WorkflowNodes:
                 )
                 source_documents.append({**archived, "parse_status": "pending"})
                 archive_index = len(source_documents) - 1
-                document = self.documents.extract(archived["archived_path"])
-                is_contract = self._is_contract(document)
-                if document_kind == "credit" and is_contract:
-                    raise ValueError("信用资料入口不接受合同文件。")
-                if document_kind == "contract" and not is_contract:
-                    raise ValueError("合同入口只接受合同或协议文件。")
+                extracted = self._call_tool(
+                    "document.extract",
+                    {"path": archived["archived_path"]},
+                    context=InvocationContext(
+                        case_id=str(state["case_id"]),
+                        caller="case_orchestrator",
+                        agent_id="case_orchestrator",
+                        input_summary=f"案件原件{archived['document_id']}的归档路径",
+                    ),
+                    records=tool_calls,
+                    fallback=lambda: document_payload(
+                        self.documents.extract(archived["archived_path"])
+                    ),
+                )
+                document = self._document_from_tool(dict(extracted))
                 source_files.append(document.path)
-                source_documents[archive_index or 0].update(
+                redacted_fragments = [
                     {
+                        "fragment_id": fragment.fragment_id,
+                        "text": vault.redact(fragment.text),
+                        "location": fragment.location,
+                    }
+                    for fragment in document.fragments
+                ]
+                quality_payload = self._call_tool(
+                    "document.quality_gate",
+                    {
+                        "document_kind": document_kind,
+                        "document": document_payload(document),
+                    },
+                    context=InvocationContext(
+                        case_id=str(state["case_id"]),
+                        caller="case_orchestrator",
+                        agent_id="case_orchestrator",
+                        input_summary=f"文档{archived['document_id']}的本地解析指标",
+                    ),
+                    records=tool_calls,
+                    fallback=lambda: self.document_quality.evaluate(
+                        document, document_kind=document_kind
+                    ),
+                )
+                document_record = {
                         "parse_status": "parsed",
                         "media_type": document.media_type,
                         "extractor": document.extractor,
                         "warnings": document.warnings,
+                        "quality": dict(quality_payload),
                         "features": {
                             "ocr_page_count": sum(
                                 bool(fragment.location.get("ocr"))
@@ -384,16 +674,80 @@ class WorkflowNodes:
                                 for fragment in document.fragments
                             ),
                         },
-                        "fragments": [
-                            {
-                                "fragment_id": fragment.fragment_id,
-                                "text": vault.redact(fragment.text),
-                                "location": fragment.location,
-                            }
-                            for fragment in document.fragments
-                        ],
+                        "fragments": redacted_fragments,
+                }
+                enhancement: dict[str, Any] = {
+                    "status": "not_needed",
+                    "mode": "text_only",
+                    "candidates": [],
+                    "summary": "本地解析质量达到门槛，无需文本模型增强。",
+                    "limitation": "文本模型不能读取图片像素或空白扫描页。",
+                }
+                quality_status = str(quality_payload.get("status") or "")
+                if quality_status == "needs_text_enhancement":
+                    if self._text_model_enhancement_enabled():
+                        enhancement = dict(
+                            self._call_tool(
+                                "document.text_enhance",
+                                {
+                                    "document_kind": document_kind,
+                                    "document": {
+                                        "document_id": archived["document_id"],
+                                        "path": document.path,
+                                        "media_type": document.media_type,
+                                        "fragments": redacted_fragments,
+                                    },
+                                },
+                                context=InvocationContext(
+                                    case_id=str(state["case_id"]),
+                                    caller="case_orchestrator",
+                                    agent_id="case_orchestrator",
+                                    input_summary=(
+                                        f"文档{archived['document_id']}已脱敏的本地文字片段"
+                                    ),
+                                ),
+                                records=tool_calls,
+                                fallback=lambda: self.document_enhancer.enhance(
+                                    document_kind,
+                                    document={
+                                        "document_id": archived["document_id"],
+                                        "fragments": redacted_fragments,
+                                    },
+                                ),
+                            )
+                        )
+                    else:
+                        enhancement = {
+                            "status": "disabled",
+                            "mode": "text_only",
+                            "model": self.document_enhancer.model,
+                            "candidates": [],
+                            "summary": "文档质量需要增强，但自动文本模型增强未启用。",
+                            "limitation": "文本模型不能读取图片像素或空白扫描页。",
+                        }
+                elif quality_status == "manual_required":
+                    enhancement = {
+                        "status": "not_applicable",
+                        "mode": "text_only",
+                        "model": self.document_enhancer.model,
+                        "candidates": [],
+                        "summary": "本地解析与OCR未形成足够文字，文本模型无法继续处理，必须人工检查原件。",
+                        "limitation": "文本模型不能读取图片像素或空白扫描页。",
                     }
+                document_record["text_enhancement"] = enhancement
+                document_record["parse_status"] = (
+                    "manual_required" if quality_status == "manual_required" else "parsed"
                 )
+                source_documents[archive_index or 0].update(document_record)
+                if quality_status == "manual_required":
+                    raise ValueError(
+                        "文档未形成可用文字；项目仅提供文本模型，无法读取图片像素，请人工检查或重新上传清晰可复制版本。"
+                    )
+                is_contract = self._is_contract(document)
+                if document_kind == "credit" and is_contract:
+                    raise ValueError("信用资料入口不接受合同文件。")
+                if document_kind == "contract" and not is_contract:
+                    raise ValueError("合同入口只接受合同或协议文件。")
                 if document_kind == "credit":
                     credit_source_files.append(document.path)
                 else:
@@ -405,18 +759,40 @@ class WorkflowNodes:
                         media_type=document.media_type,
                         extractor=document.extractor,
                         warnings=document.warnings,
+                        quality=quality_status,
+                        text_enhancement=enhancement.get("status"),
                         sha256=archived["sha256"],
                     )
                 )
                 if document_kind == "contract":
                     redacted = vault.redact(document.text)
-                    facts = self.contract_facts.extract(
-                        document.text,
-                        contract_name=path.name,
-                        customer_name=customer.customer_name,
-                        business_type=customer.business_type,
+                    facts_payload = self._call_tool(
+                        "contract.extract_facts",
+                        {
+                            "text": document.text,
+                            "contract_name": path.name,
+                            "customer_name": customer.customer_name,
+                            "business_type": customer.business_type,
+                        },
+                        context=InvocationContext(
+                            case_id=str(state["case_id"]),
+                            caller="case_orchestrator",
+                            agent_id="case_orchestrator",
+                            input_summary=f"合同{archived['document_id']}的本地解析正文",
+                        ),
+                        records=tool_calls,
+                        fallback=lambda: checkpoint_dict(
+                            self.contract_facts.extract(
+                                document.text,
+                                contract_name=path.name,
+                                customer_name=customer.customer_name,
+                                business_type=customer.business_type,
+                            )
+                        ),
                     )
+                    facts = contract_facts_from_dict(dict(facts_payload))
                     facts.document_id = str(archived["document_id"])
+                    self._apply_contract_text_enhancement(facts, enhancement)
                     raw_fragments = [
                         {
                             "fragment_id": fragment.fragment_id,
@@ -444,12 +820,36 @@ class WorkflowNodes:
                         )
                     )
                 else:
-                    customer = self.credit_facts.enrich(customer, document.text, path.name)
+                    profile_payload = self._call_tool(
+                        "credit.extract_facts",
+                        {
+                            "profile": checkpoint_dict(customer),
+                            "text": document.text,
+                            "source_name": path.name,
+                        },
+                        context=InvocationContext(
+                            case_id=str(state["case_id"]),
+                            caller="case_orchestrator",
+                            agent_id="case_orchestrator",
+                            input_summary=f"信用资料{archived['document_id']}的本地解析正文",
+                        ),
+                        records=tool_calls,
+                        fallback=lambda: checkpoint_dict(
+                            self.credit_facts.enrich(customer, document.text, path.name)
+                        ),
+                    )
+                    customer = profile_from_dict(dict(profile_payload))
+                    customer = self._apply_credit_text_enhancement(
+                        customer, enhancement, source_name=path.name
+                    )
             except Exception as exc:
                 if archive_index is not None:
-                    source_documents[archive_index].update(
-                        {"parse_status": "failed", "error": str(exc)}
+                    current_status = str(
+                        source_documents[archive_index].get("parse_status") or ""
                     )
+                    source_documents[archive_index].update({"error": str(exc)})
+                    if current_status != "manual_required":
+                        source_documents[archive_index]["parse_status"] = "failed"
                 errors.append(
                     trace("document.failed", f"{path.name} 解析失败。", error=str(exc))
                 )
@@ -480,12 +880,48 @@ class WorkflowNodes:
             "contract_source_files": contract_source_files,
             "pending_files": [],
             "pending_document_kind": None,
+            "tool_calls": tool_calls,
             "trace": traces,
             "errors": errors,
         }
 
     def ingest_credit_documents(self, state: WorkflowState) -> dict[str, Any]:
-        return self._ingest_documents(state, document_kind="credit")
+        update = self._ingest_documents(state, document_kind="credit")
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            parsed = sum(
+                item.get("document_kind") == "credit"
+                and item.get("parse_status") == "parsed"
+                for item in update.get("source_documents") or []
+            )
+            runs = [
+                orchestration_run(
+                    plan,
+                    "credit_document_processing",
+                    status="completed",
+                    output_summary=f"信用资料处理完成，成功解析{parsed}份",
+                )
+            ]
+            if case_plan_has_task(plan, "document_quality_supervision"):
+                documents = [
+                    item
+                    for item in update.get("source_documents") or []
+                    if item.get("document_kind") == "credit"
+                ]
+                runs.append(
+                    orchestration_run(
+                        plan,
+                        "document_quality_supervision",
+                        status="completed",
+                        output_summary=(
+                            f"质量监督完成：{len(documents)}份资料，"
+                            f"{sum(item.get('parse_status') == 'failed' for item in documents)}份失败，"
+                            f"{sum(bool(item.get('warnings')) for item in documents)}份有警告"
+                        ),
+                    )
+                )
+            update["orchestration_runs"] = runs
+        return update
 
     def ingest_contract_documents(self, state: WorkflowState) -> dict[str, Any]:
         if (
@@ -493,7 +929,23 @@ class WorkflowNodes:
             or not state.get("effective_credit_assessment")
         ):
             raise PermissionError("正式授信尚未生效，不能解析或评审合同。")
-        return self._ingest_documents(state, document_kind="contract")
+        update = self._ingest_documents(state, document_kind="contract")
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            parsed = sum(
+                item.get("document_kind") == "contract"
+                and item.get("parse_status") == "parsed"
+                for item in update.get("source_documents") or []
+            )
+            update["orchestration_runs"] = [
+                orchestration_run(
+                    plan,
+                    "contract_document_processing",
+                    status="completed",
+                    output_summary=f"合同资料处理完成，成功解析{parsed}份",
+                )
+            ]
+        return update
 
     def check_credit_cache(self, state: WorkflowState) -> dict[str, Any]:
         customer = profile_from_dict(dict(state["customer"]))
@@ -517,7 +969,7 @@ class WorkflowNodes:
                 }
             )
             locked = bool(credit_control["credit_locked"])
-            return {
+            update = {
                 "stage": "credit_ready",
                 "status": "credit_control_locked" if locked else "credit_effective",
                 "credit_source": "cache",
@@ -539,7 +991,39 @@ class WorkflowNodes:
                     )
                 ],
             }
-        return {
+            plan = dict(state.get("orchestration_plan") or {})
+            if plan:
+                runs = [
+                    orchestration_run(
+                        plan,
+                        "credit_cache_check",
+                        status="completed",
+                        output_summary="命中有效授信，信用子 Agent 本次无需重新执行",
+                    ),
+                    orchestration_run(
+                        plan,
+                        "credit_agent_dispatch",
+                        status="skipped",
+                        output_summary="已复用有效授信，跳过信用子 Agent",
+                    ),
+                ]
+                if case_plan_has_task(plan, "enterprise_identity_supervision"):
+                    runs.append(
+                        orchestration_run(
+                            plan,
+                            "enterprise_identity_supervision",
+                            status="completed",
+                            output_summary=(
+                                "已识别唯一客户标识，可安全复用历史授信"
+                                if customer.crm_customer_id
+                                or customer.unified_social_credit_code
+                                else "缺少唯一客户标识，已禁止按客户名称复用授信"
+                            ),
+                        )
+                    )
+                update["orchestration_runs"] = runs
+            return update
+        update = {
             "stage": "credit_required",
             "credit_source": "new_assessment",
             "credit_assessment": None,
@@ -547,6 +1031,32 @@ class WorkflowNodes:
             "credit_status": "calculating",
             "trace": [trace("credit.cache_miss", "未找到有效信审结果，进入信审子图。")],
         }
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            runs = [
+                orchestration_run(
+                    plan,
+                    "credit_cache_check",
+                    status="completed",
+                    output_summary="未命中可复用授信，准备分配信用子 Agent",
+                )
+            ]
+            if case_plan_has_task(plan, "enterprise_identity_supervision"):
+                runs.append(
+                    orchestration_run(
+                        plan,
+                        "enterprise_identity_supervision",
+                        status="completed",
+                        output_summary=(
+                            "已识别唯一客户标识但无可复用授信"
+                            if customer.crm_customer_id
+                            or customer.unified_social_credit_code
+                            else "缺少唯一客户标识，历史授信不会按名称复用"
+                        ),
+                    )
+                )
+            update["orchestration_runs"] = runs
+        return update
 
     def plan_credit_workflow(self, state: WorkflowState) -> dict[str, Any]:
         plan = build_credit_plan(
@@ -583,76 +1093,26 @@ class WorkflowNodes:
         profile = profile_from_dict(dict(state["customer"]))
         started_at = utc_now()
         started = perf_counter()
-        payload: dict[str, Any]
-        summary: str
-        if task_type == "credit_data_completeness":
-            assessment = self.credit_engine.assess(profile)
-            payload = {
-                "coverage_ratio": assessment.data_coverage_ratio,
-                "available_dimensions": assessment.available_dimensions,
-                "missing_fields": assessment.missing_fields,
-                "requires_supplement": assessment.requires_supplement,
-                "supplement_reasons": assessment.supplement_reasons,
-                "evidence_count": len(profile.evidence),
-            }
-            summary = (
-                f"资料覆盖率{assessment.data_coverage_ratio:.0%}，"
-                f"识别{len(assessment.available_dimensions)}个有效维度"
-            )
-        elif task_type == "credit_financial_analysis":
-            missing: list[str] = []
-            score, reasons = self.credit_engine._financial_score(profile, missing)
-            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
-            summary = f"财务维度评分{score:.1f}" if score is not None else "财务指标不足"
-        elif task_type == "credit_rating_analysis":
-            missing = []
-            score, reasons, resolution = self.credit_engine._rating_score(profile, missing)
-            selected = dict(resolution.get("selected") or {})
-            payload = {
-                "score": score,
-                "agency": selected.get("agency"),
-                "rating": selected.get("rating"),
-                "conflict": bool(resolution.get("conflict")),
-                "requires_manual_review": bool(resolution.get("requires_manual_review")),
-                "warning_count": len(reasons),
-            }
-            summary = (
-                f"采用{selected.get('agency') or '未知机构'} {selected.get('rating') or '未评级'}"
-            )
-        elif task_type == "credit_cooperation_analysis":
-            missing = []
-            score, reasons = self.credit_engine._cooperation_score(profile, missing)
-            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
-            summary = f"历史交易评分{score:.1f}" if score is not None else "历史交易资料不足"
-        elif task_type == "credit_enterprise_analysis":
-            missing = []
-            score, reasons = self.credit_engine._enterprise_score(profile, missing)
-            payload = {"score": score, "missing_fields": missing, "reason_count": len(reasons)}
-            summary = f"企业基础评分{score:.1f}" if score is not None else "企业基础资料不足"
-        elif task_type == "credit_control_analysis":
-            limit = max(0.0, float(profile.requested_credit_limit or profile.monthly_order_amount or 0))
-            control = self.credit_engine.credit_control(profile, limit)
-            payload = {
-                "has_occupied_credit": bool(control["occupied_credit_amount"]),
-                "credit_locked": bool(control["credit_locked"]),
-                "overdue_above_threshold": (
-                    int(control["current_overdue_days"])
-                    > int(control["max_current_overdue_days"])
-                ),
-            }
-            summary = (
-                f"额度占用={'存在' if payload['has_occupied_credit'] else '无'}，"
-                f"逾期阈值={'超出' if payload['overdue_above_threshold'] else '未超出'}"
-            )
-        elif task_type == "credit_tkm_analysis":
-            payload = {
-                "business_subtype": profile.tkm_business_subtype or "policy_default",
-                "purchase_exemption_requested": bool(profile.purchase_exemption_requested),
-                "requested_term_days": profile.requested_term_days,
-            }
-            summary = "已核对TKM子类型、账期和首期采购款豁免申请"
-        else:
-            raise ValueError(f"未授权的信用分析任务：{task_type}")
+        tool_calls: list[dict[str, Any]] = []
+        tool_output = self._call_tool(
+            "credit.analyze_dimension",
+            {"task_type": task_type, "profile": checkpoint_dict(profile)},
+            context=InvocationContext(
+                case_id=str(state["case_id"]),
+                caller="credit_review",
+                agent_id="credit_review",
+                plan_id=str(plan.get("plan_id") or ""),
+                task_id=str(task.get("task_id") or ""),
+                input_summary=f"信用动态任务{task_type}的结构化客户档案",
+            ),
+            records=tool_calls,
+            fallback=lambda: credit_dimension_result(
+                self.credit_engine, task_type, profile
+            ),
+        )
+        payload = dict(tool_output.get("payload") or {})
+        summary = str(tool_output.get("summary") or "信用维度分析已完成")
+        executor = str(tool_output.get("executor") or "credit-analysis-tool")
         duration_ms = round((perf_counter() - started) * 1000)
         result = task_result(plan, task, payload)
         run = agent_run(
@@ -664,6 +1124,7 @@ class WorkflowNodes:
                         f"{len(task.get('input_refs') or [])}个资料引用；敏感内容未写入日志"
                     ),
                     output_summary=summary,
+                    model=executor,
                 )
         if not state.get("agent_rerun_context"):
             self.executions.save(
@@ -676,6 +1137,7 @@ class WorkflowNodes:
         return {
             "agent_task_results": [result],
             "agent_runs": [run],
+            "tool_calls": tool_calls,
             "trace": [
                 trace(
                     "agent.credit.task_completed",
@@ -919,7 +1381,7 @@ class WorkflowNodes:
                 "approval_chain": chain,
             },
         )
-        return {
+        update = {
             "stage": "credit_pending_approval",
             "status": "credit_pending_approval",
             "credit_status": "pending_approval",
@@ -930,6 +1392,16 @@ class WorkflowNodes:
                 trace("credit.approval_requested", "模型信用结果已提交人工审批。")
             ],
         }
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            update["orchestration_runs"] = [
+                orchestration_waiting_run(
+                    plan,
+                    "credit_human_approval",
+                    output_summary="信用子 Agent 结果已提交，等待正式授信人工审批",
+                )
+            ]
+        return update
 
     def await_credit_approval(
         self,
@@ -1062,6 +1534,14 @@ class WorkflowNodes:
                             ),
                         )
                     ),
+                    "orchestration_runs": [
+                        orchestration_run(
+                            dict(state.get("orchestration_plan") or {}),
+                            "credit_human_approval",
+                            status="completed",
+                            output_summary="信用审批人已完成正式授信审批",
+                        )
+                    ] if state.get("orchestration_plan") else [],
                     "trace": [candidate_trace] if candidate_trace else [],
                 },
                 goto="activate_credit",
@@ -1213,6 +1693,34 @@ class WorkflowNodes:
             "credit_control": credit_control,
             "writeback": {"credit_activation": credit_writeback},
             "waiting_for": "special_release" if locked else None,
+            "orchestration_runs": (
+                [
+                    orchestration_run(
+                        dict(state.get("orchestration_plan") or {}),
+                        "credit_control_gate",
+                        status="completed",
+                        output_summary=(
+                            "信用控制检查完成，需例外授权"
+                            if locked
+                            else "信用控制检查通过，可进入合同阶段"
+                        ),
+                    )
+                ]
+                + ([
+                    orchestration_waiting_run(
+                        dict(state.get("orchestration_plan") or {}),
+                        "exception_authorization",
+                        output_summary="额度占用或逾期触发门禁，等待授权审批人处理",
+                    )
+                ] if locked else [
+                    orchestration_run(
+                        dict(state.get("orchestration_plan") or {}),
+                        "exception_authorization",
+                        status="skipped",
+                        output_summary="未触发信用例外授权",
+                    )
+                ])
+            ) if state.get("orchestration_plan") else [],
             "trace": [
                 trace(
                     "credit.effective",
@@ -1271,6 +1779,14 @@ class WorkflowNodes:
                     "exception_approval": release,
                     "human_decision": response,
                     "waiting_for": None,
+                    "orchestration_runs": [
+                        orchestration_run(
+                            dict(state.get("orchestration_plan") or {}),
+                            "exception_authorization",
+                            status="completed",
+                            output_summary="授权审批人已批准特别放行并归档证据",
+                        )
+                    ] if state.get("orchestration_plan") else [],
                     "trace": [trace(
                         "credit.special_release_approved",
                         "已取得特别放行证据，允许本案件继续进入合同阶段。",
@@ -1302,12 +1818,22 @@ class WorkflowNodes:
             raise PermissionError("信审结果尚未审批生效，不能进入合同阶段。")
         if state.get("contract_facts"):
             return {"stage": "contract_ready", "waiting_for": None}
-        return {
+        update = {
             "stage": "awaiting_contract",
             "status": "awaiting_contract",
             "waiting_for": "contract_upload",
             "trace": [trace("workflow.interrupt", "信审已完成，等待销售上传合同。")],
         }
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            update["orchestration_runs"] = [
+                orchestration_waiting_run(
+                    plan,
+                    "contract_collection",
+                    output_summary="正式授信已生效，等待业务经办人提交合同",
+                )
+            ]
+        return update
 
     def await_contract(
         self, state: WorkflowState
@@ -1341,6 +1867,14 @@ class WorkflowNodes:
                 "pending_document_kind": "contract",
                 "waiting_for": None,
                 "status": "processing",
+                "orchestration_runs": [
+                    orchestration_run(
+                        dict(state.get("orchestration_plan") or {}),
+                        "contract_collection",
+                        status="completed",
+                        output_summary=f"业务经办人已提交{len(files)}份合同资料",
+                    )
+                ] if state.get("orchestration_plan") else [],
                 "trace": [trace("workflow.resumed", "收到合同资料，恢复工作流。")],
             },
             goto="ingest_contract_documents",
@@ -1451,6 +1985,7 @@ class WorkflowNodes:
         facts = contract_facts_from_dict(raw_contract)
         document = self._document_by_ref(state, document_ref)
         fragments = list(document.get("fragments") or [])
+        tool_calls: list[dict[str, Any]] = []
         started_at = utc_now()
         started = perf_counter()
         model = "deterministic"
@@ -1460,7 +1995,26 @@ class WorkflowNodes:
             assessment = assessment_from_dict(state.get("effective_credit_assessment"))
             if assessment is None:
                 raise ValueError("合同评审前缺少正式信审结果。")
-            review = self.contract_engine.review(facts, assessment)
+            review_payload = self._call_tool(
+                "contract.policy_review",
+                {
+                    "facts": checkpoint_dict(facts),
+                    "assessment": checkpoint_dict(assessment),
+                },
+                context=InvocationContext(
+                    case_id=str(state["case_id"]),
+                    caller="contract_review",
+                    agent_id="contract_review",
+                    plan_id=str(plan.get("plan_id") or ""),
+                    task_id=str(task.get("task_id") or ""),
+                    input_summary=f"合同{document_ref}事实与正式授信条件",
+                ),
+                records=tool_calls,
+                fallback=lambda: checkpoint_dict(
+                    self.contract_engine.review(facts, assessment)
+                ),
+            )
+            review = review_from_dict(dict(review_payload))
             for finding in review.findings:
                 if finding.fragment_id or not finding.clause_excerpt:
                     continue
@@ -1487,10 +2041,27 @@ class WorkflowNodes:
             for attempt in range(1, max_attempts + 1):
                 attempt_started_at = utc_now()
                 attempt_started = perf_counter()
-                assistance = self.contract_ai.review(
-                    facts,
-                    redacted_text=ai_text,
-                    fragments=fragments,
+                assistance = self._call_tool(
+                    "contract.ai_review",
+                    {
+                        "facts": checkpoint_dict(facts),
+                        "redacted_text": ai_text,
+                        "fragments": fragments,
+                    },
+                    context=InvocationContext(
+                        case_id=str(state["case_id"]),
+                        caller="contract_review",
+                        agent_id="contract_review",
+                        plan_id=str(plan.get("plan_id") or ""),
+                        task_id=str(task.get("task_id") or ""),
+                        input_summary=f"合同{document_ref}的脱敏正文与证据片段",
+                    ),
+                    records=tool_calls,
+                    fallback=lambda: self.contract_ai.review(
+                        facts,
+                        redacted_text=ai_text,
+                        fragments=fragments,
+                    ),
                 )
                 attempt_duration = round((perf_counter() - attempt_started) * 1000)
                 attempt_history.append(
@@ -1574,6 +2145,7 @@ class WorkflowNodes:
         return {
             "agent_task_results": [result],
             "agent_runs": [run],
+            "tool_calls": tool_calls,
             "trace": [
                 trace(
                     "agent.contract.task_completed",
@@ -1861,7 +2433,7 @@ class WorkflowNodes:
             "credit_assessment": assessment,
             "contract_reviews": reviews,
         }
-        return {
+        update = {
             "stage": "decision_ready",
             "decision": result.decision.value,
             "approval_route": result.approval_route.value,
@@ -1877,6 +2449,37 @@ class WorkflowNodes:
                 )
             ],
         }
+        plan = dict(state.get("orchestration_plan") or {})
+        if plan:
+            runs = [
+                orchestration_run(
+                    plan,
+                    "result_synthesis",
+                    status="completed",
+                    output_summary=(
+                        f"主 Agent 汇总信用与合同结果，路由为{result.decision.value}"
+                    ),
+                )
+            ]
+            if result.decision.value in {"block", "manual_review", "special_approval"}:
+                runs.append(
+                    orchestration_waiting_run(
+                        plan,
+                        "contract_human_review",
+                        output_summary="合同风险需要人工复核、修改或授权",
+                    )
+                )
+            else:
+                runs.append(
+                    orchestration_run(
+                        plan,
+                        "contract_human_review",
+                        status="skipped",
+                        output_summary="合同风险未触发额外人工复核",
+                    )
+                )
+            update["orchestration_runs"] = runs
+        return update
 
     def await_sales_revision(
         self, state: WorkflowState
@@ -1913,6 +2516,14 @@ class WorkflowNodes:
                 "waiting_for": None,
                 "status": "processing",
                 "human_decision": dict(response),
+                "orchestration_runs": [
+                    orchestration_run(
+                        dict(state.get("orchestration_plan") or {}),
+                        "contract_human_review",
+                        status="completed",
+                        output_summary="业务经办人已按风险意见修改并重新提交合同",
+                    )
+                ] if state.get("orchestration_plan") else [],
                 "trace": [trace("sales.revised", "销售已提交修订合同，重新审查。")],
             },
             goto="ingest_contract_documents",
@@ -1955,6 +2566,14 @@ class WorkflowNodes:
                     "approval_evidence": list(state.get("approval_evidence") or []) + evidence,
                     "exception_approval": decision,
                     "waiting_for": None,
+                    "orchestration_runs": [
+                        orchestration_run(
+                            dict(state.get("orchestration_plan") or {}),
+                            "contract_human_review",
+                            status="completed",
+                            output_summary="授权审批人已批准合同例外并归档证据",
+                        )
+                    ] if state.get("orchestration_plan") else [],
                     "trace": ([candidate_trace] if candidate_trace else []) + [
                         trace(
                             "manager.approved",
@@ -2004,6 +2623,14 @@ class WorkflowNodes:
                     "status": "approved_after_manual_review",
                     "human_decision": response_payload,
                     "waiting_for": None,
+                    "orchestration_runs": [
+                        orchestration_run(
+                            dict(state.get("orchestration_plan") or {}),
+                            "contract_human_review",
+                            status="completed",
+                            output_summary="合同法务已完成人工复核并确认通过",
+                        )
+                    ] if state.get("orchestration_plan") else [],
                     "trace": ([candidate_trace] if candidate_trace else []) + [
                         trace("manual.approved", "财务/法务完成复核并确认。")
                     ],
@@ -2082,6 +2709,61 @@ class WorkflowNodes:
         writeback = dict(final_state.get("writeback") or {})
         writeback["final"] = final_writeback
         final_state["writeback"] = writeback
+        plan = dict(state.get("orchestration_plan") or {})
+        orchestration_runs = []
+        if plan:
+            latest_status = {
+                str(item.get("task_type") or ""): str(item.get("status") or "")
+                for item in state.get("orchestration_runs") or []
+            }
+            terminal_skips = [
+                orchestration_run(
+                    plan,
+                    str(task.get("task_type") or ""),
+                    status="skipped",
+                    output_summary="案件已结束，该条件任务无需继续执行",
+                )
+                for task in plan.get("tasks") or []
+                if task.get("task_type") not in {"enterprise_writeback", "case_archive"}
+                and latest_status.get(str(task.get("task_type") or ""))
+                in {"", "pending", "waiting", "running"}
+            ]
+            writeback_statuses = {
+                str(item.get("status") or "")
+                for phase in writeback.values()
+                for item in (phase.values() if isinstance(phase, dict) else [])
+                if isinstance(item, dict)
+            }
+            orchestration_runs = terminal_skips + [
+                orchestration_run(
+                    plan,
+                    "enterprise_writeback",
+                    status=(
+                        "completed"
+                        if not writeback_statuses.intersection({"failed"})
+                        else "failed"
+                    ),
+                    output_summary="OA、CRM与SAP回写已执行并保留审计结果",
+                ),
+                orchestration_run(
+                    plan,
+                    "case_archive",
+                    status="completed",
+                    output_summary="案件报告、原件索引和运行记录已归档",
+                ),
+            ]
+        if orchestration_runs:
+            final_state["orchestration_runs"] = (
+                list(state.get("orchestration_runs") or []) + orchestration_runs
+            )
+            completed_plan = dict(plan)
+            completed_plan["status"] = (
+                "failed"
+                if any(item.get("status") == "failed" for item in orchestration_runs)
+                else "completed"
+            )
+            completed_plan["completed_at"] = utc_now()
+            final_state["orchestration_plan"] = completed_plan
         case = case_from_state(final_state)
         self.repository.save(case)
         reports = self.reporter.export(case, self.output_dir)
@@ -2091,5 +2773,7 @@ class WorkflowNodes:
             "waiting_for": None,
             "reports": reports,
             "writeback": writeback,
+            "orchestration_plan": final_state.get("orchestration_plan"),
+            "orchestration_runs": orchestration_runs,
             "trace": [final_trace],
         }

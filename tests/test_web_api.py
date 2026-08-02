@@ -201,13 +201,15 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(sales_notices["unread"], 1)
         self.assertEqual(sales_notices["items"][0]["link"], f"/cases/{case_id}/action")
 
-    def test_admin_user_management_and_password_change(self):
-        user = self.create_user("finance.a", "财务甲", ["finance"])
+    def test_admin_user_management_rejects_multiple_roles_and_password_change(self):
+        user = self.create_user("finance.a", "财务甲", ["credit"])
         status, updated = self.request(
-            "PATCH", f"/api/users/{user['user_id']}", {"roles": ["finance", "legal"]}
+            "PATCH",
+            f"/api/users/{user['user_id']}",
+            {"roles": ["credit_approver", "legal_reviewer"]},
         )
-        self.assertEqual(status, 200)
-        self.assertEqual(updated["user"]["roles"], ["finance", "legal"])
+        self.assertEqual(status, 400)
+        self.assertIn("单个角色", updated["error"])
 
         self.assertEqual(self.login("finance.a", "InitialPass123")[0], 200)
         status, changed = self.request(
@@ -224,6 +226,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_admin_can_assign_case_owner_to_sales_user(self):
         sales = self.create_user("owner.sales", "案件销售", ["sales"])
+        self.activate_user("owner.sales")
         status, created = self.request(
             "POST",
             "/api/cases",
@@ -241,6 +244,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 201)
         case_id = created["case"]["case_id"]
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
         status, assigned = self.request(
             "PATCH", f"/api/cases/{case_id}", {"owner_user_id": sales["user_id"]}
         )
@@ -313,7 +317,7 @@ class WebApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 201)
-        self.assertEqual(registered["user"]["roles"], ["sales"])
+        self.assertEqual(registered["user"]["roles"], ["case_submitter"])
         self.assertFalse(registered["user"]["active"])
         self.assertEqual(registered["user"]["registration_status"], "pending")
         self.assertNotIn("csrf_token", registered)
@@ -331,12 +335,22 @@ class WebApiTests(unittest.TestCase):
         status, reviewed = self.request(
             "POST",
             f"/api/registrations/{user_id}/review",
-            {"decision": "approve", "roles": ["sales", "credit"]},
+            {
+                "decision": "approve",
+                "roles": ["case_submitter", "credit_approver"],
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("单个角色", reviewed["error"])
+        status, reviewed = self.request(
+            "POST",
+            f"/api/registrations/{user_id}/review",
+            {"decision": "approve", "roles": ["credit_approver"]},
         )
         self.assertEqual(status, 200)
         self.assertTrue(reviewed["user"]["active"])
         self.assertEqual(reviewed["user"]["registration_status"], "approved")
-        self.assertEqual(reviewed["user"]["roles"], ["credit", "sales"])
+        self.assertEqual(reviewed["user"]["roles"], ["credit_approver"])
         sender.send_registration_review.assert_called_once_with(
             "sales@example.com", approved=True, username="registered.sales"
         )
@@ -1972,7 +1986,10 @@ class WebApiTests(unittest.TestCase):
             403,
         )
 
-    def test_mock_enterprise_approval_runs_existing_workflow_and_is_admin_only(self):
+    def test_mock_enterprise_approval_is_credit_approver_only(self):
+        self.create_user("mock.submitter", "Mock业务经办", ["sales"])
+        self.create_user("mock.credit", "Mock信用审批", ["credit"])
+        self.activate_user("mock.submitter")
         with patch.dict(
             os.environ,
             {
@@ -2001,6 +2018,7 @@ class WebApiTests(unittest.TestCase):
             )
             self.assertEqual(status, 201)
             case_id = created["case"]["case_id"]
+            self.activate_user("mock.credit")
             status, result = self.request(
                 "POST", f"/api/cases/{case_id}/mock-enterprise-approval", {}
             )
@@ -2023,8 +2041,7 @@ class WebApiTests(unittest.TestCase):
             )
         )
 
-        self.create_user("mock.sales", "Mock普通销售", ["sales"])
-        self.activate_user("mock.sales")
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
         with patch.dict(os.environ, {"DONGJIANG_INTEGRATION_MODE": "mock"}):
             self.assertEqual(
                 self.request(

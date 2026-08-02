@@ -203,12 +203,12 @@ class AgentIncidentTests(unittest.TestCase):
         run = self.harness.resume(
             run.case_id,
             {"action": "approve", "comment": "同意授信建议"},
-            actor=self.admin,
+            actor=ActorContext("credit-1", ("credit",), "web", "信用甲"),
         )
         run = self.harness.resume(
             run.case_id,
             {"action": "submit_contract", "contract_texts": [SAFE_CONTRACT]},
-            actor=self.admin,
+            actor=ActorContext("sales-1", ("sales",), "web", "销售甲"),
         )
         plan = next(
             deepcopy(item)

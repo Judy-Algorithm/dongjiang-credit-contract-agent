@@ -56,9 +56,9 @@ export async function renderCaseDetailPage(root, route) {
   })
   root.querySelector("#assignOwner")?.addEventListener("click", async () => {
     const data = await api.listUsers()
-    const sales = data.users.filter((user) => user.active && user.roles.includes("sales"))
-    if (!sales.length) return window.dispatchEvent(new CustomEvent("app:toast", {detail:"请先创建销售用户"}))
-    showOwnerDialog(root, item, sales)
+    const submitters = data.users.filter((user) => user.active && user.roles.includes("case_submitter"))
+    if (!submitters.length) return window.dispatchEvent(new CustomEvent("app:toast", {detail:"请先创建业务经办人"}))
+    showOwnerDialog(root, item, submitters)
   })
   const requestedTab = route.params.get("tab")
   renderTab(tabs.some(([key]) => key === requestedTab) ? requestedTab : "overview")
@@ -262,6 +262,7 @@ function approvalTab(item) {
 
 function agentExecutionTab(item) {
   const execution = item.agent_execution || {}, plans = execution.plans || []
+  const orchestration = execution.orchestration_plan || {}
   const candidates = item.agent_candidates || []
   const extractions = item.structured_extractions || []
   const extractionPermissions = item.structured_extraction_permissions || {}
@@ -269,10 +270,23 @@ function agentExecutionTab(item) {
   if (!plans.length && !candidates.length && !extractions.length && !canGenerateExtraction) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
   return `<div class="agent-execution">
     ${structuredExtractionPanel(item)}
-    ${plans.length ? `<div class="agent-parent"><div><small>父工作流</small><h3>${escapeHtml(execution.parent_label || "业务主流程")}</h3></div><span class="badge approved">受控动态编排</span></div><div class="agent-flow-connector" aria-hidden="true"></div>${plans.map(agentPlan).join("")}` : ""}
+    ${orchestration.plan_id ? orchestrationPlan(orchestration) : ""}
+    ${plans.length ? `<div class="agent-flow-connector" aria-hidden="true"></div>${plans.map(agentPlan).join("")}` : ""}
     ${candidateReviews(candidates)}
     <div class="agent-security-note">${escapeHtml(execution.security_notice || "")}</div>
   </div>`
+}
+
+function orchestrationPlan(plan) {
+  const assistance = plan.planner_assistance || {}
+  const modelLabel = assistance.proposal_adopted ? `模型提议已采纳 · ${assistance.model || "文本模型"}` : assistance.status === "failed" ? "模型提议失败，已自动降级" : "确定性主计划"
+  return `<section class="orchestration-plan"><header class="agent-parent"><div><small>${escapeHtml(plan.plan_id)} · 主 Agent 计划 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || "案件主 Agent 动态计划")}</h3><p>${escapeHtml(modelLabel)} · ${plan.nodes?.length || 0} 项案件任务</p><div class="agent-plan-tags"><span>${plan.frozen ? "计划已冻结" : "计划未冻结"}</span><span>规范 ${escapeHtml(plan.spec_hash || "—")}</span><span>${escapeHtml(plan.planner || "controlled_case_planner")}</span></div></div><span class="badge approved">主 Agent 编排</span></header>${assistance.rationale || assistance.fallback_reason ? `<div class="orchestration-rationale"><b>规划说明</b><span>${escapeHtml(assistance.rationale || assistance.fallback_reason)}</span></div>` : ""}<div class="orchestration-grid">${(plan.nodes || []).map(orchestrationNode).join("")}</div></section>`
+}
+
+function orchestrationNode(node) {
+  const statusLabel = ({completed:"完成",waiting:"等待人工",running:"执行中",skipped:"按条件跳过",failed:"失败",pending:"待调度"})[node.status] || node.status
+  const typeLabel = ({agent:"子 Agent",human:"人工节点",tool:"工具节点",system:"系统节点",integration:"企业回写"})[node.executor_type] || node.executor_type
+  return `<article class="orchestration-node ${escapeHtml(node.status || "pending")}"><header><span class="agent-status-dot"></span><div><small>${escapeHtml(typeLabel || "任务")}</small><b>${escapeHtml(node.label || node.task_type)}</b></div><em>${escapeHtml(statusLabel || "待调度")}</em></header><p>${escapeHtml(node.output_summary || "等待主 Agent 调度")}</p><footer><span>${escapeHtml(node.executor || "case_orchestrator")}</span>${node.condition ? `<small>${escapeHtml(node.condition)}</small>` : ""}</footer></article>`
 }
 
 function structuredExtractionPanel(item) {
@@ -400,13 +414,20 @@ function agentPlan(plan) {
   const groups = ["analysis","synthesis","decision","verification"].map((phase) => ({phase, nodes:(plan.nodes || []).filter((node) => node.phase === phase)})).filter((group) => group.nodes.length)
   const statusLabel = ({completed:"已完成",running:"运行中",failed:"需检查"})[plan.status] || plan.status
   const snapshot = plan.runtime_snapshot || {}, audit = plan.execution_audit || {}
+  const invocation = plan.agent_invocation || {}, tools = plan.tool_calls || []
   const auditLabel = ({conformant:"执行一致",non_conformant:"发现偏差",pending:"等待审计"})[audit.status] || audit.status
   return `<section class="agent-plan">
-    <header class="agent-plan-head"><div><small>${escapeHtml(plan.plan_id)} · 计划版本 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || plan.agent)}</h3><p>运行时选择 ${plan.task_count || 0} 个白名单任务，已完成 ${plan.completed_count || 0} 个</p><div class="agent-plan-tags"><span>${plan.frozen ? "计划已冻结" : "计划未冻结"}</span><span>规范 ${escapeHtml(plan.spec_hash || "—")}</span><span>${escapeHtml(plan.task_catalog_version || "任务目录未记录")}</span></div></div><div class="agent-plan-status"><span class="badge ${plan.status === "completed" ? "approved" : plan.status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span><small>累计 ${duration(plan.total_duration_ms)}</small></div></header>
+    <header class="agent-plan-head"><div><small>${escapeHtml(plan.plan_id)} · 计划版本 ${escapeHtml(plan.version || "—")}</small><h3>${escapeHtml(plan.label || plan.agent)}</h3><p>主 Agent 通过 ${escapeHtml(invocation.provider || "local")} 注册中心分配；运行时选择 ${plan.task_count || 0} 个白名单任务，调用 ${tools.length} 次工具</p><div class="agent-plan-tags"><span>${plan.frozen ? "计划已冻结" : "计划未冻结"}</span><span>规范 ${escapeHtml(plan.spec_hash || "—")}</span><span>${escapeHtml(plan.task_catalog_version || "任务目录未记录")}</span></div></div><div class="agent-plan-status"><span class="badge ${plan.status === "completed" ? "approved" : plan.status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span><small>累计 ${duration(plan.total_duration_ms)}</small></div></header>
     ${agentRuntimeSnapshot(snapshot)}
     <div class="agent-lanes">${groups.map(agentLane).join("")}</div>
+    ${agentToolCalls(tools)}
     <div class="agent-audit ${audit.status === "non_conformant" ? "has-deviation" : ""}"><div><small>执行偏差审计</small><strong>${escapeHtml(auditLabel || "等待审计")}</strong></div><dl><div><dt>完整性</dt><dd>${audit.integrity_valid === true ? "通过" : audit.integrity_valid === false ? "失败" : "待核验"}</dd></div><div><dt>重试</dt><dd>${audit.retry_count || 0} 次</dd></div><div><dt>降级</dt><dd>${audit.fallback_count || 0} 次</dd></div></dl>${agentAuditIssues(audit)}</div>
   </section>`
+}
+
+function agentToolCalls(tools) {
+  if (!tools.length) return ""
+  return `<div class="agent-tools"><div class="agent-lane-label"><span>Toolhub 工具调用</span><small>${tools.length} 次</small></div><div class="agent-tool-list">${tools.map((tool) => `<div><span><b>${escapeHtml(tool.tool_label || tool.tool_name)}</b><small>${escapeHtml(tool.tool_name)} · ${escapeHtml(tool.provider || "local")}</small></span><span>${escapeHtml(tool.status === "completed" ? "完成" : tool.status || "未知")} · ${duration(tool.duration_ms)}</span><small>${escapeHtml(tool.output_summary || "结构化结果已返回")}</small></div>`).join("")}</div></div>`
 }
 
 function agentRuntimeSnapshot(snapshot) {
@@ -415,6 +436,7 @@ function agentRuntimeSnapshot(snapshot) {
     ["合同规则", snapshot.contract_policy_version, snapshot.contract_policy_hash],
     ["模型", snapshot.ai_enabled ? snapshot.model : "未启用", ""],
     ["提示词", snapshot.prompt_version, snapshot.prompt_hash],
+    ["工具目录", `${snapshot.tool_registry_provider || "local"} · ${snapshot.available_tool_count || 0} 项`, ""],
   ]
   if (!values.some(([, value]) => value)) return ""
   return `<div class="agent-runtime">${values.map(([label, value, hash]) => `<div><small>${escapeHtml(label)}</small><b>${escapeHtml(value || "—")}</b>${hash ? `<code>${escapeHtml(hash)}</code>` : ""}</div>`).join("")}</div>`
@@ -458,12 +480,17 @@ function documentsTab(item) {
 }
 
 function documentFeatures(doc) {
-  const features = doc.features || {}, labels = []
+  const features = doc.features || {}, quality = doc.quality || {}, enhancement = doc.text_enhancement || {}, labels = []
   if (features.ocr_page_count) labels.push(`OCR ${features.ocr_page_count} 页`)
   if (features.ocr_image_count) labels.push(`OCR 图片 ${features.ocr_image_count} 张`)
   if (features.word_table_cell_count) labels.push(`Word 表格 ${features.word_table_cell_count} 个单元格`)
+  if (quality.status) labels.push(`质量 ${documentQualityLabel(quality.status)} ${Math.round(Number(quality.score || 0) * 100)}分`)
+  if (enhancement.status === "succeeded") labels.push(`文本模型增强 ${enhancement.candidate_count || 0} 个字段`)
+  if (enhancement.status === "not_applicable") labels.push("文本模型无法处理，需人工")
   return labels.length ? `<small>${labels.map(escapeHtml).join(" · ")}</small>` : ""
 }
+
+function documentQualityLabel(value) { return ({passed:"通过",needs_text_enhancement:"需增强",manual_required:"需人工"})[value] || value }
 
 function writebackTab(item) {
   const writeback = item.writeback || {}, entries = Object.entries(writeback)
@@ -549,7 +576,7 @@ function installDocumentViewer(root, item) {
 
 function showOwnerDialog(root, item, users) {
   const current = item.owner?.user_id || ""
-  root.insertAdjacentHTML("beforeend", `<div id="ownerDialog" class="modal-backdrop"><form class="modal-panel"><div class="section-heading"><h3>分配案件负责人</h3><button type="button" class="text-button" data-close>关闭</button></div><label>销售负责人<select id="ownerUser">${users.map((user) => `<option value="${escapeHtml(user.user_id)}" ${user.user_id === current ? "selected" : ""}>${escapeHtml(user.display_name)} · ${escapeHtml(user.username)}</option>`).join("")}</select></label><div id="ownerError" class="error-box hidden"></div><div class="form-actions"><span></span><button class="primary" type="submit">确认分配</button></div></form></div>`)
+  root.insertAdjacentHTML("beforeend", `<div id="ownerDialog" class="modal-backdrop"><form class="modal-panel"><div class="section-heading"><h3>分配案件负责人</h3><button type="button" class="text-button" data-close>关闭</button></div><label>业务经办人<select id="ownerUser">${users.map((user) => `<option value="${escapeHtml(user.user_id)}" ${user.user_id === current ? "selected" : ""}>${escapeHtml(user.display_name)} · ${escapeHtml(user.username)}</option>`).join("")}</select></label><div id="ownerError" class="error-box hidden"></div><div class="form-actions"><span></span><button class="primary" type="submit">确认分配</button></div></form></div>`)
   const dialog = root.querySelector("#ownerDialog")
   dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
   dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.remove() })
@@ -565,7 +592,7 @@ function info(label, value) { return `<div class="info-item"><span>${escapeHtml(
 function rail(label, value) { return `<div class="rail-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></div>` }
 function notice(title, rows) { return `<div class="supplement-notice"><strong>${escapeHtml(title)}</strong><ul>${rows.map((row) => `<li>${escapeHtml(row)}</li>`).join("")}</ul></div>` }
 function emptyState(title, text) { return `<div class="empty-state"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div>` }
-function parseStatus(value) { return ({parsed:"已解析",pending:"等待解析",failed:"解析失败"})[value] || "状态未知" }
+function parseStatus(value) { return ({parsed:"已解析",pending:"等待解析",failed:"解析失败",manual_required:"需人工检查"})[value] || "状态未知" }
 function approvalStage(stage) { return ({applicant:"申请人",marketing_director:"所属市场总监",credit_control:"信用管理",senior_finance_manager:"高级财务经理",group_finance_director:"集团财务总监"})[stage] || stage || "审批节点" }
 function actionMessage(type) { return ({credit_approval:"模型评估已完成，等待信用审批后生效。",credit_supplement:"请补充信审人员要求的信用资料。",upload_contract:"信用审核已经完成，请提交合同。",submit_revision:"合同需要修改后重新提交。",manager_review:"该案件需要管理层确认。",manual_review:"该案件需要财务或法务复核。"})[type] || "请完成当前待办事项。" }
 function integrationCard(phase, value, canRetry = false) {

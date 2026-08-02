@@ -24,10 +24,10 @@ WAITING_BY_STATUS = {
     "pending_manual_review": "finance_legal_review",
 }
 WAITING_ROLES = {
-    "credit_approval": ["credit", "finance"],
-    "special_release": ["director"],
-    "manager_approval": ["director", "ceo"],
-    "finance_legal_review": ["finance", "legal"],
+    "credit_approval": ["credit_approver"],
+    "special_release": ["exception_approver"],
+    "manager_approval": ["exception_approver"],
+    "finance_legal_review": ["legal_reviewer"],
 }
 OWNER_WAITING = {"credit_supplement", "contract_upload", "sales_revision"}
 ENTRY_STAGES = {

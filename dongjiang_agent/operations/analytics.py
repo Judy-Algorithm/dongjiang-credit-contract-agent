@@ -56,11 +56,9 @@ EXIT_STAGES = {
     },
 }
 ROLE_LABELS = {
-    "credit": "信用管理",
-    "finance": "财务",
-    "legal": "法务",
-    "director": "市场总监",
-    "ceo": "集团管理层",
+    "credit_approver": "信用审批人",
+    "legal_reviewer": "合同法务",
+    "exception_approver": "授权审批人",
 }
 STATUS_LABELS = {
     "completed": "已完成",

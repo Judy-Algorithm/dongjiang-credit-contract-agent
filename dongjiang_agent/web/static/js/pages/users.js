@@ -2,8 +2,11 @@ import {api} from "../api.js?v=20260801-core2"
 import {escapeHtml, dateTime} from "../format.js?v=20260801-core2"
 
 const roles = [
-  ["sales","销售"],["credit","信用管理"],["finance","财务"],["legal","法务"],
-  ["director","市场总监"],["ceo","集团管理层"],["admin","系统管理员"],
+  ["case_submitter","业务经办人"],
+  ["credit_approver","信用审批人"],
+  ["legal_reviewer","合同法务"],
+  ["exception_approver","授权审批人"],
+  ["system_admin","系统管理员"],
 ]
 
 export async function renderUsersPage(root) {
@@ -128,7 +131,7 @@ function showPasswordForm(root, user) {
 
 function roleOptions(selected) {
   const current = new Set(selected)
-  return `<fieldset class="role-picker"><legend>角色</legend>${roles.map(([value,label]) => `<label><input type="checkbox" value="${value}" ${current.has(value) ? "checked" : ""}><span>${label}</span></label>`).join("")}</fieldset>`
+  return `<fieldset class="role-picker"><legend>角色（每个账号只能选择一个）</legend>${roles.map(([value,label]) => `<label><input type="radio" name="role" value="${value}" ${current.has(value) ? "checked" : ""} required><span>${label}</span></label>`).join("")}</fieldset>`
 }
 
 function selectedRoles(root) {

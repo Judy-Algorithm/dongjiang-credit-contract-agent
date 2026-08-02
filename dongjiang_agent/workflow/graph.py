@@ -7,6 +7,7 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
+from ..runtime import AgentDescriptor, AgentRegistry, InvocationContext, LocalAgentRegistry
 from .dynamic import assert_plan_integrity
 from .nodes import WorkflowNodes
 from .state import WorkflowState
@@ -122,19 +123,76 @@ def build_contract_subgraph(nodes: WorkflowNodes):
     return builder.compile()
 
 
-def build_workflow(nodes: WorkflowNodes, *, checkpointer):
+def build_workflow(
+    nodes: WorkflowNodes,
+    *,
+    checkpointer,
+    agent_registry: AgentRegistry | None = None,
+):
     """Build one parent graph with two bounded business subgraphs."""
     credit_subgraph = build_credit_subgraph(nodes)
     contract_subgraph = build_contract_subgraph(nodes)
+    registry = agent_registry or LocalAgentRegistry()
+    if isinstance(registry, LocalAgentRegistry):
+        registered = {item["agent_id"] for item in registry.discover()}
+        if "credit_review" not in registered:
+            registry.register(
+                AgentDescriptor(
+                    agent_id="credit_review",
+                    name="信用评审子 Agent",
+                    description="动态分析信用资料并输出评分、额度、账期与独立核验结果。",
+                    capabilities=("credit_review", "credit_dynamic_workflow"),
+                ),
+                credit_subgraph.invoke,
+            )
+        if "contract_review" not in registered:
+            registry.register(
+                AgentDescriptor(
+                    agent_id="contract_review",
+                    name="合同评审子 Agent",
+                    description="动态调用合同规则与AI工具，输出风险、证据和审批路由。",
+                    capabilities=("contract_review", "contract_dynamic_workflow"),
+                ),
+                contract_subgraph.invoke,
+            )
 
     def call_credit_subgraph(state: WorkflowState) -> dict:
-        result = credit_subgraph.invoke(state)
         trace_offset = len(state.get("trace") or [])
         error_offset = len(state.get("errors") or [])
         plan_offset = len(state.get("workflow_plans") or [])
         run_offset = len(state.get("agent_runs") or [])
         result_offset = len(state.get("agent_task_results") or [])
         audit_offset = len(state.get("execution_audits") or [])
+        tool_offset = len(state.get("tool_calls") or [])
+        invocation = registry.invoke(
+            "credit_review",
+            dict(state),
+            context=InvocationContext(
+                case_id=str(state.get("case_id") or ""),
+                caller="case_orchestrator",
+                agent_id="credit_review",
+                input_summary="客户档案、信用资料引用与受控运行快照",
+            ),
+        )
+        result = invocation.output
+        orchestration_runs = []
+        orchestration_plan = dict(state.get("orchestration_plan") or {})
+        if orchestration_plan:
+            orchestration_runs.append(
+                nodes.orchestration_agent_dispatch_run(
+                    orchestration_plan,
+                    "credit_agent_dispatch",
+                    invocation.record,
+                )
+            )
+            if str((state.get("customer") or {}).get("business_type") or "").upper() == "TKM":
+                orchestration_runs.append(
+                    nodes.orchestration_agent_dispatch_run(
+                        orchestration_plan,
+                        "tkm_governance",
+                        invocation.record,
+                    )
+                )
         return {
             "stage": result.get("stage"),
             "status": result.get("status"),
@@ -149,6 +207,9 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
             "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
             "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
             "execution_audits": list(result.get("execution_audits") or [])[audit_offset:],
+            "agent_invocations": [invocation.record],
+            "orchestration_runs": orchestration_runs,
+            "tool_calls": list(result.get("tool_calls") or [])[tool_offset:],
             "active_workflow_plan": result.get("active_workflow_plan"),
             "credit_analysis": result.get("credit_analysis"),
             "credit_verification": result.get("credit_verification"),
@@ -157,13 +218,34 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
         }
 
     def call_contract_subgraph(state: WorkflowState) -> dict:
-        result = contract_subgraph.invoke(state)
         trace_offset = len(state.get("trace") or [])
         error_offset = len(state.get("errors") or [])
         plan_offset = len(state.get("workflow_plans") or [])
         run_offset = len(state.get("agent_runs") or [])
         result_offset = len(state.get("agent_task_results") or [])
         audit_offset = len(state.get("execution_audits") or [])
+        tool_offset = len(state.get("tool_calls") or [])
+        invocation = registry.invoke(
+            "contract_review",
+            dict(state),
+            context=InvocationContext(
+                case_id=str(state.get("case_id") or ""),
+                caller="case_orchestrator",
+                agent_id="contract_review",
+                input_summary="正式授信结果、合同结构和证据引用",
+            ),
+        )
+        result = invocation.output
+        orchestration_runs = []
+        orchestration_plan = dict(state.get("orchestration_plan") or {})
+        if orchestration_plan:
+            orchestration_runs.append(
+                nodes.orchestration_agent_dispatch_run(
+                    orchestration_plan,
+                    "contract_agent_dispatch",
+                    invocation.record,
+                )
+            )
         return {
             "stage": result.get("stage"),
             "contract_reviews": result.get("contract_reviews"),
@@ -171,6 +253,9 @@ def build_workflow(nodes: WorkflowNodes, *, checkpointer):
             "agent_runs": list(result.get("agent_runs") or [])[run_offset:],
             "agent_task_results": list(result.get("agent_task_results") or [])[result_offset:],
             "execution_audits": list(result.get("execution_audits") or [])[audit_offset:],
+            "agent_invocations": [invocation.record],
+            "orchestration_runs": orchestration_runs,
+            "tool_calls": list(result.get("tool_calls") or [])[tool_offset:],
             "active_workflow_plan": result.get("active_workflow_plan"),
             "contract_verifications": result.get("contract_verifications"),
             "trace": list(result.get("trace") or [])[trace_offset:],

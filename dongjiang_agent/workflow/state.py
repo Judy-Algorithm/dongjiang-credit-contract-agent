@@ -48,7 +48,11 @@ class WorkflowState(TypedDict, total=False):
     writeback: dict[str, Any]
     oa_submission: dict[str, Any]
     workflow_plans: Annotated[list[dict[str, Any]], operator.add]
+    orchestration_plan: dict[str, Any] | None
+    orchestration_runs: Annotated[list[dict[str, Any]], operator.add]
     agent_runs: Annotated[list[dict[str, Any]], operator.add]
+    agent_invocations: Annotated[list[dict[str, Any]], operator.add]
+    tool_calls: Annotated[list[dict[str, Any]], operator.add]
     agent_task_results: Annotated[list[dict[str, Any]], operator.add]
     execution_audits: Annotated[list[dict[str, Any]], operator.add]
     agent_incidents: list[dict[str, Any]]

@@ -103,19 +103,36 @@ RECORD_LABELS = {
     "agent.extraction.rejected": "AI结构化字段候选已拒绝",
 }
 
+LEGACY_ROLE_MAP = {
+    "admin": "system_admin",
+    "sales": "case_submitter",
+    "credit": "credit_approver",
+    "finance": "credit_approver",
+    "legal": "legal_reviewer",
+    "director": "exception_approver",
+    "ceo": "exception_approver",
+}
+
+
+def _actor_roles(actor: dict[str, Any] | None) -> set[str]:
+    return {
+        LEGACY_ROLE_MAP.get(str(role), str(role))
+        for role in (actor or {}).get("roles") or []
+    }
+
 
 def _structured_extractions(
     case: dict[str, Any], actor: dict[str, Any] | None
 ) -> list[dict[str, Any]]:
-    roles = set((actor or {}).get("roles") or [])
+    roles = _actor_roles(actor)
     rows: list[dict[str, Any]] = []
     for raw in reversed(list(case.get("structured_extractions") or [])):
         item = dict(raw)
         decision = dict(item.get("decision") or {})
         review_roles = (
-            {"admin", "credit", "finance"}
+            {"credit_approver"}
             if item.get("document_kind") == "credit"
-            else {"admin", "finance", "legal"}
+            else {"legal_reviewer", "exception_approver"}
         )
         rows.append(
             {
@@ -272,6 +289,8 @@ def _records(trace: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
     runs = list(case.get("agent_runs") or [])
+    invocations = list(case.get("agent_invocations") or [])
+    tool_calls = list(case.get("tool_calls") or [])
     audits = list(case.get("execution_audits") or [])
     run_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for run in runs:
@@ -294,6 +313,8 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
             "ai_enabled": bool(raw_snapshot.get("ai_enabled")),
             "prompt_version": raw_snapshot.get("prompt_version") or "",
             "prompt_hash": str(raw_snapshot.get("prompt_hash") or "")[:12],
+            "tool_registry_provider": raw_snapshot.get("tool_registry_provider") or "local",
+            "available_tool_count": len(raw_snapshot.get("available_tools") or []),
         }
         audit = next(
             (
@@ -341,6 +362,28 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
                 }
             )
         plan_runs = [run for run in runs if run.get("plan_id") == plan_id]
+        plan_invocation = next(
+            (
+                dict(item)
+                for item in reversed(invocations)
+                if str(item.get("plan_id") or "") == plan_id
+            ),
+            {},
+        )
+        plan_tools = [
+            {
+                "tool_call_id": item.get("tool_call_id"),
+                "task_id": item.get("task_id"),
+                "tool_name": item.get("tool_name"),
+                "tool_label": item.get("tool_label"),
+                "provider": item.get("provider"),
+                "status": item.get("status"),
+                "duration_ms": item.get("duration_ms"),
+                "output_summary": item.get("output_summary"),
+            }
+            for item in tool_calls
+            if str(item.get("plan_id") or "") == plan_id
+        ]
         total_duration = sum(int(run.get("duration_ms") or 0) for run in plan_runs)
         plans.append(
             {
@@ -381,15 +424,83 @@ def _agent_execution(case: dict[str, Any]) -> dict[str, Any]:
                     for node in nodes
                 ),
                 "total_duration_ms": total_duration,
+                "agent_invocation": {
+                    "invocation_id": plan_invocation.get("invocation_id"),
+                    "provider": plan_invocation.get("provider") or "local",
+                    "caller": plan_invocation.get("caller") or "case_orchestrator",
+                    "duration_ms": plan_invocation.get("duration_ms"),
+                    "status": plan_invocation.get("status"),
+                },
+                "tool_calls": plan_tools,
                 "nodes": nodes,
             }
         )
     plans.reverse()
+    raw_orchestration = dict(case.get("orchestration_plan") or {})
+    orchestration_run_rows = list(case.get("orchestration_runs") or [])
+    latest_orchestration_runs: dict[str, dict[str, Any]] = {}
+    for run in orchestration_run_rows:
+        latest_orchestration_runs[str(run.get("task_type") or "")] = dict(run)
+    orchestration_plan = {}
+    if raw_orchestration:
+        assistance = dict(raw_orchestration.get("planner_assistance") or {})
+        orchestration_plan = {
+            "plan_id": raw_orchestration.get("plan_id"),
+            "label": raw_orchestration.get("label"),
+            "version": raw_orchestration.get("version"),
+            "planner": raw_orchestration.get("planner"),
+            "frozen": bool(raw_orchestration.get("frozen")),
+            "spec_hash": str(raw_orchestration.get("spec_hash") or "")[:12],
+            "status": raw_orchestration.get("status") or "running",
+            "planner_assistance": {
+                "status": assistance.get("status") or "not_configured",
+                "model": assistance.get("model") or "",
+                "proposal_adopted": bool(assistance.get("proposal_adopted")),
+                "rationale": assistance.get("rationale") or "",
+                "fallback_reason": assistance.get("fallback_reason") or "",
+            },
+            "nodes": [
+                {
+                    "task_id": task.get("task_id"),
+                    "task_type": task.get("task_type"),
+                    "label": task.get("label"),
+                    "executor": task.get("executor"),
+                    "executor_type": task.get("executor_type"),
+                    "condition": task.get("condition") or "",
+                    "depends_on": list(task.get("depends_on") or []),
+                    "status": latest_orchestration_runs.get(
+                        str(task.get("task_type") or ""), {}
+                    ).get("status") or "pending",
+                    "output_summary": latest_orchestration_runs.get(
+                        str(task.get("task_type") or ""), {}
+                    ).get("output_summary") or "等待主 Agent 调度",
+                    "duration_ms": latest_orchestration_runs.get(
+                        str(task.get("task_type") or ""), {}
+                    ).get("duration_ms"),
+                }
+                for task in raw_orchestration.get("tasks") or []
+            ],
+        }
     return {
         "mode": "controlled_dynamic_workflow",
         "parent_label": "信审与合同评审主流程",
+        "orchestration_plan": orchestration_plan,
         "plans": plans,
         "run_count": len(runs),
+        "agent_invocation_count": len(invocations),
+        "tool_call_count": len(tool_calls),
+        "unscoped_tool_calls": [
+            {
+                "tool_name": item.get("tool_name"),
+                "tool_label": item.get("tool_label"),
+                "provider": item.get("provider"),
+                "status": item.get("status"),
+                "duration_ms": item.get("duration_ms"),
+                "output_summary": item.get("output_summary"),
+            }
+            for item in tool_calls
+            if not item.get("plan_id")
+        ],
         "security_notice": "运行记录仅展示结构化摘要；敏感原文与脱敏映射不会写入执行日志。",
     }
 
@@ -400,9 +511,9 @@ def _agent_candidates(
     actor: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     reviews = list(case.get("agent_candidate_reviews") or [])
-    actor_roles = set((actor or {}).get("roles") or [])
+    actor_roles = _actor_roles(actor)
     can_manage = bool(
-        {"admin", "credit", "finance", "legal"}.intersection(actor_roles)
+        {"credit_approver", "legal_reviewer", "exception_approver"}.intersection(actor_roles)
     )
     rows: list[dict[str, Any]] = []
     for incident in reversed(list(case.get("agent_incidents") or [])):
@@ -488,22 +599,22 @@ def case_view(
     owner = dict(case.get("owner") or applicant)
     can_act = True
     if actor is not None and next_action:
-        actor_roles = set(actor.get("roles") or [])
+        actor_roles = _actor_roles(actor)
         required = {
-            "credit_approval": {"credit", "finance"},
-            "credit_supplement": {"sales", "finance"},
-            "special_release": {"director"},
-            "contract_upload": {"sales"},
-            "sales_revision": {"sales"},
-            "manager_approval": {"director", "ceo"},
-            "finance_legal_review": {"finance", "legal"},
+            "credit_approval": {"credit_approver"},
+            "credit_supplement": {"case_submitter"},
+            "special_release": {"exception_approver"},
+            "contract_upload": {"case_submitter"},
+            "sales_revision": {"case_submitter"},
+            "manager_approval": {"exception_approver"},
+            "finance_legal_review": {"legal_reviewer"},
         }.get(str(resolved_waiting or ""), set())
-        can_act = bool("admin" in actor_roles or required.intersection(actor_roles))
+        can_act = bool(required.intersection(actor_roles))
         if can_act and resolved_waiting in {
             "credit_supplement",
             "contract_upload",
             "sales_revision",
-        } and "admin" not in actor_roles:
+        }:
             owner_id = str(owner.get("user_id") or "")
             can_act = not owner_id or owner_id == str(actor.get("user_id") or "")
     records = _records(list(case.get("trace") or []))
@@ -574,7 +685,7 @@ def case_view(
         "owner": owner,
         "phase": "contract" if credit_status == "effective" else "credit",
         "permissions": {
-            "can_assign_owner": bool(actor and "admin" in set(actor.get("roles") or [])),
+            "can_assign_owner": bool(actor and "system_admin" in _actor_roles(actor)),
             "can_upload_contract": bool(
                 credit_status == "effective"
                 and resolved_waiting in {"contract_upload", "sales_revision"}
@@ -583,10 +694,10 @@ def case_view(
             "can_approve_credit": resolved_waiting == "credit_approval" and can_act,
             "can_upload_credit_documents": resolved_waiting == "credit_supplement" and can_act,
             "can_approve_special_release": resolved_waiting == "special_release" and can_act,
-            "can_retry_writeback": bool(actor and "admin" in set(actor.get("roles") or [])),
+            "can_retry_writeback": bool(actor and "system_admin" in _actor_roles(actor)),
             "can_run_mock_approval": bool(
                 actor
-                and "admin" in set(actor.get("roles") or [])
+                and "credit_approver" in _actor_roles(actor)
                 and resolved_waiting == "credit_approval"
                 and os.getenv("DONGJIANG_INTEGRATION_MODE", "").strip().lower()
                 == "mock"
@@ -708,8 +819,8 @@ def case_view(
         "structured_extraction_permissions": {
             "can_generate_credit": bool(
                 actor
-                and {"admin", "credit", "finance"}.intersection(
-                    set(actor.get("roles") or [])
+                and {"credit_approver"}.intersection(
+                    _actor_roles(actor)
                 )
                 and resolved_waiting == "credit_approval"
                 and any(
@@ -720,8 +831,8 @@ def case_view(
             ),
             "can_generate_contract": bool(
                 actor
-                and {"admin", "finance", "legal"}.intersection(
-                    set(actor.get("roles") or [])
+                and {"legal_reviewer", "exception_approver"}.intersection(
+                    _actor_roles(actor)
                 )
                 and resolved_waiting
                 in {"manager_approval", "finance_legal_review"}
@@ -735,8 +846,8 @@ def case_view(
         "translation_permissions": {
             "can_manage": bool(
                 actor
-                and {"admin", "sales", "finance", "legal"}.intersection(
-                    set(actor.get("roles") or [])
+                and {"case_submitter", "legal_reviewer"}.intersection(
+                    _actor_roles(actor)
                 )
                 and any(
                     item.get("document_kind") == "contract"
@@ -761,6 +872,17 @@ def case_view(
                 "extractor": item.get("extractor"),
                 "warnings": list(item.get("warnings") or []),
                 "features": dict(item.get("features") or {}),
+                "quality": dict(item.get("quality") or {}),
+                "text_enhancement": {
+                    "status": (item.get("text_enhancement") or {}).get("status"),
+                    "mode": (item.get("text_enhancement") or {}).get("mode"),
+                    "model": (item.get("text_enhancement") or {}).get("model"),
+                    "summary": (item.get("text_enhancement") or {}).get("summary"),
+                    "candidate_count": len(
+                        (item.get("text_enhancement") or {}).get("candidates") or []
+                    ),
+                    "limitation": (item.get("text_enhancement") or {}).get("limitation"),
+                },
                 "fragment_count": len(item.get("fragments") or []),
             }
             for item in case.get("source_documents") or []

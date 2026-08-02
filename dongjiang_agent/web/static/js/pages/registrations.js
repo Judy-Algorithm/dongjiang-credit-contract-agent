@@ -2,8 +2,11 @@ import {api} from "../api.js?v=20260801-core2"
 import {escapeHtml, dateTime} from "../format.js?v=20260801-core2"
 
 const roles = [
-  ["sales","销售"],["credit","信用管理"],["finance","财务"],["legal","法务"],
-  ["director","市场总监"],["ceo","集团管理层"],["admin","系统管理员"],
+  ["case_submitter","业务经办人"],
+  ["credit_approver","信用审批人"],
+  ["legal_reviewer","合同法务"],
+  ["exception_approver","授权审批人"],
+  ["system_admin","系统管理员"],
 ]
 
 export async function renderRegistrationsPage(root) {
@@ -21,16 +24,16 @@ export async function renderRegistrationsPage(root) {
     const card = button.closest("[data-application]")
     const error = card.querySelector(".error-box")
     const decision = button.dataset.registrationAction
-    const selected = Array.from(card.querySelectorAll("input[type=checkbox]:checked")).map((item) => item.value)
+    const selected = Array.from(card.querySelectorAll("input[type=radio]:checked")).map((item) => item.value)
     error.classList.add("hidden")
     if (decision === "approve" && !selected.length) {
-      error.textContent = "请至少选择一个角色。"
+      error.textContent = "请选择一个角色。"
       error.classList.remove("hidden")
       return
     }
     card.querySelectorAll("button").forEach((item) => item.disabled = true)
     try {
-      await api.reviewRegistration(card.dataset.application, {decision, roles:selected.length ? selected : ["sales"]})
+      await api.reviewRegistration(card.dataset.application, {decision, roles:selected.length ? selected : ["case_submitter"]})
       window.dispatchEvent(new CustomEvent("app:toast", {detail:decision === "approve" ? "账号已批准并发送通知" : "申请已拒绝并发送通知"}))
       window.dispatchEvent(new Event("app:navigate"))
     } catch (reason) {
@@ -44,7 +47,7 @@ export async function renderRegistrationsPage(root) {
 function applicationCard(user) {
   return `<article class="panel registration-card" data-application="${escapeHtml(user.user_id)}">
     <div class="registration-person"><span>${escapeHtml((user.display_name || user.username).slice(0, 1))}</span><div><h2>${escapeHtml(user.display_name)}</h2><p>${escapeHtml(user.username)} · ${escapeHtml(user.email)}</p><small>提交于 ${dateTime(user.created_at)}，邮箱已验证</small></div></div>
-    <fieldset class="role-picker"><legend>批准后角色</legend>${roles.map(([value, label]) => `<label><input type="checkbox" value="${value}" ${value === "sales" ? "checked" : ""}><span>${label}</span></label>`).join("")}</fieldset>
+    <fieldset class="role-picker"><legend>批准后角色（只能选择一个）</legend>${roles.map(([value, label]) => `<label><input type="radio" name="role-${escapeHtml(user.user_id)}" value="${value}" ${value === "case_submitter" ? "checked" : ""}><span>${label}</span></label>`).join("")}</fieldset>
     <div class="error-box hidden"></div>
     <div class="registration-actions"><button class="danger" type="button" data-registration-action="reject">拒绝申请</button><button class="primary" type="button" data-registration-action="approve">批准并启用</button></div>
   </article>`

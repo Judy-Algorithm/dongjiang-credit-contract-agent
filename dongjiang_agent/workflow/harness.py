@@ -19,6 +19,7 @@ from ..domain.models import AuditCase, CreditProfile, utc_now
 from ..integrations import IntegrationBundle
 from ..llm import StructuredFieldExtractor
 from ..persistence import CaseRepository
+from ..runtime import AgentRegistry, LocalAgentRegistry, ToolRegistry
 from .codec import case_from_state, checkpoint_dict
 from .dynamic import (
     RETRYABLE_ANALYSIS_TASKS,
@@ -36,6 +37,23 @@ from .candidate_reviews import (
     latest_candidate,
 )
 from .nodes import WorkflowNodes
+
+
+LEGACY_ACTOR_ROLE_MAP = {
+    "admin": "system_admin",
+    "sales": "case_submitter",
+    "credit": "credit_approver",
+    "finance": "credit_approver",
+    "legal": "legal_reviewer",
+    "director": "exception_approver",
+    "ceo": "exception_approver",
+}
+
+
+def _actor_roles(actor: "ActorContext") -> set[str]:
+    return {
+        LEGACY_ACTOR_ROLE_MAP.get(str(role), str(role)) for role in actor.roles
+    }
 
 
 @dataclass(slots=True, frozen=True)
@@ -72,13 +90,13 @@ class DongjiangWorkflowHarness:
     """Stable API used by Web/CRM/OA; LangGraph stays an internal detail."""
 
     ROLE_REQUIREMENTS = {
-        "credit_approval": {"credit", "finance"},
-        "credit_supplement": {"sales", "finance"},
-        "special_release": {"director"},
-        "contract_upload": {"sales"},
-        "sales_revision": {"sales"},
-        "manager_approval": {"director", "ceo"},
-        "finance_legal_review": {"finance", "legal"},
+        "credit_approval": {"credit_approver"},
+        "credit_supplement": {"case_submitter"},
+        "special_release": {"exception_approver"},
+        "contract_upload": {"case_submitter"},
+        "sales_revision": {"case_submitter"},
+        "manager_approval": {"exception_approver"},
+        "finance_legal_review": {"legal_reviewer"},
     }
 
     def __init__(
@@ -94,6 +112,8 @@ class DongjiangWorkflowHarness:
         execution_dir: str | Path | None = None,
         integrations: IntegrationBundle | None = None,
         policy: dict[str, Any] | None = None,
+        agent_registry: AgentRegistry | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self.repository = repository or CaseRepository()
         self.checkpoint_path = Path(checkpoint_path)
@@ -143,8 +163,15 @@ class DongjiangWorkflowHarness:
             ),
             integrations=integration_bundle,
             policy=policy,
+            tool_registry=tool_registry,
         )
-        self.graph = build_workflow(self.nodes, checkpointer=self.checkpointer)
+        self.agent_registry = agent_registry or LocalAgentRegistry()
+        self.tool_registry = self.nodes.tool_registry
+        self.graph = build_workflow(
+            self.nodes,
+            checkpointer=self.checkpointer,
+            agent_registry=self.agent_registry,
+        )
 
     @staticmethod
     def _config(case_id: str) -> dict[str, Any]:
@@ -263,6 +290,8 @@ class DongjiangWorkflowHarness:
             "writeback": {},
             "oa_submission": {},
             "workflow_plans": [],
+            "orchestration_plan": None,
+            "orchestration_runs": [],
             "agent_runs": [],
             "agent_task_results": [],
             "execution_audits": [],
@@ -317,13 +346,13 @@ class DongjiangWorkflowHarness:
         extractor: StructuredFieldExtractor | None = None,
     ) -> tuple[WorkflowRun, dict[str, Any]]:
         allowed_roles = (
-            {"admin", "credit", "finance", "system"}
+            {"credit_approver", "system"}
             if document_kind == "credit"
-            else {"admin", "finance", "legal", "system"}
+            else {"legal_reviewer", "exception_approver", "system"}
             if document_kind == "contract"
             else set()
         )
-        if not allowed_roles.intersection(actor.roles):
+        if not allowed_roles.intersection(_actor_roles(actor)):
             raise PermissionError("当前角色不能发起AI结构化提取。")
         current = self.get(case_id)
         if document_kind == "credit" and current.waiting_for != "credit_approval":
@@ -433,11 +462,11 @@ class DongjiangWorkflowHarness:
         if extraction is None:
             raise KeyError("AI结构化提取记录不存在。")
         allowed_roles = (
-            {"admin", "credit", "finance", "system"}
+            {"credit_approver", "system"}
             if extraction.get("document_kind") == "credit"
-            else {"admin", "finance", "legal", "system"}
+            else {"legal_reviewer", "exception_approver", "system"}
         )
-        if not allowed_roles.intersection(actor.roles):
+        if not allowed_roles.intersection(_actor_roles(actor)):
             raise PermissionError("当前角色不能处置AI结构化提取候选。")
         if extraction.get("status") != "pending":
             raise ValueError("该结构化提取候选已完成处置或核验失败。")
@@ -848,7 +877,7 @@ class DongjiangWorkflowHarness:
         assignee: dict[str, Any] | None = None,
         task_id: str = "",
     ) -> tuple[WorkflowRun, dict[str, Any]]:
-        if "admin" not in actor.roles and "system" not in actor.roles:
+        if not {"system_admin", "system"}.intersection(_actor_roles(actor)):
             raise PermissionError("只有管理员可以处置Agent运行异常。")
         if action not in {"acknowledge", "assign", "rerun", "resolve"}:
             raise ValueError("未知的Agent异常处置动作。")
@@ -984,8 +1013,13 @@ class DongjiangWorkflowHarness:
         reason: str,
         request_id: str = "",
     ) -> tuple[WorkflowRun, dict[str, Any]]:
-        allowed_roles = {"admin", "credit", "finance", "legal", "system"}
-        if not allowed_roles.intersection(actor.roles):
+        allowed_roles = {
+            "credit_approver",
+            "legal_reviewer",
+            "exception_approver",
+            "system",
+        }
+        if not allowed_roles.intersection(_actor_roles(actor)):
             raise PermissionError("当前角色不能提交或拒绝Agent候选结果。")
         if action not in {"request_adoption", "reject_candidate"}:
             raise ValueError("未知的Agent候选处置动作。")
@@ -1267,12 +1301,13 @@ class DongjiangWorkflowHarness:
         return self._run_result(case_id)
 
     def _authorize(self, waiting_for: str | None, actor: ActorContext) -> None:
-        if "system" in actor.roles or "admin" in actor.roles:
+        actor_roles = _actor_roles(actor)
+        if "system" in actor_roles:
             return
         required = self.ROLE_REQUIREMENTS.get(str(waiting_for or ""), set())
-        if required and not required.intersection(actor.roles):
+        if required and not required.intersection(actor_roles):
             raise PermissionError(
-                f"{waiting_for} 需要角色 {sorted(required)}，当前角色为 {sorted(actor.roles)}。"
+                f"{waiting_for} 需要角色 {sorted(required)}，当前角色为 {sorted(actor_roles)}。"
             )
 
     def _archive_approval_evidence(

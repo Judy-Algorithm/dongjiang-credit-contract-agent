@@ -627,6 +627,25 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
 .agent-plan-status small { color: var(--muted); }
 .agent-plan-tags, .agent-node-tags { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
 .agent-plan-tags span, .agent-node-tags span { padding: 3px 6px; color: var(--muted); font-size: 9px; line-height: 1.35; border: 1px solid var(--hairline); background: var(--surface-soft); }
+.agent-tools { padding: 16px 20px; border-top: 1px solid var(--hairline-soft); }
+.agent-tool-list { display: grid; gap: 8px; margin-top: 10px; }
+.agent-tool-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1.4fr); align-items: center; gap: 14px; padding: 10px 12px; border: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.agent-tool-list span { display: flex; flex-direction: column; gap: 2px; }
+.agent-tool-list small { color: var(--muted); font-size: 10px; }
+.orchestration-plan { overflow: hidden; border: 1px solid var(--hairline); border-radius: 8px; background: var(--canvas); }
+.orchestration-rationale { display: flex; gap: 10px; padding: 10px 20px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.orchestration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 16px 20px 20px; }
+.orchestration-node { min-width: 0; padding: 12px; border: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.orchestration-node header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }
+.orchestration-node header div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.orchestration-node header small, .orchestration-node footer, .orchestration-node p { color: var(--muted); font-size: 10px; }
+.orchestration-node header b { overflow: hidden; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.orchestration-node header em { color: var(--muted); font-size: 10px; font-style: normal; }
+.orchestration-node p { min-height: 30px; margin: 10px 0; line-height: 1.5; }
+.orchestration-node footer { display: flex; flex-direction: column; gap: 3px; border: 0; }
+.orchestration-node.completed { border-color: color-mix(in srgb, var(--success) 30%, var(--hairline)); }
+.orchestration-node.waiting { border-color: color-mix(in srgb, var(--warning) 40%, var(--hairline)); }
+.orchestration-node.failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--hairline)); }
 .agent-runtime { padding: 12px 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; border-bottom: 1px solid var(--hairline-soft); background: var(--surface-soft); }
 .agent-runtime small, .agent-runtime b, .agent-runtime code { display: block; overflow-wrap: anywhere; }
 .agent-runtime small { color: var(--muted); font-size: 9px; }
@@ -958,6 +977,8 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
   .modal-panel { padding: 22px 18px; }
   .agent-parent, .agent-plan-head { align-items: stretch; flex-direction: column; }
   .agent-plan-status { align-items: flex-start; }
+  .agent-tool-list > div { grid-template-columns: 1fr; gap: 5px; }
+  .orchestration-grid { grid-template-columns: 1fr; }
   .agent-runtime { grid-template-columns: 1fr 1fr; }
   .agent-lanes { padding: 6px 14px 14px; }
   .agent-audit { grid-template-columns: 1fr; }

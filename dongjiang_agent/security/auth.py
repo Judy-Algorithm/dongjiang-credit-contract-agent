@@ -15,23 +15,35 @@ from uuid import uuid4
 
 
 ALLOWED_ROLES = {
-    "admin",
-    "sales",
-    "credit",
-    "finance",
-    "legal",
-    "director",
-    "ceo",
+    "case_submitter",
+    "credit_approver",
+    "legal_reviewer",
+    "exception_approver",
+    "system_admin",
 }
 ROLE_LABELS = {
-    "admin": "系统管理员",
-    "sales": "销售",
-    "credit": "信用管理",
-    "finance": "财务",
-    "legal": "法务",
-    "director": "市场总监",
-    "ceo": "集团管理层",
+    "case_submitter": "业务经办人",
+    "credit_approver": "信用审批人",
+    "legal_reviewer": "合同法务",
+    "exception_approver": "授权审批人",
+    "system_admin": "系统管理员",
 }
+LEGACY_ROLE_MAP = {
+    "admin": "system_admin",
+    "sales": "case_submitter",
+    "credit": "credit_approver",
+    "finance": "credit_approver",
+    "legal": "legal_reviewer",
+    "director": "exception_approver",
+    "ceo": "exception_approver",
+}
+ROLE_MIGRATION_PRIORITY = (
+    "system_admin",
+    "legal_reviewer",
+    "exception_approver",
+    "credit_approver",
+    "case_submitter",
+)
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,39}$")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PASSWORD_ITERATIONS = 240_000
@@ -69,7 +81,7 @@ def _token_digest(token: str) -> str:
 
 
 def _public_user(row: sqlite3.Row) -> dict[str, Any]:
-    roles = json.loads(str(row["roles_json"] or "[]"))
+    roles = _normalize_stored_roles(json.loads(str(row["roles_json"] or "[]")))
     return {
         "user_id": row["user_id"],
         "username": row["username"],
@@ -82,7 +94,17 @@ def _public_user(row: sqlite3.Row) -> dict[str, Any]:
         "must_change_password": bool(row["must_change_password"]),
         "last_login_at": row["last_login_at"],
         "created_at": row["created_at"],
+}
+
+
+def _normalize_stored_roles(raw_roles: Any) -> list[str]:
+    mapped = {
+        LEGACY_ROLE_MAP.get(str(item).strip(), str(item).strip())
+        for item in (raw_roles or [])
+        if str(item).strip()
     }
+    selected = next((role for role in ROLE_MIGRATION_PRIORITY if role in mapped), "")
+    return [selected] if selected else []
 
 
 class AuthStore:
@@ -215,6 +237,49 @@ class AuthStore:
             """
         )
         self.connection.commit()
+        self._migrate_roles()
+
+    def _migrate_roles(self) -> None:
+        rows = self.connection.execute(
+            "SELECT user_id, username, roles_json FROM users"
+        ).fetchall()
+        changed: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                previous = json.loads(str(row["roles_json"] or "[]"))
+            except json.JSONDecodeError:
+                previous = []
+            migrated = _normalize_stored_roles(previous)
+            if not migrated:
+                migrated = ["case_submitter"]
+            if previous == migrated:
+                continue
+            self.connection.execute(
+                "UPDATE users SET roles_json = ?, updated_at = ? WHERE user_id = ?",
+                (json.dumps(migrated), _iso(), row["user_id"]),
+            )
+            changed.append(
+                {
+                    "user_id": row["user_id"],
+                    "username": row["username"],
+                    "previous_roles": previous,
+                    "role": migrated[0],
+                }
+            )
+        if changed:
+            self.connection.commit()
+            for item in changed:
+                self.audit(
+                    "user.role_migrated",
+                    target_type="user",
+                    target_id=str(item["user_id"]),
+                    detail={
+                        "username": item["username"],
+                        "previous_roles": item["previous_roles"],
+                        "role": item["role"],
+                        "policy": "single_role_v1",
+                    },
+                )
 
     @staticmethod
     def validate_password(password: str) -> None:
@@ -234,12 +299,18 @@ class AuthStore:
 
     @staticmethod
     def validate_roles(roles: list[str] | tuple[str, ...]) -> list[str]:
-        normalized = sorted({str(item).strip() for item in roles if str(item).strip()})
+        normalized = sorted(
+            {
+                LEGACY_ROLE_MAP.get(str(item).strip(), str(item).strip())
+                for item in roles
+                if str(item).strip()
+            }
+        )
         unknown = set(normalized) - ALLOWED_ROLES
         if unknown:
             raise ValueError(f"不支持的角色：{', '.join(sorted(unknown))}")
-        if not normalized:
-            raise ValueError("请至少选择一个角色。")
+        if len(normalized) != 1:
+            raise ValueError("一个账号必须且只能选择单个角色。")
         return normalized
 
     def setup_required(self) -> bool:
@@ -355,7 +426,7 @@ class AuthStore:
             display_name=display_name,
             email=email,
             password=password,
-            roles=["sales"],
+            roles=["case_submitter"],
             active=False,
             registration_status="pending",
             must_change_password=False,
@@ -366,11 +437,11 @@ class AuthStore:
             actor=user,
             target_type="user",
             target_id=str(user["user_id"]),
-            detail={"role": "sales"},
+            detail={"role": "case_submitter"},
             remote_address=remote_address,
         )
         self.notify_roles(
-            ["admin"],
+            ["system_admin"],
             category="registration",
             title="新的注册申请",
             body=f"{user['display_name']}（{user['username']}）已完成邮箱验证，等待审核。",
@@ -552,7 +623,7 @@ class AuthStore:
             display_name=display_name,
             password=password,
             email=email,
-            roles=["admin"],
+            roles=["system_admin"],
             must_change_password=False,
             remote_address=remote_address,
         )
@@ -608,7 +679,7 @@ class AuthStore:
         normalized = decision.strip().lower()
         if normalized not in {"approve", "reject"}:
             raise ValueError("审核决定必须是批准或拒绝。")
-        next_roles = self.validate_roles(roles or ["sales"])
+        next_roles = self.validate_roles(roles or ["case_submitter"])
         active = normalized == "approve"
         status = "approved" if active else "rejected"
         self.connection.execute(
@@ -668,11 +739,11 @@ class AuthStore:
         )
         if existing["username"] == (actor or {}).get("username") and not next_active:
             raise ValueError("不能停用当前登录账号。")
-        if "admin" in existing["roles"] and (
-            not next_active or "admin" not in next_roles
+        if "system_admin" in existing["roles"] and (
+            not next_active or "system_admin" not in next_roles
         ):
             row = self.connection.execute(
-                "SELECT COUNT(*) AS count FROM users WHERE active = 1 AND roles_json LIKE '%\"admin\"%'"
+                "SELECT COUNT(*) AS count FROM users WHERE active = 1 AND roles_json LIKE '%\"system_admin\"%'"
             ).fetchone()
             if row and int(row["count"]) <= 1:
                 raise ValueError("系统必须保留至少一个启用的管理员。")
@@ -1115,7 +1186,12 @@ class AuthStore:
         *,
         exclude_user_id: str = "",
     ) -> list[dict[str, Any]]:
-        targets = set(self.validate_roles(roles))
+        targets = {str(item).strip() for item in roles if str(item).strip()}
+        unknown = targets - ALLOWED_ROLES
+        if unknown:
+            raise ValueError(f"不支持的角色：{', '.join(sorted(unknown))}")
+        if not targets:
+            return []
         rows = self.connection.execute(
             "SELECT * FROM users WHERE active = 1 AND registration_status = 'approved'"
         ).fetchall()
@@ -1123,8 +1199,8 @@ class AuthStore:
         for row in rows:
             if str(row["user_id"]) == exclude_user_id:
                 continue
-            current = set(json.loads(str(row["roles_json"] or "[]")))
-            if "admin" not in current and not current.intersection(targets):
+            current = set(_normalize_stored_roles(json.loads(str(row["roles_json"] or "[]"))))
+            if not current.intersection(targets):
                 continue
             users.append(_public_user(row))
         return users

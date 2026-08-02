@@ -216,7 +216,11 @@ class AuditCase:
     status: str = "created"
     trace: list[dict[str, Any]] = field(default_factory=list)
     workflow_plans: list[dict[str, Any]] = field(default_factory=list)
+    orchestration_plan: dict[str, Any] = field(default_factory=dict)
+    orchestration_runs: list[dict[str, Any]] = field(default_factory=list)
     agent_runs: list[dict[str, Any]] = field(default_factory=list)
+    agent_invocations: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     execution_audits: list[dict[str, Any]] = field(default_factory=list)
     agent_incidents: list[dict[str, Any]] = field(default_factory=list)
     agent_candidate_reviews: list[dict[str, Any]] = field(default_factory=list)
