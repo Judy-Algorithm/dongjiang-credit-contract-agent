@@ -1123,21 +1123,33 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["api", "users"]:
                 self._require_roles(user, "system_admin")
                 with AuthStore() as store:
-                    if "temporary_password" in payload:
-                        store.reset_password(
-                            parts[2],
-                            str(payload.get("temporary_password") or ""),
-                            actor=user,
-                            remote_address=self._remote_address(),
-                        )
+                    temporary_password = str(
+                        payload.get("temporary_password") or ""
+                    ).strip()
+                    if temporary_password:
+                        store.validate_password(temporary_password)
                     updated = store.update_user(
                         parts[2],
+                        username=str(payload["username"]) if "username" in payload else None,
+                        display_name=(
+                            str(payload["display_name"])
+                            if "display_name" in payload
+                            else None
+                        ),
                         roles=list(payload["roles"]) if "roles" in payload else None,
                         active=bool(payload["active"]) if "active" in payload else None,
                         email=str(payload["email"]) if "email" in payload else None,
                         actor=user,
                         remote_address=self._remote_address(),
                     )
+                    if temporary_password:
+                        store.reset_password(
+                            parts[2],
+                            temporary_password,
+                            actor=user,
+                            remote_address=self._remote_address(),
+                        )
+                        updated = store.get_user(parts[2]) or updated
                 self._json(200, {"ok": True, "user": updated})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "cases"]:

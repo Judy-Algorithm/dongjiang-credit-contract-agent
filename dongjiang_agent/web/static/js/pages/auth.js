@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260802-five-role"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260802-five-role"
-import {navigate} from "../router.js?v=20260802-five-role"
-import {escapeHtml} from "../format.js?v=20260802-five-role"
+import {api} from "../api.js?v=20260802-user-editor"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260802-user-editor"
+import {navigate} from "../router.js?v=20260802-user-editor"
+import {escapeHtml} from "../format.js?v=20260802-user-editor"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `
@@ -28,7 +28,7 @@ export function renderLoginPage(root) {
 export function renderRegisterPage(root) {
   root.innerHTML = authLayout("注册账号", "验证邮箱后提交账号申请", `
     <form id="registerForm" class="auth-form">
-      <label>姓名<input id="displayName" autocomplete="name" required autofocus></label>
+      <label>昵称<input id="displayName" autocomplete="nickname" required autofocus></label>
       <label>用户名<input id="username" autocomplete="username" minlength="3" maxlength="40" required></label>
       <label>邮箱<div class="code-input-row"><input id="email" type="email" autocomplete="email" required><button id="sendRegistrationCode" class="secondary" type="button">发送验证码</button></div></label>
       <label>邮箱验证码<input id="verificationCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6位数字" required></label>
@@ -137,7 +137,7 @@ export function renderForgotPasswordPage(root) {
 export function renderSetupPage(root) {
   root.innerHTML = authLayout("初始化管理员", "首次启动只需完成一次", `
     <form id="setupForm" class="auth-form">
-      <label>姓名<input id="displayName" autocomplete="name" required autofocus></label>
+      <label>昵称<input id="displayName" autocomplete="nickname" required autofocus></label>
       <label>管理员用户名<input id="username" autocomplete="username" minlength="3" required></label>
       <label>管理员邮箱<input id="email" type="email" autocomplete="email" required></label>
       <label>密码<input id="password" type="password" autocomplete="new-password" minlength="10" required></label>

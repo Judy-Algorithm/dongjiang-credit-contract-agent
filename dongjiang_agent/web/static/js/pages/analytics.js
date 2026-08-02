@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260802-five-role"
-import {escapeHtml} from "../format.js?v=20260802-five-role"
-import {navigate} from "../router.js?v=20260802-five-role"
+import {api} from "../api.js?v=20260802-user-editor"
+import {escapeHtml} from "../format.js?v=20260802-user-editor"
+import {navigate} from "../router.js?v=20260802-user-editor"
 
 const rangeOptions = [[7,"近7天"],[30,"近30天"],[90,"近90天"],[0,"全部"]]
 

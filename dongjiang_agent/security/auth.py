@@ -336,7 +336,7 @@ class AuthStore:
             raise ValueError("用户名需为3-40位字母、数字、点、下划线或连字符。")
         normalized_name = display_name.strip()
         if not normalized_name:
-            raise ValueError("请填写姓名。")
+            raise ValueError("请填写昵称。")
         self.validate_password(password)
         normalized_email = self.normalize_email(email, required=False)
         normalized_roles = self.validate_roles(roles)
@@ -399,7 +399,7 @@ class AuthStore:
         if not USERNAME_PATTERN.fullmatch(normalized_username):
             raise ValueError("用户名需为3-40位字母、数字、点、下划线或连字符。")
         if not display_name.strip():
-            raise ValueError("请填写姓名。")
+            raise ValueError("请填写昵称。")
         normalized_email = self.normalize_email(email)
         self.validate_password(password)
         duplicate = self.connection.execute(
@@ -719,6 +719,8 @@ class AuthStore:
         self,
         user_id: str,
         *,
+        username: str | None = None,
+        display_name: str | None = None,
         roles: list[str] | None = None,
         active: bool | None = None,
         email: str | None = None,
@@ -728,6 +730,20 @@ class AuthStore:
         existing = self.get_user(user_id)
         if not existing:
             raise KeyError("用户不存在。")
+        next_username = (
+            username.strip().lower()
+            if username is not None
+            else str(existing["username"])
+        )
+        if not USERNAME_PATTERN.fullmatch(next_username):
+            raise ValueError("用户名需为3-40位字母、数字、点、下划线或连字符。")
+        next_display_name = (
+            display_name.strip()
+            if display_name is not None
+            else str(existing["display_name"])
+        )
+        if not next_display_name:
+            raise ValueError("请填写昵称。")
         next_roles = self.validate_roles(roles) if roles is not None else existing["roles"]
         next_active = bool(active) if active is not None else bool(existing["active"])
         if existing.get("registration_status") != "approved" and next_active:
@@ -749,11 +765,22 @@ class AuthStore:
                 raise ValueError("系统必须保留至少一个启用的管理员。")
         try:
             self.connection.execute(
-                "UPDATE users SET roles_json = ?, active = ?, email = ?, updated_at = ? WHERE user_id = ?",
-                (json.dumps(next_roles), int(next_active), next_email or None, _iso(), user_id),
+                """
+                UPDATE users SET username = ?, display_name = ?, roles_json = ?,
+                    active = ?, email = ?, updated_at = ? WHERE user_id = ?
+                """,
+                (
+                    next_username,
+                    next_display_name,
+                    json.dumps(next_roles),
+                    int(next_active),
+                    next_email or None,
+                    _iso(),
+                    user_id,
+                ),
             )
         except sqlite3.IntegrityError as exc:
-            raise ValueError("该邮箱已被其他账号使用。") from exc
+            raise ValueError("用户名或邮箱已被其他账号使用。") from exc
         if not next_active:
             self.connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         self.connection.commit()
@@ -762,7 +789,13 @@ class AuthStore:
             actor=actor,
             target_type="user",
             target_id=user_id,
-            detail={"roles": next_roles, "active": next_active, "email_updated": email is not None},
+            detail={
+                "roles": next_roles,
+                "active": next_active,
+                "username_updated": username is not None,
+                "display_name_updated": display_name is not None,
+                "email_updated": email is not None,
+            },
             remote_address=remote_address,
         )
         return self.get_user(user_id) or {}

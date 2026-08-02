@@ -17,24 +17,24 @@ const navigationSummary = {unread:0, pendingRegistrations:0, loadedAt:0, inFligh
 const NAVIGATION_SUMMARY_TTL = 15000
 let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260802-five-role",
-  register: "./pages/auth.js?v=20260802-five-role",
-  "forgot-password": "./pages/auth.js?v=20260802-five-role",
-  setup: "./pages/auth.js?v=20260802-five-role",
-  "change-password": "./pages/auth.js?v=20260802-five-role",
-  cases: "./pages/cases.js?v=20260802-five-role",
-  "case-new": "./pages/case-new.js?v=20260802-five-role",
-  "case-detail": "./pages/case-detail.js?v=20260802-five-role",
-  "case-action": "./pages/case-action.js?v=20260802-five-role",
-  users: "./pages/users.js?v=20260802-five-role",
-  audit: "./pages/audit.js?v=20260802-five-role",
-  writebacks: "./pages/writebacks.js?v=20260802-five-role",
-  registrations: "./pages/registrations.js?v=20260802-five-role",
-  notifications: "./pages/notifications.js?v=20260802-five-role",
-  operations: "./pages/operations.js?v=20260802-five-role",
-  "agent-operations": "./pages/agent-operations.js?v=20260802-five-role",
-  analytics: "./pages/analytics.js?v=20260802-five-role",
-  benchmarks: "./pages/benchmark.js?v=20260802-five-role",
+  login: "./pages/auth.js?v=20260802-user-editor",
+  register: "./pages/auth.js?v=20260802-user-editor",
+  "forgot-password": "./pages/auth.js?v=20260802-user-editor",
+  setup: "./pages/auth.js?v=20260802-user-editor",
+  "change-password": "./pages/auth.js?v=20260802-user-editor",
+  cases: "./pages/cases.js?v=20260802-user-editor",
+  "case-new": "./pages/case-new.js?v=20260802-user-editor",
+  "case-detail": "./pages/case-detail.js?v=20260802-user-editor",
+  "case-action": "./pages/case-action.js?v=20260802-user-editor",
+  users: "./pages/users.js?v=20260802-user-editor",
+  audit: "./pages/audit.js?v=20260802-user-editor",
+  writebacks: "./pages/writebacks.js?v=20260802-user-editor",
+  registrations: "./pages/registrations.js?v=20260802-user-editor",
+  notifications: "./pages/notifications.js?v=20260802-user-editor",
+  operations: "./pages/operations.js?v=20260802-user-editor",
+  "agent-operations": "./pages/agent-operations.js?v=20260802-user-editor",
+  analytics: "./pages/analytics.js?v=20260802-user-editor",
+  benchmarks: "./pages/benchmark.js?v=20260802-user-editor",
 }
 
 async function loadModule(path) {
@@ -58,9 +58,9 @@ async function loadPageModule(routeName) {
 
 async function bootstrap() {
   const [authModule, apiModule, routerModule] = await Promise.all([
-    loadModule("./auth.js?v=20260802-five-role"),
-    loadModule("./api.js?v=20260802-five-role"),
-    loadModule("./router.js?v=20260802-five-role"),
+    loadModule("./auth.js?v=20260802-user-editor"),
+    loadModule("./api.js?v=20260802-user-editor"),
+    loadModule("./router.js?v=20260802-user-editor"),
   ])
   ;({clearAuth, currentAuth, hasRole, loadAuth} = authModule)
   api = apiModule.api
@@ -171,11 +171,12 @@ function renderHeader(auth, route) {
       <a href="/cases" data-link data-nav="cases">案件</a>
       ${hasRole("case_submitter") ? `<a href="/cases/new" data-link data-nav="new">发起信审</a>` : ""}
       <a href="/notifications" data-link data-nav="notifications">通知<span id="notificationCount" class="nav-count ${unread ? "" : "hidden"}">${Math.min(unread, 99)}</span></a>
+      ${hasRole("system_admin") ? `<a href="/operations" data-link data-nav="operations">时效运营</a><a href="/agent-operations" data-link data-nav="agent-operations">Agent运维</a><a href="/analytics" data-link data-nav="analytics">管理分析</a><a href="/benchmarks" data-link data-nav="benchmarks">质量评测</a><a href="/audit" data-link data-nav="audit">审计</a><a href="/writebacks" data-link data-nav="writebacks">回写运维</a>` : ""}
       <div class="account-menu">
         <button id="accountButton" class="account-button" type="button" aria-label="${escapeText(user.display_name || user.username)}账户菜单${pendingRegistrations ? `，${pendingRegistrations}个注册申请待审核` : ""}"><span>${escapeText((user.display_name || user.username).slice(0,1))}</span><b>${escapeText(user.display_name || user.username)}</b><em id="accountRegistrationCount" class="account-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</em></button>
         <div id="accountPopover" class="account-popover hidden">
           <strong>${escapeText(user.display_name)}</strong><small>${escapeText(user.role_labels.join(" · "))}</small>
-          ${hasRole("system_admin") ? `<span class="account-section-label">系统管理</span><a class="${route.name === "users" ? "current" : ""}" href="/users" data-link data-account-nav="users">用户管理</a><a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link data-account-nav="registrations">注册审核<span id="registrationMenuCount" class="account-menu-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</span></a><a class="${route.name === "operations" ? "current" : ""}" href="/operations" data-link data-account-nav="operations">时效运营</a><a class="${route.name === "agent-operations" ? "current" : ""}" href="/agent-operations" data-link data-account-nav="agent-operations">Agent运维</a><a class="${route.name === "analytics" ? "current" : ""}" href="/analytics" data-link data-account-nav="analytics">管理分析</a><a class="${route.name === "benchmarks" ? "current" : ""}" href="/benchmarks" data-link data-account-nav="benchmarks">质量评测</a><a class="${route.name === "audit" ? "current" : ""}" href="/audit" data-link data-account-nav="audit">安全审计</a><a class="${route.name === "writebacks" ? "current" : ""}" href="/writebacks" data-link data-account-nav="writebacks">回写运维</a>` : ""}
+          ${hasRole("system_admin") ? `<span class="account-section-label">系统管理</span><a class="${route.name === "users" ? "current" : ""}" href="/users" data-link data-account-nav="users">用户管理</a><a class="${route.name === "registrations" ? "current" : ""}" href="/registrations" data-link data-account-nav="registrations">注册审核<span id="registrationMenuCount" class="account-menu-count ${pendingRegistrations ? "" : "hidden"}">${Math.min(pendingRegistrations, 99)}</span></a>` : ""}
           <a href="/change-password" data-link>修改密码</a><button id="logoutButton" type="button">退出登录</button>
         </div>
       </div>

@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260802-five-role"
-import {escapeHtml} from "../format.js?v=20260802-five-role"
-import {navigate} from "../router.js?v=20260802-five-role"
+import {api, encodeFiles} from "../api.js?v=20260802-user-editor"
+import {escapeHtml} from "../format.js?v=20260802-user-editor"
+import {navigate} from "../router.js?v=20260802-user-editor"
 
 const draftKey = "dongjiang:new-case-draft"
 

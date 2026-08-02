@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-five-role"
-import {dateTime, escapeHtml} from "../format.js?v=20260802-five-role"
+import {api} from "../api.js?v=20260802-user-editor"
+import {dateTime, escapeHtml} from "../format.js?v=20260802-user-editor"
 
 export async function renderOperationsPage(root) {
   const data = await api.getSlaDashboard()

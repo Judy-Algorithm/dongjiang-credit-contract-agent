@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-five-role"
-import {dateTime, escapeHtml} from "../format.js?v=20260802-five-role"
+import {api} from "../api.js?v=20260802-user-editor"
+import {dateTime, escapeHtml} from "../format.js?v=20260802-user-editor"
 
 const severityLabels = {
   critical:"严重异常", warning:"需要关注", legacy:"历史计划",

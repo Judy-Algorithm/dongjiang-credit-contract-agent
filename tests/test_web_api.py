@@ -211,7 +211,23 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("单个角色", updated["error"])
 
-        self.assertEqual(self.login("finance.a", "InitialPass123")[0], 200)
+        status, updated = self.request(
+            "PATCH",
+            f"/api/users/{user['user_id']}",
+            {
+                "display_name": "信用审批昵称",
+                "username": "credit.renamed",
+                "email": "credit-renamed@example.com",
+                "roles": ["credit_approver"],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["user"]["display_name"], "信用审批昵称")
+        self.assertEqual(updated["user"]["username"], "credit.renamed")
+        self.assertEqual(updated["user"]["email"], "credit-renamed@example.com")
+
+        self.assertEqual(self.login("finance.a", "InitialPass123")[0], 401)
+        self.assertEqual(self.login("credit.renamed", "InitialPass123")[0], 200)
         status, changed = self.request(
             "POST",
             "/api/auth/change-password",
@@ -222,7 +238,7 @@ class WebApiTests(unittest.TestCase):
         status, unauthenticated = self.request("GET", "/api/cases")
         self.assertEqual(status, 401)
         self.assertFalse(unauthenticated["ok"])
-        self.assertEqual(self.login("finance.a", "UpdatedPass456")[0], 200)
+        self.assertEqual(self.login("credit.renamed", "UpdatedPass456")[0], 200)
 
     def test_admin_can_assign_case_owner_to_sales_user(self):
         sales = self.create_user("owner.sales", "案件销售", ["sales"])
@@ -714,7 +730,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("immutable", response.headers["Cache-Control"])
         self.assertNotIn('data-nav="tasks">我的待办', javascript)
         self.assertIn('href="/cases/new" data-link data-nav="new">发起信审', javascript)
-        self.assertIn('href="/agent-operations" data-link data-account-nav="agent-operations">Agent运维', javascript)
+        self.assertIn('href="/agent-operations" data-link data-nav="agent-operations">Agent运维', javascript)
         self.assertNotIn('href="/users" data-link data-nav="users">用户', javascript)
         self.assertNotIn('class="primary small" href="/cases/new"', javascript)
         account_start = javascript.index('<div id="accountPopover"')
