@@ -50,6 +50,7 @@ EXIT_STAGES = {
     "sales_revision": {"sales.revised", "sales.closed"},
     "manager_approval": {"manager.approved", "manager.rejected"},
     "finance_legal_review": {
+        "contract.approved",
         "manual.approved",
         "manual.supplemented",
         "manual.revision_requested",
@@ -76,6 +77,7 @@ STATUS_LABELS = {
     "blocked": "等待修改合同",
     "pending_special_approval": "等待管理层审批",
     "pending_manual_review": "等待财务法务复核",
+    "pending_contract_approval": "等待合同法务审批",
 }
 
 
@@ -121,7 +123,7 @@ def _decision_task(item: dict[str, Any], case: dict[str, Any]) -> str:
         return "sales_revision"
     if decision == "special_approval":
         return "manager_approval"
-    if decision == "manual_review":
+    if decision in {"manual_review", "pass"}:
         return "finance_legal_review"
     return ""
 

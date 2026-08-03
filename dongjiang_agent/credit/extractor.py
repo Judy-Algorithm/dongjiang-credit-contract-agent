@@ -18,13 +18,18 @@ class CreditFactExtractor:
     }
     _NUMBER_PATTERNS = {
         "current_ratio": re.compile(r"流动比率\s*[：:]?\s*(\d+(?:\.\d+)?)"),
-        "registered_capital": re.compile(r"注册资本\s*[：:]?\s*(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)?"),
+        "registered_capital": re.compile(r"注册资本\s*[：:]?\s*(?:人民币|CNY|RMB)?\s*(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)?", re.IGNORECASE),
+        "years_in_business": re.compile(r"(?:成立年限|经营年限)\s*[：:]?\s*(\d+(?:\.\d+)?)\s*年"),
         "monthly_order_amount": re.compile(r"(?:月度订单额|月均订单额)\s*[：:]?\s*(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)?"),
         "overdue_count_12m": re.compile(r"(?:近12月|过去一年)[^。\n]{0,20}?逾期\s*(\d+)\s*次"),
         "max_overdue_days_12m": re.compile(r"(?:最长|最大)逾期\s*(\d+)\s*天"),
+        "outstanding_receivables_amount": re.compile(r"(?:当前未收款金额|应收账款(?:余额)?)\s*[：:]?\s*(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)?"),
+        "open_order_amount": re.compile(r"(?:在手已入单金额|在手订单金额)\s*[：:]?\s*(\d[\d,]*(?:\.\d+)?)\s*(万元|万|元)?"),
+        "current_overdue_days": re.compile(r"(?:当前未收款最长逾期|当前最长逾期)\s*[：:]?\s*(\d+)\s*天"),
     }
     _RATING = re.compile(
         r"(?:主体评级|信用等级|主体信用等级)\s*[：:]?\s*"
+        r"(?:(?:中债资信|中诚信国际|中诚信|联合资信)\s*)?"
         r"(AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC|CC|C|D)\b",
         re.IGNORECASE,
     )
@@ -55,7 +60,12 @@ class CreditFactExtractor:
             unit = match.group(2) if match.lastindex and match.lastindex >= 2 else ""
             if unit in {"万元", "万"}:
                 value *= 10_000
-            if field in {"overdue_count_12m", "max_overdue_days_12m"}:
+            if field in {
+                "years_in_business",
+                "overdue_count_12m",
+                "max_overdue_days_12m",
+                "current_overdue_days",
+            }:
                 value = int(value)
             updates[field] = value
             evidence.append(Evidence(source, field, value, 0.86, self._excerpt(text, match)))

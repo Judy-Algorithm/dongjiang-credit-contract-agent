@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from ..contract.revisions import ContractRevisionStore, content_disposition
 from ..contract.translations import ContractTranslationStore
+from ..credit import CreditDocumentPreviewService
 from ..integrations import IntegrationBundle
 from ..operations import (
     AgentIncidentService,
@@ -50,7 +51,7 @@ WAITING_LABELS = {
     "contract_upload": "待上传合同",
     "sales_revision": "待修改合同",
     "manager_approval": "待处理管理层审批",
-    "finance_legal_review": "待处理财务法务复核",
+    "finance_legal_review": "待处理合同法务审批",
 }
 
 
@@ -1082,6 +1083,9 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/cases":
                 self._create_case(payload, user)
                 return
+            if path == "/api/credit-document-previews":
+                self._preview_credit_documents(payload, user)
+                return
             parts = [item for item in path.split("/") if item]
             if len(parts) == 4 and parts[:2] == ["api", "cases"]:
                 case_id, resource = parts[2], parts[3]
@@ -1270,7 +1274,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 run = harness.start(
                     customer,
                     file_paths=paths,
-                    use_cached_credit=bool(payload.get("use_cached_credit", False)),
+                    # Web 请求不能通过历史缓存绕过本案信用人工审批。
+                    use_cached_credit=False,
                     actor=self._actor(user),
                 )
         with AuthStore() as store:
@@ -1284,6 +1289,31 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
         self._notify_case_waiting(run, user)
         self._notify_failed_writebacks(run)
         self._json(201, {"ok": True, "case": self._workflow_view(run, user)})
+
+    def _preview_credit_documents(
+        self, payload: dict[str, Any], user: dict[str, Any]
+    ) -> None:
+        self._require_roles(user, "case_submitter")
+        files = list(payload.get("files") or [])
+        if not files:
+            raise ValueError("请先选择需要解析的信用资料。")
+        with tempfile.TemporaryDirectory(prefix="dongjiang-credit-preview-") as temp_dir:
+            paths = _stage_uploads(files, temp_dir)
+            preview = CreditDocumentPreviewService().preview(paths)
+        with AuthStore() as store:
+            store.audit(
+                "credit.documents_previewed",
+                actor=user,
+                target_type="credit_preview",
+                detail={
+                    "file_count": len(files),
+                    "parsed_document_count": preview["parsed_document_count"],
+                    "extracted_fields": sorted(preview["fields"]),
+                    "rating_count": len(preview["external_ratings"]),
+                },
+                remote_address=self._remote_address(),
+            )
+        self._json(200, {"ok": True, "preview": preview})
 
     def _create_contract_revision(
         self,

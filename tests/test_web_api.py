@@ -201,7 +201,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(sales_notices["unread"], 1)
         self.assertEqual(sales_notices["items"][0]["link"], f"/cases/{case_id}/action")
 
-    def test_new_case_reuses_credit_only_when_explicitly_requested(self):
+    def test_new_case_always_requires_credit_approval_even_when_cache_requested(self):
         self.create_user("sales.cache", "复用测试业务", ["sales"])
         self.create_user("credit.cache", "复用测试信用", ["credit"])
         self.activate_user("sales.cache")
@@ -239,8 +239,9 @@ class WebApiTests(unittest.TestCase):
             "POST", "/api/cases", {"customer": customer, "use_cached_credit": True}
         )
         self.assertEqual(status, 201)
-        self.assertEqual(reused["case"]["status"], "awaiting_contract")
-        self.assertTrue(reused["case"]["credit"]["effective"])
+        self.assertEqual(reused["case"]["status"], "credit_pending_approval")
+        self.assertFalse(reused["case"]["credit"]["effective"])
+        self.assertFalse(reused["case"]["permissions"]["can_upload_contract"])
 
     def test_admin_user_management_rejects_multiple_roles_and_password_change(self):
         user = self.create_user("finance.a", "财务甲", ["credit"])
@@ -669,6 +670,7 @@ class WebApiTests(unittest.TestCase):
     def test_contract_submission_uses_business_route(self):
         self.create_user("sales.contract", "合同业务", ["sales"])
         self.create_user("credit.contract", "合同信用", ["credit"])
+        self.create_user("legal.contract", "合同法务", ["legal"])
         self.activate_user("sales.contract")
         status, created = self.request(
             "POST",
@@ -730,8 +732,55 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(submitted["ok"])
-        self.assertEqual(submitted["case"]["status_label"], "已通过")
+        self.assertEqual(submitted["case"]["status_label"], "等待合同法务审批")
         self.assertIsNone(submitted["case"]["next_action"])
+
+        self.activate_user("legal.contract")
+        status, finalized = self.request(
+            "POST",
+            f"/api/cases/{case_id}/contract-actions",
+            {"action": "approve", "comment": "合同法务审批通过"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(finalized["case"]["status_label"], "已通过")
+        self.assertIsNone(finalized["case"]["next_action"])
+
+    def test_credit_document_preview_extracts_form_fields_before_case_creation(self):
+        self.create_user("sales.preview", "预解析业务", ["sales"])
+        self.activate_user("sales.preview")
+        document = """信用补件说明
+注册资本：人民币80,000,000元。
+成立年限：15年。
+资产负债率：45%。
+净利率：10%。
+流动比率：1.8。
+营收增长率：12%。
+第三方主体评级：中诚信国际 AA，展望稳定。
+当前未收款金额：0元。
+在手已入单金额：0元。
+当前未收款最长逾期：0天。
+"""
+        status, result = self.request(
+            "POST",
+            "/api/credit-document-previews",
+            {
+                "files": [
+                    {
+                        "name": "05-信用补件说明.txt",
+                        "data_base64": base64.b64encode(
+                            document.encode("utf-8")
+                        ).decode("ascii"),
+                    }
+                ]
+            },
+        )
+        self.assertEqual(status, 200)
+        preview = result["preview"]
+        self.assertEqual(preview["fields"]["registered_capital"], 80_000_000)
+        self.assertEqual(preview["fields"]["asset_liability_ratio"], 45)
+        self.assertEqual(preview["fields"]["outstanding_receivables_amount"], 0)
+        self.assertEqual(preview["external_ratings"][0]["agency"], "中诚信国际")
+        self.assertEqual(preview["external_ratings"][0]["rating"], "AA")
 
     def test_overdue_lock_requires_archived_special_release_evidence(self):
         _, created = self.request(

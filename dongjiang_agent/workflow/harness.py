@@ -232,7 +232,7 @@ class DongjiangWorkflowHarness:
         *,
         file_paths: list[str] | tuple[str, ...] = (),
         contract_texts: list[str] | tuple[str, ...] = (),
-        use_cached_credit: bool = True,
+        use_cached_credit: bool = False,
         case_id: str | None = None,
         actor: ActorContext | None = None,
     ) -> WorkflowRun:
@@ -264,7 +264,8 @@ class DongjiangWorkflowHarness:
                 "display_name": actor.display_name or actor.actor_id,
             },
             "customer": checkpoint_dict(profile),
-            "use_cached_credit": use_cached_credit,
+            # 历史授信只能作为本案参考，不能代替本案信用审批人的授权。
+            "use_cached_credit": False,
             "pending_files": pending,
             "pending_document_kind": "credit",
             "source_files": [],
