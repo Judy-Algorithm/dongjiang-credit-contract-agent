@@ -22,6 +22,7 @@ WAITING_BY_STATUS = {
     "blocked": "sales_revision",
     "pending_special_approval": "manager_approval",
     "pending_manual_review": "finance_legal_review",
+    "pending_contract_approval": "finance_legal_review",
 }
 WAITING_ROLES = {
     "credit_approval": ["credit_approver"],

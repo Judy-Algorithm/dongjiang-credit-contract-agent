@@ -37,6 +37,7 @@ STATUS_LABELS = {
     "blocked": "等待修改合同",
     "pending_special_approval": "等待管理层审批",
     "pending_manual_review": "等待财务法务复核",
+    "pending_contract_approval": "等待合同法务审批",
     "approved": "已通过",
     "approved_by_exception": "已特批通过",
     "approved_after_manual_review": "已复核通过",
@@ -93,6 +94,7 @@ RECORD_LABELS = {
     "manager.approved": "管理层已批准",
     "manager.rejected": "管理层已驳回",
     "manual.approved": "财务法务复核已完成",
+    "contract.approved": "合同法务审批已完成",
     "manual.supplemented": "补充资料已提交",
     "manual.revision_requested": "已要求修改合同",
     "workflow.closed": "案件已关闭",
@@ -207,6 +209,7 @@ def _waiting_for(case: dict[str, Any], explicit: str | None = None) -> str | Non
         "blocked": "sales_revision",
         "pending_special_approval": "manager_approval",
         "pending_manual_review": "finance_legal_review",
+        "pending_contract_approval": "finance_legal_review",
     }.get(str(case.get("status") or ""))
 
 
@@ -264,7 +267,7 @@ def _next_action(waiting_for: str | None) -> dict[str, Any] | None:
         },
         "finance_legal_review": {
             "type": "manual_review",
-            "label": "处理复核",
+            "label": "处理合同审批",
             "allowed_actions": [
                 {"type": "approve", "label": "确认通过"},
                 {"type": "supplement", "label": "补充资料"},

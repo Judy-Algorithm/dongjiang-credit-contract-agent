@@ -9,6 +9,6 @@
     "contract_upload": {"label": "上传合同", "target_hours": 72, "warning_before_hours": 12},
     "sales_revision": {"label": "修改合同", "target_hours": 48, "warning_before_hours": 12},
     "manager_approval": {"label": "管理层审批", "target_hours": 24, "warning_before_hours": 6},
-    "finance_legal_review": {"label": "财务法务复核", "target_hours": 24, "warning_before_hours": 6}
+    "finance_legal_review": {"label": "合同法务审批", "target_hours": 24, "warning_before_hours": 6}
   }
 }

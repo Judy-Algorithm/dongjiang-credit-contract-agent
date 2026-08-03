@@ -46,7 +46,7 @@
       "expected": {
         "credit": {"risk_level": "low", "approved_credit_limit": 3000000, "recommended_term_days": 90, "requires_supplement": false},
         "contract": {"decision": "pass", "approval_route": "normal", "required_rule_ids": [], "forbidden_rule_ids": ["CREDIT-OVER-LIMIT", "CREDIT-OVER-TERM"]},
-        "workflow": {"waiting_for": null}
+        "workflow": {"waiting_for": "finance_legal_review"}
       }
     },
     {

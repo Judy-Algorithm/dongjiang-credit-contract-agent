@@ -56,6 +56,6 @@ def resolve_case_decision(
     return CaseDecision(
         AuditDecision.PASS,
         ApprovalRoute.NORMAL,
-        None,
-        "approved",
+        "finance_legal_review",
+        "pending_contract_approval",
     )
