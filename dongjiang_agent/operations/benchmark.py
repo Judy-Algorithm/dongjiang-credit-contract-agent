@@ -185,6 +185,15 @@ class BenchmarkService:
                         {"action": "submit_contract", "contract_texts": [contract_text]},
                         actor=actor,
                     )
+                    if run.waiting_for == "contract_approval":
+                        run = harness.resume(
+                            run.case_id,
+                            {
+                                "action": "approve",
+                                "comment": "合成基准自动完成普通合同法务批准",
+                            },
+                            actor=actor,
+                        )
                 state = dict(run.state)
                 waiting_for = run.waiting_for
         except Exception as exc:

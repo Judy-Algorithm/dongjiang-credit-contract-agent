@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-auth-simplified"
-import {escapeHtml, dateTime} from "../format.js?v=20260802-auth-simplified"
+import {api} from "../api.js?v=20260807-request-templates"
+import {escapeHtml, dateTime} from "../format.js?v=20260807-request-templates"
 
 const roles = [
   ["case_submitter","业务经办人"],

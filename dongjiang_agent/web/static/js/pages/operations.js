@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-auth-simplified"
-import {dateTime, escapeHtml} from "../format.js?v=20260802-auth-simplified"
+import {api} from "../api.js?v=20260807-request-templates"
+import {dateTime, escapeHtml} from "../format.js?v=20260807-request-templates"
 
 export async function renderOperationsPage(root) {
   const data = await api.getSlaDashboard()

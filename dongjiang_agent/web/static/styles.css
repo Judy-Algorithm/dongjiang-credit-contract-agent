@@ -304,6 +304,18 @@ td small { display: block; margin-top: 3px; color: var(--muted); }
 
 .form-panel { padding: 28px; }
 .form-panel h2 { margin: 0 0 24px; color: var(--ink); font-size: 21px; font-weight: 600; }
+.template-toolbar { margin: -4px 0 28px; padding: 18px; display: grid; grid-template-columns: minmax(230px, 1.5fr) minmax(210px, .9fr) auto auto; align-items: end; gap: 12px; background: var(--surface-soft); border: 1px solid var(--hairline); border-radius: 14px; }
+.template-toolbar-copy { align-self: center; display: grid; gap: 2px; }
+.template-toolbar-copy small { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.template-toolbar-copy strong { color: var(--ink); font-size: 16px; font-weight: 650; }
+.template-toolbar-copy span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.template-toolbar .text-button { grid-column: 2 / -1; justify-self: end; min-height: 24px; padding: 0 4px; color: var(--red); }
+.template-description { margin: -16px 0 26px; padding: 10px 13px; display: flex; gap: 9px; background: var(--canvas); border-left: 3px solid var(--hairline); color: var(--muted); font-size: 12px; }
+.template-description b { color: var(--body); white-space: nowrap; }
+.template-save-dialog { display: grid; gap: 16px; }
+.template-save-dialog .section-heading { margin-bottom: 0; }
+.template-save-dialog .section-heading h3 { margin: 0; color: var(--ink); }
+.template-save-dialog .section-heading span { color: var(--muted); font-size: 12px; }
 .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
 .form-grid.two { grid-template-columns: repeat(2, 1fr); }
 label { color: var(--body); font-size: 13px; font-weight: 600; }
@@ -918,6 +930,9 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .toolbar { grid-template-columns: 1fr 1fr; }
   .form-grid, .form-grid.two, .summary-grid, .info-grid { grid-template-columns: 1fr 1fr; }
+  .template-toolbar { grid-template-columns: 1fr 1fr; }
+  .template-toolbar-copy { grid-column: 1 / -1; }
+  .template-toolbar .text-button { grid-column: 1 / -1; }
   .rating-row { grid-template-columns: 1fr 1fr; }
   .contract-review-layout, .document-layout, .overview-layout, .approval-layout { grid-template-columns: 1fr; }
   .agent-lane { grid-template-columns: 1fr; }
@@ -973,6 +988,9 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
   .metric-card { min-height: 96px; padding: 16px; }
   .toolbar { display: grid; padding: 12px; }
   .rating-row { grid-template-columns: 1fr; }
+  .template-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .template-toolbar-copy, .template-toolbar .text-button { grid-column: 1; }
+  .template-toolbar .text-button { justify-self: start; }
   .form-panel, .action-card { padding: 20px 16px; }
   .stepper div { padding: 13px 9px; font-size: 12px; text-align: center; }
   th, td { padding: 14px 12px; }

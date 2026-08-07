@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-auth-simplified"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260802-auth-simplified"
+import {api} from "../api.js?v=20260807-request-templates"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260807-request-templates"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],

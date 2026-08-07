@@ -28,7 +28,7 @@ from ..operations import (
     SLAService,
     agent_incident_view,
 )
-from ..persistence import CaseRepository
+from ..persistence import CaseRepository, RequestTemplateStore
 from ..security import AuthStore, SecurityEmailSender
 from .presentation import case_summary, case_view
 
@@ -578,6 +578,12 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     result = store.list_notifications(str(user["user_id"]))
                 self._json(200, {"ok": True, **result})
                 return
+            if path == "/api/request-templates":
+                self._require_roles(user, "case_submitter")
+                with RequestTemplateStore() as store:
+                    templates = store.list_for_user(str(user["user_id"]))
+                self._json(200, {"ok": True, "templates": templates})
+                return
             if path == "/api/navigation-summary":
                 with AuthStore() as store:
                     unread = store.unread_notification_count(str(user["user_id"]))
@@ -1081,10 +1087,49 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     )
                 self._json(201, {"ok": True, "user": created})
                 return
+            if path == "/api/request-templates":
+                self._require_roles(user, "case_submitter")
+                with RequestTemplateStore() as templates:
+                    created = templates.create(
+                        str(user["user_id"]),
+                        name=str(payload.get("name") or ""),
+                        description=str(payload.get("description") or ""),
+                        data=payload.get("data"),
+                    )
+                with AuthStore() as auth:
+                    auth.audit(
+                        "request_template.created",
+                        actor=user,
+                        target_type="request_template",
+                        target_id=str(created["template_id"]),
+                        detail={"name": created["name"]},
+                        remote_address=self._remote_address(),
+                    )
+                self._json(201, {"ok": True, "template": created})
+                return
             if path == "/api/cases":
                 self._create_case(payload, user)
                 return
             parts = [item for item in path.split("/") if item]
+            if (
+                len(parts) == 4
+                and parts[:2] == ["api", "request-templates"]
+                and parts[3] == "delete"
+            ):
+                self._require_roles(user, "case_submitter")
+                with RequestTemplateStore() as templates:
+                    deleted = templates.delete(str(user["user_id"]), parts[2])
+                with AuthStore() as auth:
+                    auth.audit(
+                        "request_template.deleted",
+                        actor=user,
+                        target_type="request_template",
+                        target_id=str(deleted["template_id"]),
+                        detail={"name": deleted["name"]},
+                        remote_address=self._remote_address(),
+                    )
+                self._json(200, {"ok": True})
+                return
             if len(parts) == 4 and parts[:2] == ["api", "cases"]:
                 case_id, resource = parts[2], parts[3]
                 if resource in {"credit-documents", "credit-actions", "contracts", "contract-actions"}:

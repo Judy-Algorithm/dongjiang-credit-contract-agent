@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260802-auth-simplified"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260802-auth-simplified"
-import {navigate} from "../router.js?v=20260802-auth-simplified"
-import {escapeHtml} from "../format.js?v=20260802-auth-simplified"
+import {api} from "../api.js?v=20260807-request-templates"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260807-request-templates"
+import {navigate} from "../router.js?v=20260807-request-templates"
+import {escapeHtml} from "../format.js?v=20260807-request-templates"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `

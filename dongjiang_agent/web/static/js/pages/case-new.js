@@ -1,24 +1,40 @@
-import {api, encodeFiles} from "../api.js?v=20260802-auth-simplified"
-import {escapeHtml} from "../format.js?v=20260802-auth-simplified"
-import {navigate} from "../router.js?v=20260802-auth-simplified"
+import {api, encodeFiles} from "../api.js?v=20260807-request-templates"
+import {escapeHtml} from "../format.js?v=20260807-request-templates"
+import {navigate} from "../router.js?v=20260807-request-templates"
 
 const draftKey = "dongjiang:new-case-draft"
 
 export async function renderNewCasePage(root) {
   const draft = JSON.parse(sessionStorage.getItem(draftKey) || "{}")
+  const templateResult = await api.listRequestTemplates()
+  let templates = templateResult.templates || []
   root.innerHTML = `
     <header class="page-header">
       <div><h1>发起信审</h1><p>提交客户资料和本次合作申请</p></div>
       <a href="/cases" data-link class="secondary">返回案件列表</a>
     </header>
     <div class="stepper">
-      <div class="active" data-step-label="1">1　客户与本次合作</div>
+      <div class="active" data-step-label="1">1　客户与合作申请</div>
       <div data-step-label="2">2　信用资料</div>
       <div data-step-label="3">3　确认提交</div>
     </div>
     <form id="newCaseForm" class="panel form-panel">
+      <section class="template-toolbar" aria-label="申请模板">
+        <div class="template-toolbar-copy">
+          <small>申请模板</small>
+          <strong>从模板开始，快速填写两部分资料</strong>
+          <span>模板会填充客户、合作申请和信用指标；附件及“复用有效授信”不会被保存或覆盖。</span>
+        </div>
+        <label>选择模板
+          <select id="requestTemplate">${templateOptions(templates)}</select>
+        </label>
+        <button type="button" id="applyTemplate" class="primary">使用模板</button>
+        <button type="button" id="saveAsTemplate" class="secondary">另存为模板</button>
+        <button type="button" id="deleteTemplate" class="text-button hidden">删除当前模板</button>
+      </section>
+      <div id="templateDescription" class="template-description">选择模板后可查看说明，再点击“使用模板”自动填充。</div>
       <section data-step-panel="1">
-        <h2>客户与本次合作</h2>
+        <h2>客户与合作申请</h2>
         <div class="form-grid">
           <label>客户名称 *<input id="customerName" autocomplete="organization" required></label>
           <label>统一社会信用代码<input id="unifiedCreditCode" placeholder="用于准确匹配企业"></label>
@@ -97,6 +113,7 @@ export async function renderNewCasePage(root) {
   `
 
   restoreDraft(root, draft)
+  updateTemplateDescription(root, templates)
   let step = 1
   const showStep = (next) => {
     step = next
@@ -114,6 +131,34 @@ export async function renderNewCasePage(root) {
 
   root.querySelector("#creditFiles").addEventListener("change", (event) => {
     root.querySelector("#creditFileList").innerHTML = Array.from(event.target.files).map((file) => `<span class="file-chip">${escapeHtml(file.name)}</span>`).join("")
+  })
+  root.querySelector("#requestTemplate").addEventListener("change", () => updateTemplateDescription(root, templates))
+  root.querySelector("#applyTemplate").addEventListener("click", () => {
+    const selected = selectedTemplate(root, templates)
+    if (!selected) {
+      root.querySelector("#requestTemplate").focus()
+      return
+    }
+    restoreDraft(root, selected.data || {}, {reset:true})
+    saveDraft(root)
+    window.dispatchEvent(new CustomEvent("app:toast", {detail:`已应用“${selected.name}”，请按实际情况核对并修改`}))
+  })
+  root.querySelector("#saveAsTemplate").addEventListener("click", () => openSaveTemplateDialog(root, async (payload) => {
+    const result = await api.createRequestTemplate(payload)
+    templates = [...templates, result.template]
+    root.querySelector("#requestTemplate").innerHTML = templateOptions(templates, result.template.template_id)
+    updateTemplateDescription(root, templates)
+    window.dispatchEvent(new CustomEvent("app:toast", {detail:"个人模板已保存，下次发起信审可直接使用"}))
+  }))
+  root.querySelector("#deleteTemplate").addEventListener("click", async () => {
+    const selected = selectedTemplate(root, templates)
+    if (!selected || selected.system) return
+    if (!window.confirm(`确认删除个人模板“${selected.name}”吗？`)) return
+    await api.deleteRequestTemplate(selected.template_id)
+    templates = templates.filter((item) => item.template_id !== selected.template_id)
+    root.querySelector("#requestTemplate").innerHTML = templateOptions(templates)
+    updateTemplateDescription(root, templates)
+    window.dispatchEvent(new CustomEvent("app:toast", {detail:"模板已删除"}))
   })
   root.querySelector("#nextStep").addEventListener("click", () => {
     if (step === 1 && !validateBasics(root)) return
@@ -218,7 +263,69 @@ function saveDraft(root) {
   }))
 }
 
-function restoreDraft(root, draft) {
+function templateOptions(templates, selectedId = "") {
+  const system = templates.filter((item) => item.system)
+  const personal = templates.filter((item) => !item.system)
+  const options = (items) => items.map((item) => `<option value="${escapeHtml(item.template_id)}" ${item.template_id === selectedId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")
+  return `<option value="">请选择模板</option>${system.length ? `<optgroup label="系统示例">${options(system)}</optgroup>` : ""}${personal.length ? `<optgroup label="我的模板">${options(personal)}</optgroup>` : ""}`
+}
+
+function selectedTemplate(root, templates) {
+  const templateId = root.querySelector("#requestTemplate").value
+  return templates.find((item) => item.template_id === templateId)
+}
+
+function updateTemplateDescription(root, templates) {
+  const selected = selectedTemplate(root, templates)
+  const description = root.querySelector("#templateDescription")
+  const deleteButton = root.querySelector("#deleteTemplate")
+  if (!selected) {
+    description.textContent = "选择模板后可查看说明，再点击“使用模板”自动填充。"
+    deleteButton.classList.add("hidden")
+    return
+  }
+  description.innerHTML = `<b>${selected.system ? "系统示例" : "我的模板"}</b><span>${escapeHtml(selected.description || "包含已保存的客户与信用资料字段。")}</span>`
+  deleteButton.classList.toggle("hidden", Boolean(selected.system))
+}
+
+function openSaveTemplateDialog(root, onSave) {
+  root.insertAdjacentHTML("beforeend", `
+    <div id="saveTemplateDialog" class="modal-backdrop">
+      <form class="modal-panel template-save-dialog">
+        <div class="section-heading"><div><h3>保存为个人模板</h3><span>保存当前两部分表单字段</span></div><button type="button" class="text-button" data-close>关闭</button></div>
+        <label>模板名称 *<input id="templateName" required maxlength="60" placeholder="例如：华南区TKP常规客户"></label>
+        <label>模板说明<textarea id="templateNote" maxlength="160" rows="3" placeholder="说明适用客户或业务场景"></textarea></label>
+        <p class="field-hint">不会保存上传文件，也不会保存“复用有效授信”开关。个人模板仅当前账号可见。</p>
+        <div id="templateSaveError" class="error-box hidden"></div>
+        <div class="form-actions"><span></span><button type="submit" class="primary">保存模板</button></div>
+      </form>
+    </div>`)
+  const dialog = root.querySelector("#saveTemplateDialog")
+  dialog.querySelector("[data-close]").addEventListener("click", () => dialog.remove())
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.remove() })
+  dialog.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault()
+    const submit = event.submitter
+    const error = dialog.querySelector("#templateSaveError")
+    submit.disabled = true
+    error.classList.add("hidden")
+    try {
+      await onSave({
+        name:dialog.querySelector("#templateName").value,
+        description:dialog.querySelector("#templateNote").value,
+        data:collectForm(root),
+      })
+      dialog.remove()
+    } catch (reason) {
+      error.textContent = reason.message || String(reason)
+      error.classList.remove("hidden")
+      submit.disabled = false
+    }
+  })
+  dialog.querySelector("#templateName").focus()
+}
+
+function restoreDraft(root, draft, {reset = false} = {}) {
   const mapping = {
     customerName:"customer_name",unifiedCreditCode:"unified_social_credit_code",
     crmCustomerId:"crm_customer_id",customerType:"customer_type",businessType:"business_type",
@@ -235,15 +342,26 @@ function restoreDraft(root, draft) {
     currentOverdueDays:"current_overdue_days",
     lastOrderDate:"last_order_date",
   }
+  if (reset) {
+    Object.keys(mapping).forEach((id) => { root.querySelector(`#${id}`).value = "" })
+    root.querySelector("#currency").value = "CNY"
+  }
   root.querySelector("#purchaseExemptionRequested").checked = Boolean(draft.purchase_exemption_requested)
-  root.querySelector("#reuseEffectiveCredit").checked = Boolean(draft.use_cached_credit)
+  if (!reset) root.querySelector("#reuseEffectiveCredit").checked = Boolean(draft.use_cached_credit)
   for (const [id, key] of Object.entries(mapping)) {
     let item = draft[key]
     if (["assetLiabilityRatio","netMargin","revenueGrowth","onTimeRate"].includes(id) && item != null) item *= 100
     if (item != null) root.querySelector(`#${id}`).value = item
   }
+  const ratingRows = root.querySelectorAll("[data-rating-row]")
+  if (reset) ratingRows.forEach((row) => {
+    row.querySelector(".rating-agency").value = ""
+    row.querySelector(".rating-value").value = ""
+    row.querySelector(".rating-outlook").value = ""
+    row.querySelector(".rating-date").value = ""
+  })
   ;(draft.external_ratings || []).forEach((rating, index) => {
-    const row = root.querySelectorAll("[data-rating-row]")[index]
+    const row = ratingRows[index]
     if (!row) return
     row.querySelector(".rating-agency").value = rating.agency || ""
     row.querySelector(".rating-value").value = rating.rating || ""

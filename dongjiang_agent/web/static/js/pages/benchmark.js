@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260802-auth-simplified"
-import {escapeHtml} from "../format.js?v=20260802-auth-simplified"
+import {api} from "../api.js?v=20260807-request-templates"
+import {escapeHtml} from "../format.js?v=20260807-request-templates"
 
 const metricDefinitions = [
   ["信用结论", "credit_conclusion_rate"],

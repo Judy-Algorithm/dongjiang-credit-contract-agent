@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260802-auth-simplified"
-import {escapeHtml, money} from "../format.js?v=20260807-contract-approval"
-import {navigate} from "../router.js?v=20260802-auth-simplified"
+import {api, encodeFiles} from "../api.js?v=20260807-request-templates"
+import {escapeHtml, money} from "../format.js?v=20260807-request-templates"
+import {navigate} from "../router.js?v=20260807-request-templates"
 
 export async function renderCaseActionPage(root, route) {
   const {case:item} = await api.getCase(route.caseId)

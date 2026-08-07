@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260802-auth-simplified"
+import {api, setCsrfToken} from "./api.js?v=20260807-request-templates"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 
