@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import sqlite3
 import hashlib
+import re
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -1318,6 +1319,71 @@ class DongjiangWorkflowHarness:
             raise PermissionError(
                 f"{waiting_for} 需要角色 {sorted(required)}，当前角色为 {sorted(actor_roles)}。"
             )
+
+    @staticmethod
+    def _remove_case_path(target: Path) -> bool:
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+            return True
+        if target.is_dir():
+            shutil.rmtree(target)
+            return True
+        return False
+
+    def delete_case(self, case_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"DJ-[A-Z0-9]+", str(case_id or "")):
+            raise ValueError("案件号无效。")
+        case = self.repository.get_case(case_id)
+        if not case:
+            raise KeyError("案件不存在。")
+
+        checkpoint_rows = 0
+        with self._connection:
+            table_names = [
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+                if re.fullmatch(r"[A-Za-z0-9_]+", str(row[0]))
+            ]
+            for table_name in table_names:
+                columns = {
+                    str(row[1])
+                    for row in self._connection.execute(
+                        f'PRAGMA table_info("{table_name}")'
+                    )
+                }
+                if "thread_id" not in columns:
+                    continue
+                cursor = self._connection.execute(
+                    f'DELETE FROM "{table_name}" WHERE thread_id = ?',
+                    (case_id,),
+                )
+                checkpoint_rows += max(0, cursor.rowcount)
+
+        targets = {
+            "inbox": self.inbox_dir / case_id,
+            "evidence": self.evidence_dir / case_id,
+            "archive": self.nodes.archive.root / case_id,
+            "executions": self.nodes.executions.root / case_id,
+            "reports": self.nodes.output_dir / case_id,
+            "redaction_vault": self.nodes.vault_dir / f"{case_id}.vault.json",
+            "contract_revisions": Path("data/revisions") / case_id,
+            "contract_translations": Path("data/translations") / case_id,
+            "integration_audit": self.nodes.integrations.audit_root / case_id,
+        }
+        deleted_resources = [
+            name for name, target in targets.items() if self._remove_case_path(target)
+        ]
+        if not self.repository.delete_case(case_id):
+            raise RuntimeError("案件主记录删除失败。")
+        deleted_resources.append("case_record")
+        return {
+            "case_id": case_id,
+            "customer_name": str((case.get("customer") or {}).get("customer_name") or ""),
+            "deleted_resources": deleted_resources,
+            "checkpoint_rows": checkpoint_rows,
+        }
 
     def _archive_approval_evidence(
         self,

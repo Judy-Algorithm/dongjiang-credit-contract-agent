@@ -314,6 +314,73 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(reused["case"]["status"], "awaiting_contract")
         self.assertTrue(reused["case"]["credit"]["effective"])
 
+    def test_admin_can_delete_case_with_csrf_and_case_scoped_cleanup(self):
+        sales = self.create_user("delete.sales", "删除测试业务", ["sales"])
+        self.activate_user("delete.sales")
+        status, first = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "待删除客户",
+                    "customer_type": "new",
+                    "business_type": "TKP",
+                    "monthly_order_amount": 100000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        deleted_case_id = first["case"]["case_id"]
+        status, second = self.request(
+            "POST",
+            "/api/cases",
+            {
+                "customer": {
+                    "customer_name": "保留客户",
+                    "customer_type": "new",
+                    "business_type": "TKM",
+                    "monthly_order_amount": 200000,
+                    "external_rating": "AA",
+                    "asset_liability_ratio": 0.45,
+                },
+                "use_cached_credit": False,
+            },
+        )
+        self.assertEqual(status, 201)
+        kept_case_id = second["case"]["case_id"]
+
+        status, denied = self.raw_request(
+            "DELETE",
+            f"/api/cases/{deleted_case_id}",
+            None,
+            {"Cookie": self.cookie},
+        )[:2]
+        self.assertEqual(status, 403)
+        self.assertIn("安全令牌", denied["error"])
+        status, denied = self.request("DELETE", f"/api/cases/{deleted_case_id}")
+        self.assertEqual(status, 403)
+        self.assertIn("权限", denied["error"])
+
+        self.assertEqual(self.login("admin", "AdminPass123")[0], 200)
+        status, deleted = self.request("DELETE", f"/api/cases/{deleted_case_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(deleted["deleted"]["case_id"], deleted_case_id)
+
+        self.assertEqual(self.request("GET", f"/api/cases/{deleted_case_id}")[0], 404)
+        status, cases = self.request("GET", "/api/cases")
+        self.assertEqual(status, 200)
+        self.assertNotIn(deleted_case_id, {item["case_id"] for item in cases["cases"]})
+        self.assertIn(kept_case_id, {item["case_id"] for item in cases["cases"]})
+        self.assertTrue(cases["permissions"]["can_delete_cases"])
+        with AuthStore() as store:
+            events = store.list_audit(limit=100)
+        event = next(item for item in events if item["event_type"] == "case.deleted")
+        self.assertEqual(event["target_id"], deleted_case_id)
+        self.assertEqual(event["detail"]["customer_name"], "待删除客户")
+
     def test_admin_user_management_rejects_multiple_roles_and_password_change(self):
         user = self.create_user("finance.a", "财务甲", ["credit"])
         status, updated = self.request(
@@ -1989,7 +2056,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260807-request-templates", html)
+        self.assertIn(b"20260807-csrf-delete", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -2005,7 +2072,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260807-request-templates"
+            "/js/app.js?v=20260807-csrf-delete"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -2023,7 +2090,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
 
         status, api_module, headers = self.download(
-            "/js/api.js?v=20260807-request-templates"
+            "/js/api.js?v=20260807-csrf-delete"
         )
         self.assertEqual(status, 200)
         self.assertIn(b"responseCache", api_module)

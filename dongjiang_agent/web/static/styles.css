@@ -185,9 +185,11 @@ nav a.active:not(.primary)::after {
 .secondary:hover { background: var(--surface-soft); }
 .danger { background: var(--canvas); color: var(--red); border: 1px solid #e3a090; }
 .danger:hover { background: var(--red-bg); }
+.danger.small { min-height: 40px; padding: 9px 13px; font-size: 13px; }
 .text-button { min-height: 36px; padding: 7px 9px; background: transparent; color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .text-button:hover { color: var(--primary-active); }
 button:disabled { background: var(--primary-disabled); color: var(--canvas); border-color: transparent; cursor: not-allowed; transform: none; }
+.case-row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .metric-grid {
   display: grid;

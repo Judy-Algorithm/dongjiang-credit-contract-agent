@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,15 @@ class CaseRepository:
             return json.loads(target.read_text(encoding="utf-8"))
         except Exception:
             return None
+
+    def delete_case(self, case_id: str) -> bool:
+        if not re.fullmatch(r"DJ-[A-Z0-9]+", str(case_id or "")):
+            raise ValueError("案件号无效。")
+        target = self.root / f"{case_id}.json"
+        if not target.is_file():
+            return False
+        target.unlink()
+        return True
 
     @staticmethod
     def _normalized_identifier(value: object) -> str:

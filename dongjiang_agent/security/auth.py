@@ -1331,6 +1331,20 @@ class AuthStore:
         )
         self.connection.commit()
 
+    def delete_case_notifications(self, case_id: str) -> int:
+        if not re.fullmatch(r"DJ-[A-Z0-9]+", str(case_id or "")):
+            raise ValueError("案件号无效。")
+        base_link = f"/cases/{case_id}"
+        cursor = self.connection.execute(
+            """
+            DELETE FROM notifications
+            WHERE link = ? OR link LIKE ? OR link LIKE ?
+            """,
+            (base_link, f"{base_link}/%", f"{base_link}?%"),
+        )
+        self.connection.commit()
+        return max(0, cursor.rowcount)
+
     def audit(
         self,
         event_type: str,

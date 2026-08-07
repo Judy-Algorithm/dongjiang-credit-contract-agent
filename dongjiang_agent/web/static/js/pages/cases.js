@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-csrf-delete"
 import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260807-request-templates"
 
 const pendingStatuses = new Set([
@@ -13,6 +13,7 @@ export async function renderCasesPage(root, route) {
   const mineOnly = route.params.get("mine") === "1"
   const data = await api.listCases({mine:mineOnly})
   const cases = data.cases || []
+  const canDeleteCases = Boolean(data.permissions?.can_delete_cases)
   root.innerHTML = `
     <header class="page-header">
       <div>
@@ -79,7 +80,7 @@ export async function renderCasesPage(root, route) {
     })
     const rows = root.querySelector("#caseRows")
     const empty = root.querySelector("#emptyCases")
-    rows.innerHTML = filtered.map(caseRow).join("")
+    rows.innerHTML = filtered.map((item) => caseRow(item, canDeleteCases)).join("")
     empty.classList.toggle("hidden", filtered.length > 0)
     root.querySelector(".table-scroll").classList.toggle("hidden", filtered.length === 0)
   }
@@ -98,6 +99,26 @@ export async function renderCasesPage(root, route) {
     root.querySelectorAll(".metric-card").forEach((item) => item.classList.toggle("active", item === card))
     renderRows()
   })
+  root.querySelector("#caseRows").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-delete-case]")
+    if (!button) return
+    const item = cases.find((candidate) => candidate.case_id === button.dataset.deleteCase)
+    if (!item) return
+    const confirmed = window.confirm(`确定删除案件 ${item.case_id}（${item.customer_name || "未命名客户"}）吗？\n\n原始附件、Agent运行记录、合同修订与翻译等案件资料会一并删除，且无法恢复。`)
+    if (!confirmed) return
+    button.disabled = true
+    button.textContent = "删除中…"
+    try {
+      await api.deleteCase(item.case_id)
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:`案件 ${item.case_id} 已删除`}))
+      window.dispatchEvent(new Event("app:navigation-summary-refresh"))
+      window.dispatchEvent(new Event("app:navigate"))
+    } catch (error) {
+      button.disabled = false
+      button.textContent = "删除"
+      window.dispatchEvent(new CustomEvent("app:toast", {detail:error.message || String(error)}))
+    }
+  })
   renderRows()
 }
 
@@ -105,8 +126,11 @@ function metric(label, value, filter, active = false) {
   return `<button class="metric-card ${active ? "active" : ""}" data-metric="${escapeHtml(filter)}"><span>${label}</span><strong>${value}</strong></button>`
 }
 
-function caseRow(item) {
+function caseRow(item, canDeleteCases) {
   const action = item.next_action
+  const primaryAction = action
+    ? `<a class="primary small" href="/cases/${encodeURIComponent(item.case_id)}/action" data-link>${escapeHtml(action.label)}</a>`
+    : `<a class="text-button" href="/cases/${encodeURIComponent(item.case_id)}" data-link>查看</a>`
   return `
     <tr>
       <td><a class="case-id" href="/cases/${encodeURIComponent(item.case_id)}" data-link>${escapeHtml(item.case_id)}</a></td>
@@ -116,9 +140,7 @@ function caseRow(item) {
       <td>${slaBadge(item.sla)}</td>
       <td><span class="badge ${escapeHtml(item.risk_level || "")}">${escapeHtml(item.risk_label)}</span></td>
       <td>${dateTime(item.updated_at)}</td>
-      <td>${action
-        ? `<a class="primary small" href="/cases/${encodeURIComponent(item.case_id)}/action" data-link>${escapeHtml(action.label)}</a>`
-        : `<a class="text-button" href="/cases/${encodeURIComponent(item.case_id)}" data-link>查看</a>`}</td>
+      <td><div class="case-row-actions">${primaryAction}${canDeleteCases ? `<button type="button" class="danger small" data-delete-case="${escapeHtml(item.case_id)}">删除</button>` : ""}</div></td>
     </tr>`
 }
 

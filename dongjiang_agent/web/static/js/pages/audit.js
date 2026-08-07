@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-csrf-delete"
 import {dateTime, escapeHtml} from "../format.js?v=20260807-request-templates"
 
 const labels = {

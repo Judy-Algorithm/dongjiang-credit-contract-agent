@@ -18,23 +18,23 @@ const navigationSummary = {unread:0, loadedAt:0, inFlight:null}
 const NAVIGATION_SUMMARY_TTL = 15000
 let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260807-request-templates",
-  register: "./pages/auth.js?v=20260807-request-templates",
-  "forgot-password": "./pages/auth.js?v=20260807-request-templates",
-  setup: "./pages/auth.js?v=20260807-request-templates",
-  "change-password": "./pages/auth.js?v=20260807-request-templates",
-  cases: "./pages/cases.js?v=20260807-request-templates",
-  "case-new": "./pages/case-new.js?v=20260807-document-upload",
-  "case-detail": "./pages/case-detail.js?v=20260807-document-tools",
-  "case-action": "./pages/case-action.js?v=20260807-document-upload",
-  users: "./pages/users.js?v=20260807-request-templates",
-  audit: "./pages/audit.js?v=20260807-request-templates",
-  writebacks: "./pages/writebacks.js?v=20260807-request-templates",
-  notifications: "./pages/notifications.js?v=20260807-request-templates",
-  operations: "./pages/operations.js?v=20260807-request-templates",
-  "agent-operations": "./pages/agent-operations.js?v=20260807-request-templates",
-  analytics: "./pages/analytics.js?v=20260807-request-templates",
-  benchmarks: "./pages/benchmark.js?v=20260807-request-templates",
+  login: "./pages/auth.js?v=20260807-csrf-delete",
+  register: "./pages/auth.js?v=20260807-csrf-delete",
+  "forgot-password": "./pages/auth.js?v=20260807-csrf-delete",
+  setup: "./pages/auth.js?v=20260807-csrf-delete",
+  "change-password": "./pages/auth.js?v=20260807-csrf-delete",
+  cases: "./pages/cases.js?v=20260807-csrf-delete",
+  "case-new": "./pages/case-new.js?v=20260807-csrf-delete",
+  "case-detail": "./pages/case-detail.js?v=20260807-csrf-delete",
+  "case-action": "./pages/case-action.js?v=20260807-csrf-delete",
+  users: "./pages/users.js?v=20260807-csrf-delete",
+  audit: "./pages/audit.js?v=20260807-csrf-delete",
+  writebacks: "./pages/writebacks.js?v=20260807-csrf-delete",
+  notifications: "./pages/notifications.js?v=20260807-csrf-delete",
+  operations: "./pages/operations.js?v=20260807-csrf-delete",
+  "agent-operations": "./pages/agent-operations.js?v=20260807-csrf-delete",
+  analytics: "./pages/analytics.js?v=20260807-csrf-delete",
+  benchmarks: "./pages/benchmark.js?v=20260807-csrf-delete",
 }
 
 async function loadModule(path) {
@@ -58,9 +58,9 @@ async function loadPageModule(routeName) {
 
 async function bootstrap() {
   const [authModule, apiModule, routerModule] = await Promise.all([
-    loadModule("./auth.js?v=20260807-request-templates"),
-    loadModule("./api.js?v=20260807-request-templates"),
-    loadModule("./router.js?v=20260807-request-templates"),
+    loadModule("./auth.js?v=20260807-csrf-delete"),
+    loadModule("./api.js?v=20260807-csrf-delete"),
+    loadModule("./router.js?v=20260807-csrf-delete"),
   ])
   ;({clearAuth, currentAuth, hasRole, loadAuth, setAuthenticated} = authModule)
   api = apiModule.api

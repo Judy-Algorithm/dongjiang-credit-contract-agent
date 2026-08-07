@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260807-request-templates"
+import {api, setCsrfToken} from "./api.js?v=20260807-csrf-delete"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

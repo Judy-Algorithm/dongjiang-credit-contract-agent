@@ -1,4 +1,4 @@
-import {api, encodeFiles} from "../api.js?v=20260807-document-upload"
+import {api, encodeFiles} from "../api.js?v=20260807-csrf-delete"
 import {escapeHtml, money} from "../format.js?v=20260807-document-upload"
 import {navigate} from "../router.js?v=20260807-document-upload"
 

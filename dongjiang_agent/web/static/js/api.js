@@ -68,6 +68,10 @@ function patch(path, payload) {
   })
 }
 
+function remove(path) {
+  return request(path, {method:"DELETE"})
+}
+
 export const api = {
   authStatus:() => request("/api/auth/status"),
   listImpersonationUsers:() => request("/api/auth/impersonation/users"),
@@ -92,6 +96,7 @@ export const api = {
   markNotificationRead:(notificationId) => post(`/api/notifications/${encodeURIComponent(notificationId)}/read`, {}),
   markAllNotificationsRead:() => post("/api/notifications/read-all", {}),
   assignCaseOwner:(caseId, ownerUserId) => patch(`/api/cases/${encodeURIComponent(caseId)}`, {owner_user_id:ownerUserId}),
+  deleteCase:(caseId) => remove(`/api/cases/${encodeURIComponent(caseId)}`),
   listAudit:() => cached("/api/audit", 15000),
   listWritebackFailures:() => cached("/api/operations/writebacks", 10000),
   getSlaDashboard:() => cached("/api/operations/sla", 10000),

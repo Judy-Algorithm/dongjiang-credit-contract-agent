@@ -714,7 +714,18 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 mine = parse_qs(parsed.query).get("mine", [""])[0] == "1"
                 if mine:
                     rows = [item for item in rows if item["is_my_task"]]
-                self._json(200, {"ok": True, "cases": rows, "total": len(rows)})
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "cases": rows,
+                        "total": len(rows),
+                        "permissions": {
+                            "can_delete_cases": "system_admin"
+                            in set(user.get("roles") or [])
+                        },
+                    },
+                )
                 return
             parts = [item for item in path.split("/") if item]
             if (
@@ -1182,6 +1193,58 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             self._json(401, {"ok": False, "error": str(exc)})
         except KeyError as exc:
             self._json(404, {"ok": False, "error": str(exc).strip("'") or "资源不存在"})
+        except PermissionError as exc:
+            self._json(403, {"ok": False, "error": str(exc)})
+        except Exception as exc:
+            self._json(400, {"ok": False, "error": str(exc), "error_type": type(exc).__name__})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        try:
+            session = self._session()
+            assert session is not None
+            user, csrf_token, _ = session
+            self._require_csrf(csrf_token)
+            self._require_roles(user, "system_admin")
+            parts = [item for item in path.split("/") if item]
+            if len(parts) != 3 or parts[:2] != ["api", "cases"]:
+                self._json(404, {"ok": False, "error": "API 不存在"})
+                return
+
+            from ..workflow import DongjiangWorkflowHarness
+
+            case_id = parts[2]
+            with DongjiangWorkflowHarness() as harness:
+                deleted = harness.delete_case(case_id)
+            with AuthStore() as store:
+                notification_count = store.delete_case_notifications(case_id)
+                store.audit(
+                    "case.deleted",
+                    actor=user,
+                    target_type="case",
+                    target_id=case_id,
+                    detail={
+                        "customer_name": deleted["customer_name"],
+                        "deleted_resources": deleted["deleted_resources"],
+                        "checkpoint_rows": deleted["checkpoint_rows"],
+                        "notification_count": notification_count,
+                    },
+                    remote_address=self._remote_address(),
+                )
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "deleted": {
+                        **deleted,
+                        "notification_count": notification_count,
+                    },
+                },
+            )
+        except AuthenticationError as exc:
+            self._json(401, {"ok": False, "error": str(exc)})
+        except KeyError as exc:
+            self._json(404, {"ok": False, "error": str(exc).strip("'")})
         except PermissionError as exc:
             self._json(403, {"ok": False, "error": str(exc)})
         except Exception as exc:

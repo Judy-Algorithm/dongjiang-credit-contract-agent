@@ -1,4 +1,4 @@
-import {api} from "../api.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-csrf-delete"
 import {navigate} from "../router.js?v=20260807-request-templates"
 import {escapeHtml, dateTime} from "../format.js?v=20260807-request-templates"
 
