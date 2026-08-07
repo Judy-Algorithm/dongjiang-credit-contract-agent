@@ -1,5 +1,5 @@
 import {api, encodeFiles} from "../api.js?v=20260802-auth-simplified"
-import {escapeHtml, money} from "../format.js?v=20260802-auth-simplified"
+import {escapeHtml, money} from "../format.js?v=20260807-contract-approval"
 import {navigate} from "../router.js?v=20260802-auth-simplified"
 
 export async function renderCaseActionPage(root, route) {

@@ -128,7 +128,7 @@ def _decision_task(item: dict[str, Any], case: dict[str, Any]) -> str:
         return "manager_approval"
     if decision == "manual_review":
         return "finance_legal_review"
-    if decision == "pass" and str(case.get("status") or "") == "pending_legal_approval":
+    if decision == "pass":
         return "contract_approval"
     return ""
 
