@@ -1890,6 +1890,7 @@ class WorkflowNodes:
             ai_available=bool(
                 self.contract_ai.enabled and self.contract_ai.gateway.available
             ),
+            submission_number=int(state.get("contract_submission_number") or 0),
             runtime_snapshot=self._runtime_snapshot(),
         )
         return {
@@ -2461,23 +2462,17 @@ class WorkflowNodes:
                     ),
                 )
             ]
-            if result.decision.value in {"block", "manual_review", "special_approval"}:
-                runs.append(
-                    orchestration_waiting_run(
-                        plan,
-                        "contract_human_review",
-                        output_summary="合同风险需要人工复核、修改或授权",
-                    )
+            runs.append(
+                orchestration_waiting_run(
+                    plan,
+                    "contract_human_review",
+                    output_summary=(
+                        "合同规则与AI辅助结果等待法务批准"
+                        if result.decision.value == "pass"
+                        else "合同风险需要人工复核、修改或授权"
+                    ),
                 )
-            else:
-                runs.append(
-                    orchestration_run(
-                        plan,
-                        "contract_human_review",
-                        status="skipped",
-                        output_summary="合同风险未触发额外人工复核",
-                    )
-                )
+            )
             update["orchestration_runs"] = runs
         return update
 
@@ -2510,7 +2505,9 @@ class WorkflowNodes:
                 "pending_files": files,
                 "pending_document_kind": "contract",
                 "contract_facts": [],
+                "contract_submission_number": int(state.get("contract_submission_number") or 0) + 1,
                 "contract_reviews": [],
+                "contract_approval": None,
                 "decision": None,
                 "approval_route": None,
                 "waiting_for": None,
@@ -2590,6 +2587,82 @@ class WorkflowNodes:
                 "human_decision": response_payload,
                 "waiting_for": "sales_revision",
                 "trace": [trace("manager.rejected", "管理层拒绝特批，退回销售修改。")],
+            },
+            goto="await_sales_revision",
+        )
+
+    def await_contract_approval(
+        self, state: WorkflowState
+    ) -> Command[Literal["finalize", "await_sales_revision"]]:
+        response = interrupt(
+            {
+                "type": "contract_approval",
+                **dict(state.get("approval_request") or {}),
+                "message": (
+                    "合同规则检查已通过，请合同法务结合制度结论、AI辅助风险和原文证据"
+                    "作出最终决定。AI辅助发现仅供参考，不会自动批准或否决合同。"
+                ),
+                "allowed_actions": ["approve", "request_revision"],
+            }
+        )
+        response_payload = dict(response or {})
+        action = str(response_payload.get("action") or "")
+        if action == "approve":
+            actor = dict(response_payload.get("actor") or {})
+            approval = {
+                **response_payload,
+                "approved_at": utc_now(),
+                "approved_by": {
+                    "actor_id": str(actor.get("actor_id") or ""),
+                    "display_name": str(actor.get("display_name") or ""),
+                    "source_system": str(actor.get("source_system") or ""),
+                },
+                "rule_decision": str(state.get("decision") or "pass"),
+                "ai_assistance_is_advisory": True,
+            }
+            return Command(
+                update={
+                    "status": "approved",
+                    "contract_approval": approval,
+                    "human_decision": response_payload,
+                    "waiting_for": None,
+                    "orchestration_runs": [
+                        orchestration_run(
+                            dict(state.get("orchestration_plan") or {}),
+                            "contract_human_review",
+                            status="completed",
+                            output_summary="合同法务已结合规则结论与AI辅助风险批准合同",
+                        )
+                    ] if state.get("orchestration_plan") else [],
+                    "trace": [
+                        trace(
+                            "contract_legal.approved",
+                            "合同法务已完成最终人工审批并批准合同。",
+                            ai_assistance_is_advisory=True,
+                        )
+                    ],
+                },
+                goto="finalize",
+            )
+        if action != "request_revision":
+            raise ValueError("合同法务请选择批准或要求修改。")
+        return Command(
+            update={
+                "status": "blocked",
+                "contract_approval": {
+                    **response_payload,
+                    "requested_at": utc_now(),
+                    "ai_assistance_is_advisory": True,
+                },
+                "human_decision": response_payload,
+                "waiting_for": "sales_revision",
+                "trace": [
+                    trace(
+                        "contract_legal.revision_requested",
+                        "合同法务要求业务修改合同。",
+                        ai_assistance_is_advisory=True,
+                    )
+                ],
             },
             goto="await_sales_revision",
         )
@@ -2697,6 +2770,7 @@ class WorkflowNodes:
             "expires_at": approval.get("expires_at"),
             "oa_evidence_id": approval.get("oa_evidence_id"),
             "approval_chain": list(final_state.get("approval_chain") or []),
+            "contract_legal_approval": dict(final_state.get("contract_approval") or {}),
         }
         customer_id = str(
             customer.get("crm_customer_id")

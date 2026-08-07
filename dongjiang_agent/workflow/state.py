@@ -25,6 +25,7 @@ class WorkflowState(TypedDict, total=False):
     credit_source_files: list[str]
     contract_source_files: list[str]
     contract_facts: list[dict[str, Any]]
+    contract_submission_number: int
 
     credit_source: str
     credit_assessment: dict[str, Any] | None
@@ -37,6 +38,7 @@ class WorkflowState(TypedDict, total=False):
     credit_control: dict[str, Any]
     special_release: dict[str, Any] | None
     exception_approval: dict[str, Any] | None
+    contract_approval: dict[str, Any] | None
     contract_reviews: list[dict[str, Any]]
     decision: str | None
     approval_route: str | None

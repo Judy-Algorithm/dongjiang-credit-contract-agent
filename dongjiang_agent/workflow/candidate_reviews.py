@@ -10,7 +10,7 @@ from typing import Any
 
 CANDIDATE_WAITING_FOR = {
     "credit": {"credit_approval"},
-    "contract": {"finance_legal_review", "manager_approval"},
+    "contract": {"contract_approval", "finance_legal_review", "manager_approval"},
 }
 
 _CREDIT_FIELDS = (

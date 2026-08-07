@@ -669,6 +669,7 @@ class WebApiTests(unittest.TestCase):
     def test_contract_submission_uses_business_route(self):
         self.create_user("sales.contract", "合同业务", ["sales"])
         self.create_user("credit.contract", "合同信用", ["credit"])
+        self.create_user("legal.contract", "合同法务", ["legal"])
         self.activate_user("sales.contract")
         status, created = self.request(
             "POST",
@@ -730,8 +731,18 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(submitted["ok"])
-        self.assertEqual(submitted["case"]["status_label"], "已通过")
-        self.assertIsNone(submitted["case"]["next_action"])
+        self.assertEqual(submitted["case"]["status_label"], "等待合同法务批准")
+        self.assertEqual(submitted["case"]["next_action"], None)
+        self.activate_user("legal.contract")
+        status, legal_view = self.request("GET", f"/api/cases/{case_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(legal_view["case"]["next_action"]["type"], "contract_approval")
+        status, approved_contract = self.request(
+            "POST", f"/api/cases/{case_id}/contract-actions",
+            {"action": "approve", "comment": "法务确认合同无误"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(approved_contract["case"]["status_label"], "已通过")
 
     def test_overdue_lock_requires_archived_special_release_evidence(self):
         _, created = self.request(

@@ -9,7 +9,7 @@ export async function renderCaseActionPage(root, route) {
     return
   }
   const type = item.next_action.type
-  const candidateAgent = type === "credit_approval" ? "credit" : ["manual_review","manager_review"].includes(type) ? "contract" : ""
+  const candidateAgent = type === "credit_approval" ? "credit" : ["manual_review","manager_review","contract_approval"].includes(type) ? "contract" : ""
   const candidateRequest = (item.agent_candidates || []).find((candidate) => candidate.status === "pending" && candidate.agent === candidateAgent)
   root.innerHTML = `
     <header class="page-header">
@@ -156,8 +156,17 @@ function context(item) {
     </div>
     ${credit.requires_supplement ? `<div class="supplement-notice"><strong>本次补件原因</strong><ul>${(credit.supplement_reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
     ${item.credit_control?.credit_lock_reasons?.length ? `<div class="supplement-notice"><strong>信用控制锁定原因</strong><ul>${item.credit_control.credit_lock_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
-    ${item.findings?.length ? `<div class="form-section"><div class="form-section-title"><h3>需要处理的问题</h3></div>${item.findings.map((finding) => `<article class="finding ${escapeHtml(finding.level || "")}"><h3>${escapeHtml(finding.title)}</h3><p>${escapeHtml(finding.message)}</p><small>${escapeHtml(finding.suggestion)}</small></article>`).join("")}</div>` : ""}
+    ${item.findings?.length ? `<div class="form-section"><div class="form-section-title"><h3>制度规则结论</h3></div>${item.findings.map((finding) => `<article class="finding ${escapeHtml(finding.level || "")}"><h3>${escapeHtml(finding.title)}</h3><p>${escapeHtml(finding.message)}</p><small>${escapeHtml(finding.suggestion)}</small></article>`).join("")}</div>` : `<div class="supplement-notice"><strong>制度规则结论</strong><p>合同规则检查未发现需要阻断、特批或异常复核的事项，但仍需合同法务人工批准。</p></div>`}
+    ${typeFor(item) === "contract_approval" ? aiReviewContext(item) : ""}
   `
+}
+
+function typeFor(item) { return item.next_action?.type || "" }
+
+function aiReviewContext(item) {
+  const groups = item.ai_assistance || []
+  const findings = groups.flatMap((group) => group.findings || [])
+  return `<div class="form-section ai-review-context"><div class="form-section-title"><h3>AI辅助发现</h3><span>仅供法务判断参考</span></div><p class="field-hint">AI辅助结果不会自动改变制度结论、审批路线或批准结果，请结合原合同证据人工判断。</p>${findings.length ? findings.map((finding) => `<article class="ai-finding"><h3>${escapeHtml(finding.title || "辅助风险")}</h3><p>${escapeHtml(finding.message || "")}</p><small>${escapeHtml(finding.location_label || "未定位")}</small></article>`).join("") : `<p class="field-hint">当前未配置或未发现AI辅助风险，仍需完成法务批准。</p>`}</div>`
 }
 
 function message(type) {
@@ -168,6 +177,7 @@ function message(type) {
     submit_revision:"请修改风险事项后，提交最新版本合同。",
     manager_review:"请确认是否批准本次例外申请。",
     manual_review:"请确认审核结果，补充资料，或要求业务修改合同。",
+    contract_approval:"请结合制度规则结论、AI辅助风险和原文证据，决定批准合同或要求修改。",
     special_release:"客户信用控制已锁定，请核验原因并上传特别放行证据。",
   })[type] || "请处理当前事项。"
 }
@@ -259,6 +269,8 @@ function creditSupplementForm() {
 function decisionForm(type, item) {
   const actions = ["manager_review","special_release"].includes(type)
     ? [["reject","驳回","danger"],["approve","批准","primary"]]
+    : type === "contract_approval"
+      ? [["request_revision","要求修改合同","secondary"],["approve","批准合同","primary"]]
     : [["request_revision","要求修改合同","secondary"],["supplement","补充资料","secondary"],["approve","确认通过","primary"]]
   const model = item.credit?.model_result || {}
   return `

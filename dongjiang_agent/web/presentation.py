@@ -37,6 +37,7 @@ STATUS_LABELS = {
     "blocked": "等待修改合同",
     "pending_special_approval": "等待管理层审批",
     "pending_manual_review": "等待财务法务复核",
+    "pending_legal_approval": "等待合同法务批准",
     "approved": "已通过",
     "approved_by_exception": "已特批通过",
     "approved_after_manual_review": "已复核通过",
@@ -93,6 +94,8 @@ RECORD_LABELS = {
     "manager.approved": "管理层已批准",
     "manager.rejected": "管理层已驳回",
     "manual.approved": "财务法务复核已完成",
+    "contract_legal.approved": "合同法务已批准",
+    "contract_legal.revision_requested": "合同法务已要求修改",
     "manual.supplemented": "补充资料已提交",
     "manual.revision_requested": "已要求修改合同",
     "workflow.closed": "案件已关闭",
@@ -207,6 +210,7 @@ def _waiting_for(case: dict[str, Any], explicit: str | None = None) -> str | Non
         "blocked": "sales_revision",
         "pending_special_approval": "manager_approval",
         "pending_manual_review": "finance_legal_review",
+        "pending_legal_approval": "contract_approval",
     }.get(str(case.get("status") or ""))
 
 
@@ -268,6 +272,14 @@ def _next_action(waiting_for: str | None) -> dict[str, Any] | None:
             "allowed_actions": [
                 {"type": "approve", "label": "确认通过"},
                 {"type": "supplement", "label": "补充资料"},
+                {"type": "request_revision", "label": "要求修改合同"},
+            ],
+        },
+        "contract_approval": {
+            "type": "contract_approval",
+            "label": "处理合同法务批准",
+            "allowed_actions": [
+                {"type": "approve", "label": "批准合同"},
                 {"type": "request_revision", "label": "要求修改合同"},
             ],
         },
@@ -608,6 +620,7 @@ def case_view(
             "sales_revision": {"case_submitter"},
             "manager_approval": {"exception_approver"},
             "finance_legal_review": {"legal_reviewer"},
+            "contract_approval": {"legal_reviewer"},
         }.get(str(resolved_waiting or ""), set())
         can_act = bool(required.intersection(actor_roles))
         if can_act and resolved_waiting in {
@@ -692,6 +705,7 @@ def case_view(
                 and can_act
             ),
             "can_approve_credit": resolved_waiting == "credit_approval" and can_act,
+            "can_approve_contract": resolved_waiting == "contract_approval" and can_act,
             "can_upload_credit_documents": resolved_waiting == "credit_supplement" and can_act,
             "can_approve_special_release": resolved_waiting == "special_release" and can_act,
             "can_retry_writeback": bool(actor and "system_admin" in _actor_roles(actor)),
@@ -813,6 +827,7 @@ def case_view(
         ],
         "findings": findings,
         "ai_assistance": ai_assistance,
+        "contract_approval": dict(case.get("contract_approval") or {}),
         "agent_execution": _agent_execution(case),
         "agent_candidates": _agent_candidates(case, resolved_waiting, actor),
         "structured_extractions": _structured_extractions(case, actor),
@@ -835,7 +850,7 @@ def case_view(
                     _actor_roles(actor)
                 )
                 and resolved_waiting
-                in {"manager_approval", "finance_legal_review"}
+                in {"contract_approval", "manager_approval", "finance_legal_review"}
                 and any(
                     item.get("document_kind") == "contract"
                     and item.get("parse_status") == "parsed"

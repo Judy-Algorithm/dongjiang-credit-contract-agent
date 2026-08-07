@@ -21,6 +21,7 @@ export function statusClass(status) {
   if ([
     "credit_pending_approval","credit_supplement_required","credit_control_locked",
     "pending_special_approval","pending_manual_review","awaiting_contract",
+    "pending_legal_approval",
   ].includes(status)) return "pending"
   return ""
 }

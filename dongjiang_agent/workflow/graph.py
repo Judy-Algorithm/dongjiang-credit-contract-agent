@@ -60,6 +60,7 @@ def _decision_route(
 ) -> Literal[
     "await_sales_revision",
     "await_manager_approval",
+    "await_contract_approval",
     "await_finance_legal",
     "finalize",
 ]:
@@ -70,6 +71,8 @@ def _decision_route(
         return "await_manager_approval"
     if decision == "manual_review":
         return "await_finance_legal"
+    if state.get("waiting_for") == "contract_approval":
+        return "await_contract_approval"
     return "finalize"
 
 
@@ -279,6 +282,7 @@ def build_workflow(
     builder.add_node("decide", nodes.decide)
     builder.add_node("await_sales_revision", nodes.await_sales_revision)
     builder.add_node("await_manager_approval", nodes.await_manager_approval)
+    builder.add_node("await_contract_approval", nodes.await_contract_approval)
     builder.add_node("await_finance_legal", nodes.await_finance_legal)
     builder.add_node("finalize", nodes.finalize)
 

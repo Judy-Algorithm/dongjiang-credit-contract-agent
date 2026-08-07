@@ -42,6 +42,7 @@ WAITING_ROLES = {
     "special_release": ["exception_approver"],
     "manager_approval": ["exception_approver"],
     "finance_legal_review": ["legal_reviewer"],
+    "contract_approval": ["legal_reviewer"],
 }
 WAITING_LABELS = {
     "credit_approval": "待处理信用审批",
@@ -51,6 +52,7 @@ WAITING_LABELS = {
     "sales_revision": "待修改合同",
     "manager_approval": "待处理管理层审批",
     "finance_legal_review": "待处理财务法务复核",
+    "contract_approval": "待处理合同法务批准",
 }
 
 
@@ -1936,6 +1938,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                         "manager_approval": "exception_approver",
                         "special_release": "exception_approver",
                         "finance_legal_review": "legal_reviewer",
+                        "contract_approval": "legal_reviewer",
                     }.get(str(current.waiting_for or ""))
                     if required_role:
                         self._require_roles(user, required_role)
@@ -2058,6 +2061,10 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 "approve": "approve",
                 "supplement": "supplement",
                 "request_revision": "revise_contract",
+            },
+            "contract_approval": {
+                "approve": "approve",
+                "request_revision": "request_revision",
             },
         }
         action = action_map.get(str(waiting_for), {}).get(requested)

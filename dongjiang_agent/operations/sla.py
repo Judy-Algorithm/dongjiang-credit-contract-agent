@@ -22,12 +22,14 @@ WAITING_BY_STATUS = {
     "blocked": "sales_revision",
     "pending_special_approval": "manager_approval",
     "pending_manual_review": "finance_legal_review",
+    "pending_legal_approval": "contract_approval",
 }
 WAITING_ROLES = {
     "credit_approval": ["credit_approver"],
     "special_release": ["exception_approver"],
     "manager_approval": ["exception_approver"],
     "finance_legal_review": ["legal_reviewer"],
+    "contract_approval": ["legal_reviewer"],
 }
 OWNER_WAITING = {"credit_supplement", "contract_upload", "sales_revision"}
 ENTRY_STAGES = {
@@ -45,9 +47,11 @@ ENTRY_STAGES = {
         "decision.routed",
         "manager.rejected",
         "manual.revision_requested",
+        "contract_legal.revision_requested",
     },
     "manager_approval": {"decision.routed"},
     "finance_legal_review": {"decision.routed"},
+    "contract_approval": {"decision.routed"},
 }
 
 

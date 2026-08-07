@@ -3,10 +3,10 @@ import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20
 
 const pendingStatuses = new Set([
   "credit_pending_approval","credit_supplement_required",
-  "awaiting_contract","blocked","pending_special_approval","pending_manual_review",
+  "awaiting_contract","blocked","pending_special_approval","pending_manual_review","pending_legal_approval",
 ])
 const approvalStatuses = new Set([
-  "credit_pending_approval","pending_special_approval","pending_manual_review",
+  "credit_pending_approval","pending_special_approval","pending_manual_review","pending_legal_approval",
 ])
 
 export async function renderCasesPage(root, route) {
@@ -40,6 +40,7 @@ export async function renderCasesPage(root, route) {
         <option value="blocked">等待修改合同</option>
         <option value="pending_special_approval">等待管理层审批</option>
         <option value="pending_manual_review">等待财务法务复核</option>
+        <option value="pending_legal_approval">等待合同法务批准</option>
         <option value="done">已完成</option>
       </select>
       <button id="clearFilters" class="secondary">清除筛选</button>

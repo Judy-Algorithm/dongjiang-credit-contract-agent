@@ -98,6 +98,7 @@ class DongjiangWorkflowHarness:
         "contract_upload": {"case_submitter"},
         "sales_revision": {"case_submitter"},
         "manager_approval": {"exception_approver"},
+        "contract_approval": {"legal_reviewer"},
         "finance_legal_review": {"legal_reviewer"},
     }
 
@@ -272,6 +273,7 @@ class DongjiangWorkflowHarness:
             "credit_source_files": [],
             "contract_source_files": [],
             "contract_facts": [],
+            "contract_submission_number": 0,
             "credit_assessment": None,
             "effective_credit_assessment": None,
             "credit_status": "collecting",
@@ -282,6 +284,7 @@ class DongjiangWorkflowHarness:
             "credit_control": {},
             "special_release": None,
             "exception_approval": None,
+            "contract_approval": None,
             "contract_reviews": [],
             "decision": None,
             "approval_route": None,
@@ -360,6 +363,7 @@ class DongjiangWorkflowHarness:
         if document_kind == "credit" and current.waiting_for != "credit_approval":
             raise ValueError("信用结构化提取仅支持信用审批节点。")
         if document_kind == "contract" and current.waiting_for not in {
+            "contract_approval",
             "manager_approval",
             "finance_legal_review",
         }:
@@ -653,6 +657,7 @@ class DongjiangWorkflowHarness:
                     }
                 )
             candidate["contract_facts"] = contracts
+            candidate["contract_approval"] = None
             plan = build_contract_plan(
                 str(state["case_id"]),
                 contracts,
@@ -660,6 +665,7 @@ class DongjiangWorkflowHarness:
                     self.nodes.contract_ai.enabled
                     and self.nodes.contract_ai.gateway.available
                 ),
+                submission_number=int(candidate.get("contract_submission_number") or 0),
                 runtime_snapshot=snapshot,
             )
             candidate["active_workflow_plan"] = plan
@@ -682,6 +688,7 @@ class DongjiangWorkflowHarness:
             return {
                 "contract_facts": contracts,
                 "contract_reviews": candidate.get("contract_reviews"),
+                "contract_approval": None,
                 "contract_verifications": candidate.get("contract_verifications"),
                 "decision": decision_update.get("decision"),
                 "approval_route": decision_update.get("approval_route"),

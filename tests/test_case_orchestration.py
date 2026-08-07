@@ -218,7 +218,7 @@ class CaseOrchestrationWorkflowTests(unittest.TestCase):
                     run.case_id,
                     {"action": "submit_contract", "contract_texts": [contract]},
                 )
-                if run.waiting_for == "finance_legal_review":
+                if run.waiting_for in {"finance_legal_review", "contract_approval"}:
                     run = harness.resume(run.case_id, {"action": "approve"})
 
             latest = {

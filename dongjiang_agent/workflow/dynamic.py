@@ -69,6 +69,7 @@ def _plan_spec(plan: dict[str, Any]) -> dict[str, Any]:
         "planner": plan.get("planner"),
         "task_catalog_version": plan.get("task_catalog_version"),
         "runtime_snapshot": dict(plan.get("runtime_snapshot") or {}),
+        "submission_number": int(plan.get("submission_number") or 0),
         "tasks": list(plan.get("tasks") or []),
     }
 
@@ -295,6 +296,7 @@ def build_contract_plan(
     contracts: list[dict[str, Any]],
     *,
     ai_available: bool,
+    submission_number: int = 0,
     runtime_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tasks: list[dict[str, Any]] = []
@@ -377,6 +379,7 @@ def build_contract_plan(
         "planner": "controlled_runtime_planner",
         "status": "running",
         "created_at": utc_now(),
+        "submission_number": int(submission_number or 0),
         "tasks": tasks,
     }
     plan["runtime_snapshot"] = dict(runtime_snapshot or {})

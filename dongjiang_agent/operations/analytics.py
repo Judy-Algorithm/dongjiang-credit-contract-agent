@@ -54,6 +54,10 @@ EXIT_STAGES = {
         "manual.supplemented",
         "manual.revision_requested",
     },
+    "contract_approval": {
+        "contract_legal.approved",
+        "contract_legal.revision_requested",
+    },
 }
 ROLE_LABELS = {
     "credit_approver": "信用审批人",
@@ -76,6 +80,7 @@ STATUS_LABELS = {
     "blocked": "等待修改合同",
     "pending_special_approval": "等待管理层审批",
     "pending_manual_review": "等待财务法务复核",
+    "pending_legal_approval": "等待合同法务批准",
 }
 
 
@@ -123,6 +128,8 @@ def _decision_task(item: dict[str, Any], case: dict[str, Any]) -> str:
         return "manager_approval"
     if decision == "manual_review":
         return "finance_legal_review"
+    if decision == "pass" and str(case.get("status") or "") == "pending_legal_approval":
+        return "contract_approval"
     return ""
 
 
@@ -153,7 +160,7 @@ def _entry_task(
         return "contract_upload"
     if stage == "decision.routed":
         return _decision_task(item, case)
-    if stage in {"manager.rejected", "manual.revision_requested"}:
+    if stage in {"manager.rejected", "manual.revision_requested", "contract_legal.revision_requested"}:
         return "sales_revision"
     return ""
 

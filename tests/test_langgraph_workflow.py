@@ -179,6 +179,12 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     },
                     actor=ActorContext("sales-1", ("sales",), "crm"),
                 )
+                self.assertEqual(final.waiting_for, "contract_approval")
+                final = harness.resume(
+                    final.case_id,
+                    {"action": "approve", "comment": "法务确认修订版合同"},
+                    actor=ActorContext("legal-1", ("legal",), "oa"),
+                )
                 self.assertFalse(final.paused)
                 self.assertEqual(final.state["decision"], "pass")
                 self.assertEqual(final.status, "approved")
@@ -301,6 +307,12 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     run.case_id,
                     {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
                 )
+                self.assertEqual(final.waiting_for, "contract_approval")
+                final = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "法务确认合同"},
+                    actor=ActorContext("legal-writeback", ("legal",), "oa"),
+                )
             activation = final.state["writeback"]["credit_activation"]
             final_result = final.state["writeback"]["final"]
             self.assertEqual(activation["crm"]["status"], "succeeded")
@@ -356,6 +368,18 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     case_id,
                     {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
                     actor=ActorContext("sales-2", ("sales",), "crm"),
+                )
+                self.assertEqual(final.waiting_for, "contract_approval")
+                with self.assertRaises(PermissionError):
+                    second.resume(
+                        case_id,
+                        {"action": "approve"},
+                        actor=ActorContext("finance-1", ("finance",), "oa"),
+                    )
+                final = second.resume(
+                    case_id,
+                    {"action": "approve", "comment": "法务确认合同"},
+                    actor=ActorContext("legal-2", ("legal",), "oa"),
                 )
                 self.assertFalse(final.paused)
                 self.assertEqual(final.state["decision"], "pass")
@@ -564,6 +588,60 @@ class LangGraphWorkflowTests(unittest.TestCase):
                         {"action": "approve"},
                         actor=ActorContext("credit-data", ("credit",), "oa"),
                     )
+
+    def test_normal_contract_requires_legal_approval_and_revision_returns_to_sales(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "合同法务门禁客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                    },
+                    use_cached_credit=False,
+                    actor=ActorContext("sales-legal-gate", ("sales",), "crm"),
+                )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "approve"},
+                    actor=ActorContext("credit-legal-gate", ("credit",), "oa"),
+                )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
+                    actor=ActorContext("sales-legal-gate", ("sales",), "crm"),
+                )
+                self.assertEqual(run.status, "pending_legal_approval")
+                self.assertEqual(run.waiting_for, "contract_approval")
+                with self.assertRaises(PermissionError):
+                    harness.resume(
+                        run.case_id,
+                        {"action": "approve"},
+                        actor=ActorContext("credit-legal-gate", ("credit",), "oa"),
+                    )
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "request_revision", "comment": "请补充法务确认说明"},
+                    actor=ActorContext("legal-legal-gate", ("legal",), "oa"),
+                )
+                self.assertEqual(run.status, "blocked")
+                self.assertEqual(run.waiting_for, "sales_revision")
+                run = harness.resume(
+                    run.case_id,
+                    {"action": "submit_revision", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
+                    actor=ActorContext("sales-legal-gate", ("sales",), "crm"),
+                )
+                self.assertEqual(run.status, "pending_legal_approval")
+                self.assertEqual(run.waiting_for, "contract_approval")
+                self.assertGreater(
+                    int(run.state["active_workflow_plan"].get("submission_number") or 0),
+                    0,
+                )
 
     def test_unreviewable_contract_is_never_auto_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
