@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {escapeHtml} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {escapeHtml} from "../format.js?v=20260807-login-fix"
 
 const metricDefinitions = [
   ["信用结论", "credit_conclusion_rate"],

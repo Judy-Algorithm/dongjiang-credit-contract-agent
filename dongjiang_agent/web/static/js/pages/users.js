@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {escapeHtml, dateTime} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {escapeHtml, dateTime} from "../format.js?v=20260807-login-fix"
 
 const roles = [
   ["case_submitter","业务经办人"],

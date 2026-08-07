@@ -18,23 +18,23 @@ const navigationSummary = {unread:0, loadedAt:0, inFlight:null}
 const NAVIGATION_SUMMARY_TTL = 15000
 let renderedHeaderUserId = ""
 const pageModulePaths = {
-  login: "./pages/auth.js?v=20260807-csrf-delete",
-  register: "./pages/auth.js?v=20260807-csrf-delete",
-  "forgot-password": "./pages/auth.js?v=20260807-csrf-delete",
-  setup: "./pages/auth.js?v=20260807-csrf-delete",
-  "change-password": "./pages/auth.js?v=20260807-csrf-delete",
-  cases: "./pages/cases.js?v=20260807-csrf-delete",
-  "case-new": "./pages/case-new.js?v=20260807-csrf-delete",
-  "case-detail": "./pages/case-detail.js?v=20260807-csrf-delete",
-  "case-action": "./pages/case-action.js?v=20260807-csrf-delete",
-  users: "./pages/users.js?v=20260807-csrf-delete",
-  audit: "./pages/audit.js?v=20260807-csrf-delete",
-  writebacks: "./pages/writebacks.js?v=20260807-csrf-delete",
-  notifications: "./pages/notifications.js?v=20260807-csrf-delete",
-  operations: "./pages/operations.js?v=20260807-csrf-delete",
-  "agent-operations": "./pages/agent-operations.js?v=20260807-csrf-delete",
-  analytics: "./pages/analytics.js?v=20260807-csrf-delete",
-  benchmarks: "./pages/benchmark.js?v=20260807-csrf-delete",
+  login: "./pages/auth.js?v=20260807-login-fix",
+  register: "./pages/auth.js?v=20260807-login-fix",
+  "forgot-password": "./pages/auth.js?v=20260807-login-fix",
+  setup: "./pages/auth.js?v=20260807-login-fix",
+  "change-password": "./pages/auth.js?v=20260807-login-fix",
+  cases: "./pages/cases.js?v=20260807-login-fix",
+  "case-new": "./pages/case-new.js?v=20260807-login-fix",
+  "case-detail": "./pages/case-detail.js?v=20260807-login-fix",
+  "case-action": "./pages/case-action.js?v=20260807-login-fix",
+  users: "./pages/users.js?v=20260807-login-fix",
+  audit: "./pages/audit.js?v=20260807-login-fix",
+  writebacks: "./pages/writebacks.js?v=20260807-login-fix",
+  notifications: "./pages/notifications.js?v=20260807-login-fix",
+  operations: "./pages/operations.js?v=20260807-login-fix",
+  "agent-operations": "./pages/agent-operations.js?v=20260807-login-fix",
+  analytics: "./pages/analytics.js?v=20260807-login-fix",
+  benchmarks: "./pages/benchmark.js?v=20260807-login-fix",
 }
 
 async function loadModule(path) {
@@ -58,9 +58,9 @@ async function loadPageModule(routeName) {
 
 async function bootstrap() {
   const [authModule, apiModule, routerModule] = await Promise.all([
-    loadModule("./auth.js?v=20260807-csrf-delete"),
-    loadModule("./api.js?v=20260807-csrf-delete"),
-    loadModule("./router.js?v=20260807-csrf-delete"),
+    loadModule("./auth.js?v=20260807-login-fix"),
+    loadModule("./api.js?v=20260807-login-fix"),
+    loadModule("./router.js?v=20260807-login-fix"),
   ])
   ;({clearAuth, currentAuth, hasRole, loadAuth, setAuthenticated} = authModule)
   api = apiModule.api

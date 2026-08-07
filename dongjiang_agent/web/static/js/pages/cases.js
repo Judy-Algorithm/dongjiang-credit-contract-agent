@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {customerType, dateTime, escapeHtml, statusClass} from "../format.js?v=20260807-login-fix"
 
 const pendingStatuses = new Set([
   "credit_pending_approval","credit_supplement_required",

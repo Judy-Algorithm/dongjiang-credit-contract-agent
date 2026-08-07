@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {navigate} from "../router.js?v=20260807-request-templates"
-import {escapeHtml, dateTime} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {navigate} from "../router.js?v=20260807-login-fix"
+import {escapeHtml, dateTime} from "../format.js?v=20260807-login-fix"
 
 const categoryLabels = {registration:"账号", case:"案件", writeback:"回写", sla:"时效", agent_incident:"Agent异常", system:"系统"}
 

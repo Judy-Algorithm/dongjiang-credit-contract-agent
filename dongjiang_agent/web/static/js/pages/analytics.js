@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {escapeHtml} from "../format.js?v=20260807-request-templates"
-import {navigate} from "../router.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {escapeHtml} from "../format.js?v=20260807-login-fix"
+import {navigate} from "../router.js?v=20260807-login-fix"
 
 const rangeOptions = [[7,"近7天"],[30,"近30天"],[90,"近90天"],[0,"全部"]]
 

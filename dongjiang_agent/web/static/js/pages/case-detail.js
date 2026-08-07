@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260807-login-fix"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],

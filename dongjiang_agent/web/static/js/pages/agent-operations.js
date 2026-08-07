@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {dateTime, escapeHtml} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {dateTime, escapeHtml} from "../format.js?v=20260807-login-fix"
 
 const severityLabels = {
   critical:"严重异常", warning:"需要关注", legacy:"历史计划",

@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {dateTime, escapeHtml} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {dateTime, escapeHtml} from "../format.js?v=20260807-login-fix"
 
 export async function renderWritebacksPage(root) {
   const data = await api.listWritebackFailures()

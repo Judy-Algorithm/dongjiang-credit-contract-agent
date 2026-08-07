@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-csrf-delete"
-import {dateTime, escapeHtml} from "../format.js?v=20260807-request-templates"
+import {api} from "../api.js?v=20260807-login-fix"
+import {dateTime, escapeHtml} from "../format.js?v=20260807-login-fix"
 
 const labels = {
   "auth.login":"登录","auth.logout":"退出登录","auth.password_changed":"修改密码","auth.password_reset":"管理员重置密码","contract.translation_created":"生成合同译稿","contract.translation_confirmed":"确认合同译稿",
