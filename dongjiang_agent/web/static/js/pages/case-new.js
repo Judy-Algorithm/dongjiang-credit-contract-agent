@@ -70,8 +70,6 @@ export async function renderNewCasePage(root) {
           <label>结算币种<select id="currency"><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option><option value="EUR">欧元 EUR</option><option value="HKD">港币 HKD</option></select></label>
           <label class="full">申请说明<textarea id="applicationReason" rows="4" placeholder="填写合作背景、特殊条件或额度账期申请原因"></textarea></label>
           <label class="full checkbox-row"><input id="purchaseExemptionRequested" type="checkbox">申请TKM首期采购款豁免</label>
-          <label class="full checkbox-row"><input id="reuseEffectiveCredit" type="checkbox">复用该客户180天内的有效授信</label>
-          <p class="field-hint full">仅在统一社会信用代码或CRM客户编号匹配时生效；勾选后可能直接跳过本次信用审批。独立测试案件请不要勾选。</p>
         </div>
       </section>
 
@@ -107,6 +105,7 @@ export async function renderNewCasePage(root) {
             <span>支持 TXT、DOCX、PDF、XLSX、CSV、PNG、JPG</span>
           </label>
           <div id="creditFileList" class="file-list"></div>
+          <p id="creditParseStatus" class="field-hint" aria-live="polite"></p>
         </div>
       </section>
 
@@ -143,17 +142,35 @@ export async function renderNewCasePage(root) {
     if (step === 3) renderReview(root, collectForm(root))
   }
 
-  root.querySelector("#creditFiles").addEventListener("change", (event) => {
+  root.querySelector("#creditFiles").addEventListener("change", async (event) => {
     const selected = root._selectedCreditFiles || (root._selectedCreditFiles = [])
     const seen = new Set(selected.map(fileKey))
+    const added = []
     Array.from(event.target.files || []).forEach((file) => {
       if (!seen.has(fileKey(file))) {
         selected.push(file)
+        added.push(file)
         seen.add(fileKey(file))
       }
     })
     event.target.value = ""
     renderSelectedFiles(root, selected)
+    const status = root.querySelector("#creditParseStatus")
+    const nextButton = root.querySelector("#nextStep")
+    if (!added.length) return
+    status.textContent = "正在解析信用资料，请稍候……"
+    nextButton.disabled = true
+    try {
+      const files = await encodeFiles(added)
+      const data = await api.previewCreditDocuments({files})
+      const count = applyCreditPreview(root, data.preview || {})
+      const failed = (data.preview?.documents || []).filter((item) => item.status !== "parsed")
+      status.textContent = `已解析 ${data.preview?.parsed_document_count || 0} 份资料，自动填充 ${count} 个空白字段。${failed.length ? ` ${failed.map((item) => item.message || `${item.name}解析失败`).join("；")}` : ""}`
+    } catch (error) {
+      status.textContent = `资料解析失败：${error.message}`
+    } finally {
+      nextButton.disabled = false
+    }
   })
   root.querySelector("#requestTemplate").addEventListener("change", () => updateTemplateDescription(root, templates))
   root.querySelector("#applyTemplate").addEventListener("click", () => {
@@ -201,7 +218,7 @@ export async function renderNewCasePage(root) {
     const data = await api.createCase({
       customer,
       files,
-      use_cached_credit:root.querySelector("#reuseEffectiveCredit").checked,
+      use_cached_credit:false,
     })
     sessionStorage.removeItem(draftKey)
     navigate(`/cases/${encodeURIComponent(data.case.case_id)}`, {replace:true})
@@ -280,10 +297,7 @@ function validateBasics(root) {
 }
 
 function saveDraft(root) {
-  sessionStorage.setItem(draftKey, JSON.stringify({
-    ...collectForm(root),
-    use_cached_credit:root.querySelector("#reuseEffectiveCredit").checked,
-  }))
+  sessionStorage.setItem(draftKey, JSON.stringify(collectForm(root)))
 }
 
 function templateOptions(templates, selectedId = "") {
@@ -370,7 +384,6 @@ function restoreDraft(root, draft, {reset = false} = {}) {
     root.querySelector("#currency").value = "CNY"
   }
   root.querySelector("#purchaseExemptionRequested").checked = Boolean(draft.purchase_exemption_requested)
-  if (!reset) root.querySelector("#reuseEffectiveCredit").checked = Boolean(draft.use_cached_credit)
   for (const [id, key] of Object.entries(mapping)) {
     let item = draft[key]
     if (["assetLiabilityRatio","netMargin","revenueGrowth","onTimeRate"].includes(id) && item != null) item *= 100
@@ -403,8 +416,42 @@ function renderReview(root, customer) {
     ["第三方评级", customer.external_ratings.length ? `${customer.external_ratings.length} 条` : "未填写"],
     ["当前授信占用", `¥${Number((customer.outstanding_receivables_amount || 0) + (customer.open_order_amount || 0)).toLocaleString("zh-CN")}`],
     ["当前逾期", customer.current_overdue_days == null ? "未填写" : `${customer.current_overdue_days} 天`],
-    ["已有授信复用", root.querySelector("#reuseEffectiveCredit").checked ? "启用，命中后跳过信用审批" : "关闭，本案重新信用审批"],
+    ["信用审批", "本案必须由信用审批人批准后方可上传合同"],
     ["上传资料", `${(root._selectedCreditFiles || []).length} 个文件`],
   ]
   root.querySelector("#caseReview").innerHTML = labels.map(([label, item]) => `<div class="review-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(item)}</b></div>`).join("")
+}
+
+function applyCreditPreview(root, preview) {
+  const mapping = {
+    registered_capital:"registeredCapital",years_in_business:"yearsInBusiness",
+    asset_liability_ratio:"assetLiabilityRatio",net_margin:"netMargin",
+    current_ratio:"currentRatio",revenue_growth:"revenueGrowth",
+    monthly_order_amount:"monthlyOrder",cooperation_years:"cooperationYears",
+    overdue_count_12m:"overdueCount",max_overdue_days_12m:"maxOverdueDays",
+    on_time_payment_rate:"onTimeRate",outstanding_receivables_amount:"outstandingReceivables",
+    open_order_amount:"openOrderAmount",current_overdue_days:"currentOverdueDays",
+    last_order_date:"lastOrderDate",
+  }
+  let filled = 0
+  for (const [field, inputId] of Object.entries(mapping)) {
+    const input = root.querySelector(`#${inputId}`)
+    const value = preview.fields?.[field]
+    if (input && input.value.trim() === "" && value !== null && value !== undefined && value !== "") {
+      input.value = value
+      filled += 1
+    }
+  }
+  for (const rating of preview.external_ratings || []) {
+    const row = Array.from(root.querySelectorAll("[data-rating-row]")).find((item) =>
+      item.querySelector(".rating-agency").value === "" && item.querySelector(".rating-value").value.trim() === ""
+    )
+    if (!row) break
+    row.querySelector(".rating-agency").value = rating.agency || ""
+    row.querySelector(".rating-value").value = rating.rating || ""
+    row.querySelector(".rating-outlook").value = rating.outlook || ""
+    row.querySelector(".rating-date").value = rating.rating_date || ""
+    filled += 1
+  }
+  return filled
 }

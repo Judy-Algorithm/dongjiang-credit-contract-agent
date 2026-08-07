@@ -349,7 +349,7 @@ def _next_action(waiting_for: str | None) -> dict[str, Any] | None:
         },
         "finance_legal_review": {
             "type": "manual_review",
-            "label": "处理复核",
+            "label": "处理合同审批",
             "allowed_actions": [
                 {"type": "approve", "label": "确认通过"},
                 {"type": "supplement", "label": "补充资料"},

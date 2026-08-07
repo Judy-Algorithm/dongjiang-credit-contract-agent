@@ -171,7 +171,7 @@ class LangGraphWorkflowTests(unittest.TestCase):
                 stages = [item["stage"] for item in run.state["trace"]]
                 self.assertEqual(stages.count("workflow.started"), 1)
 
-                final = harness.resume(
+                pending_legal = harness.resume(
                     run.case_id,
                     {
                         "action": "submit_revision",
@@ -303,7 +303,7 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     use_cached_credit=False,
                 )
                 run = harness.resume(run.case_id, {"action": "approve"})
-                final = harness.resume(
+                pending_legal = harness.resume(
                     run.case_id,
                     {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
                 )
@@ -364,7 +364,7 @@ class LangGraphWorkflowTests(unittest.TestCase):
                         {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
                         actor=ActorContext("finance-1", ("finance",), "oa"),
                     )
-                final = second.resume(
+                pending_legal = second.resume(
                     case_id,
                     {"action": "submit_contract", "contract_texts": [COMPLETE_SAFE_CONTRACT]},
                     actor=ActorContext("sales-2", ("sales",), "crm"),
@@ -383,6 +383,70 @@ class LangGraphWorkflowTests(unittest.TestCase):
                 )
                 self.assertFalse(final.paused)
                 self.assertEqual(final.state["decision"], "pass")
+
+    def test_overdue_special_release_still_requires_contract_legal_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root / "特别放行批准.txt"
+            evidence.write_text("市场总监批准本次特别放行", encoding="utf-8")
+            with self.harness(root) as harness:
+                run = harness.start(
+                    {
+                        "customer_name": "逾期特别放行合同审批客户",
+                        "customer_type": "existing",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "external_rating": "AA",
+                        "asset_liability_ratio": 0.45,
+                        "current_ratio": 1.5,
+                        "current_overdue_days": 31,
+                    },
+                    actor=ActorContext("sales-c", ("sales",), "web"),
+                )
+                locked = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "信用审批通过"},
+                    actor=ActorContext("credit-c", ("credit",), "web"),
+                )
+                self.assertEqual(locked.waiting_for, "special_release")
+
+                released = harness.resume(
+                    run.case_id,
+                    {
+                        "action": "approve",
+                        "comment": "仅放行本次订单",
+                        "file_paths": [str(evidence)],
+                    },
+                    actor=ActorContext("director-c", ("director",), "web"),
+                )
+                self.assertEqual(released.waiting_for, "contract_upload")
+
+                reviewed = harness.resume(
+                    run.case_id,
+                    {
+                        "action": "submit_contract",
+                        "contract_texts": [COMPLETE_SAFE_CONTRACT],
+                    },
+                    actor=ActorContext("sales-c", ("sales",), "web"),
+                )
+                self.assertEqual(reviewed.state["decision"], "pass")
+                self.assertEqual(reviewed.status, "pending_contract_approval")
+                self.assertEqual(reviewed.waiting_for, "finance_legal_review")
+                self.assertTrue(reviewed.paused)
+
+                final = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "合同法务审批通过"},
+                    actor=ActorContext("legal-c", ("legal",), "web"),
+                )
+                self.assertFalse(final.paused)
+                self.assertEqual(final.status, "approved")
+                self.assertTrue(
+                    any(
+                        item.get("stage") == "contract.approved"
+                        for item in final.state.get("trace") or []
+                    )
+                )
 
     def test_special_approval_requires_director_or_ceo(self):
         with tempfile.TemporaryDirectory() as tmp:

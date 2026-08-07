@@ -50,6 +50,7 @@ EXIT_STAGES = {
     "sales_revision": {"sales.revised", "sales.closed"},
     "manager_approval": {"manager.approved", "manager.rejected"},
     "finance_legal_review": {
+        "contract.approved",
         "manual.approved",
         "manual.supplemented",
         "manual.revision_requested",
@@ -126,7 +127,7 @@ def _decision_task(item: dict[str, Any], case: dict[str, Any]) -> str:
         return "sales_revision"
     if decision == "special_approval":
         return "manager_approval"
-    if decision == "manual_review":
+    if decision in {"manual_review", "pass"}:
         return "finance_legal_review"
     if decision == "pass":
         return "contract_approval"

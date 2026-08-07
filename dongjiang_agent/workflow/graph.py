@@ -69,7 +69,7 @@ def _decision_route(
         return "await_sales_revision"
     if decision == "special_approval":
         return "await_manager_approval"
-    if decision == "manual_review":
+    if decision in {"manual_review", "pass"}:
         return "await_finance_legal"
     if state.get("waiting_for") == "contract_approval":
         return "await_contract_approval"

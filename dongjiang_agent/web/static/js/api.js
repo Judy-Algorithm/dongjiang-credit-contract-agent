@@ -119,6 +119,7 @@ export const api = {
   confirmContractTranslation:(caseId, translationId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/translations/${encodeURIComponent(translationId)}/confirm`, payload),
   translationDownloadUrl:(caseId, translationId) => `/api/cases/${encodeURIComponent(caseId)}/translations/${encodeURIComponent(translationId)}/download`,
   createCase:(payload) => post("/api/cases", payload),
+  previewCreditDocuments:(payload) => post("/api/credit-document-previews", payload),
   submitCreditDocuments:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/credit-documents`, payload),
   submitCreditAction:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/credit-actions`, payload),
   submitContract:(caseId, payload) => post(`/api/cases/${encodeURIComponent(caseId)}/contracts`, payload),

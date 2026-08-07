@@ -998,87 +998,20 @@ class WorkflowNodes:
 
     def check_credit_cache(self, state: WorkflowState) -> dict[str, Any]:
         customer = profile_from_dict(dict(state["customer"]))
-        cached = (
-            self.repository.find_valid_credit(customer)
-            if state.get("use_cached_credit", True)
-            else None
-        )
-        if cached:
-            assessment = checkpoint_dict(cached)
-            credit_control = self.credit_engine.credit_control(
-                customer,
-                float(assessment.get("approved_credit_limit") or 0),
-            )
-            assessment.update(
-                {
-                    "occupied_credit_amount": credit_control["occupied_credit_amount"],
-                    "available_credit_amount": credit_control["available_credit_amount"],
-                    "credit_locked": credit_control["credit_locked"],
-                    "credit_lock_reasons": credit_control["credit_lock_reasons"],
-                }
-            )
-            locked = bool(credit_control["credit_locked"])
-            update = {
-                "stage": "credit_ready",
-                "status": "credit_control_locked" if locked else "credit_effective",
-                "credit_source": "cache",
-                "credit_assessment": assessment,
-                "effective_credit_assessment": assessment,
-                "credit_status": "effective",
-                "credit_control": credit_control,
-                "waiting_for": "special_release" if locked else None,
-                "credit_approval": {
-                    "action": "reuse_effective_credit",
-                    "source": "cache",
-                    "approved_at": cached.assessed_at,
-                },
-                "trace": [
-                    trace(
-                        "credit.cache_hit",
-                        "读取到180天内有效信审结果。",
-                        assessed_at=cached.assessed_at,
-                    )
-                ],
-            }
-            plan = dict(state.get("orchestration_plan") or {})
-            if plan:
-                runs = [
-                    orchestration_run(
-                        plan,
-                        "credit_cache_check",
-                        status="completed",
-                        output_summary="命中有效授信，信用子 Agent 本次无需重新执行",
-                    ),
-                    orchestration_run(
-                        plan,
-                        "credit_agent_dispatch",
-                        status="skipped",
-                        output_summary="已复用有效授信，跳过信用子 Agent",
-                    ),
-                ]
-                if case_plan_has_task(plan, "enterprise_identity_supervision"):
-                    runs.append(
-                        orchestration_run(
-                            plan,
-                            "enterprise_identity_supervision",
-                            status="completed",
-                            output_summary=(
-                                "已识别唯一客户标识，可安全复用历史授信"
-                                if customer.crm_customer_id
-                                or customer.unified_social_credit_code
-                                else "缺少唯一客户标识，已禁止按客户名称复用授信"
-                            ),
-                        )
-                    )
-                update["orchestration_runs"] = runs
-            return update
         update = {
             "stage": "credit_required",
             "credit_source": "new_assessment",
             "credit_assessment": None,
             "effective_credit_assessment": None,
             "credit_status": "calculating",
-            "trace": [trace("credit.cache_miss", "未找到有效信审结果，进入信审子图。")],
+            "credit_approval": {},
+            "waiting_for": None,
+            "trace": [
+                trace(
+                    "credit.fresh_approval_required",
+                    "新案件必须重新完成信用评估并由信用审批人批准，历史授信仅作参考。",
+                )
+            ],
         }
         plan = dict(state.get("orchestration_plan") or {})
         if plan:
@@ -1087,7 +1020,7 @@ class WorkflowNodes:
                     plan,
                     "credit_cache_check",
                     status="completed",
-                    output_summary="未命中可复用授信，准备分配信用子 Agent",
+                    output_summary="本案强制重新评估并进入信用人工审批",
                 )
             ]
             if case_plan_has_task(plan, "enterprise_identity_supervision"):
@@ -1097,10 +1030,10 @@ class WorkflowNodes:
                         "enterprise_identity_supervision",
                         status="completed",
                         output_summary=(
-                            "已识别唯一客户标识但无可复用授信"
+                            "已识别唯一客户标识，历史授信仅作为参考"
                             if customer.crm_customer_id
                             or customer.unified_social_credit_code
-                            else "缺少唯一客户标识，历史授信不会按名称复用"
+                            else "缺少唯一客户标识，本案仍独立完成信用审批"
                         ),
                     )
                 )
@@ -2734,11 +2667,16 @@ class WorkflowNodes:
     ) -> Command[
         Literal["finalize", "ingest_credit_documents", "await_sales_revision"]
     ]:
+        normal_contract_approval = state.get("decision") == "pass"
         response = interrupt(
             {
                 "type": "finance_legal_review",
                 **dict(state.get("approval_request") or {}),
-                "message": "请财务/法务补充资料、确认结论或要求修改合同。",
+                "message": (
+                    "合同Agent审查已完成，请合同法务进行最终人工审批。"
+                    if normal_contract_approval
+                    else "请财务/法务补充资料、确认结论或要求修改合同。"
+                ),
                 "allowed_actions": ["approve", "supplement", "revise_contract"],
             }
         )
@@ -2752,10 +2690,21 @@ class WorkflowNodes:
             raise ValueError("财务法务审批不能采纳非合同Agent候选。")
         action = str(response_payload.get("action") or "")
         if action == "approve":
+            approved_status = (
+                "approved" if normal_contract_approval else "approved_after_manual_review"
+            )
+            approved_stage = (
+                "contract.approved" if normal_contract_approval else "manual.approved"
+            )
+            approved_message = (
+                "合同法务已完成最终审批并确认通过。"
+                if normal_contract_approval
+                else "财务/法务完成复核并确认。"
+            )
             return Command(
                 update={
                     **candidate_update,
-                    "status": "approved_after_manual_review",
+                    "status": approved_status,
                     "human_decision": response_payload,
                     "waiting_for": None,
                     "orchestration_runs": [
@@ -2767,7 +2716,7 @@ class WorkflowNodes:
                         )
                     ] if state.get("orchestration_plan") else [],
                     "trace": ([candidate_trace] if candidate_trace else []) + [
-                        trace("manual.approved", "财务/法务完成复核并确认。")
+                        trace(approved_stage, approved_message)
                     ],
                 },
                 goto="finalize",
