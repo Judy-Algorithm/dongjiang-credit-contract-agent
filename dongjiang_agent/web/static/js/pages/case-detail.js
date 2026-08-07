@@ -191,15 +191,17 @@ function translationWorkbench(item) {
   const translations = item.contract_translations || []
   if (!contracts.length) return ""
   const canManage = item.translation_permissions?.can_manage
-  return `<section class="translation-workbench form-section">
-    <div class="section-heading"><div><h3>多语言合同</h3><span>译文逐段绑定原文，人工确认后才可导出</span></div><span>${translations.length} 个版本</span></div>
+  return `<details class="translation-workbench form-section">
+    <summary><div><h3>生成多语言译稿</h3><span>中、英、越、日、西语 · 逐段对齐 · 人工复核后导出</span></div><div><span class="badge">${translations.length} 个版本</span><span class="translation-disclosure">展开</span></div></summary>
+    <div class="translation-workbench-body">
     ${canManage ? `<form id="translationForm" class="translation-toolbar">
       <label>合同<select id="translationDocument">${contracts.map((doc) => `<option value="${escapeHtml(doc.document_id)}">${escapeHtml(doc.name)}</option>`).join("")}</select></label>
       <fieldset class="translation-language-order"><legend>目标语言与顺序</legend>${translationLanguageRows()}</fieldset>
       <button type="submit" class="secondary">生成对齐译稿</button>
     </form>` : ""}
     ${translations.length ? `<div class="translation-list">${translations.map((translation) => translationRow(item, translation, canManage)).join("")}</div>` : `<div class="empty-note">尚未生成合同译稿。</div>`}
-  </section>`
+    </div>
+  </details>`
 }
 
 function translationRow(item, translation, canManage) {

@@ -292,6 +292,17 @@ class ContractReviewTests(unittest.TestCase):
             for item in result.findings
         ))
 
+    def test_ocr_money_group_separators_are_normalized(self):
+        facts = ContractFactExtractor().extract(
+            "采购合同。合同金额人民币 3 600 000 元；"
+            "授信额度人民币 3.000,000 元；付款期限：月结 120 天。",
+            contract_name="scan.pdf",
+        )
+
+        self.assertEqual(facts.amount, 3_600_000)
+        self.assertEqual(facts.requested_credit, 3_000_000)
+        self.assertEqual(facts.payment_term_days, 120)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
+        poppler-utils \
         tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
         tesseract-ocr-vie tesseract-ocr-jpn tesseract-ocr-spa \
     && rm -rf /var/lib/apt/lists/*

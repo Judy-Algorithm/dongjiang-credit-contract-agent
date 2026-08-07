@@ -12,6 +12,15 @@ def _number(text: str) -> float:
     return value
 
 
+def _normalize_ocr_numbers(text: str) -> str:
+    """Repair spaces/dots that OCR inserts between three-digit money groups."""
+    return re.sub(
+        r"(?<=\d)[.\s](?=\d{3}(?:[^\d]|$))",
+        ",",
+        str(text or ""),
+    )
+
+
 def _excerpt(text: str, start: int, end: int, radius: int = 80) -> str:
     return re.sub(r"\s+", " ", text[max(0, start - radius): min(len(text), end + radius)]).strip()
 
@@ -166,7 +175,7 @@ class ContractFactExtractor:
         business_type: str = "TKP",
         language: str = "zh",
     ) -> ContractFacts:
-        content = str(text or "")
+        content = _normalize_ocr_numbers(str(text or ""))
         detected_language = _detect_language(content, language)
         facts = ContractFacts(
             contract_name=contract_name,

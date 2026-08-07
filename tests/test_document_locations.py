@@ -138,6 +138,58 @@ class DocumentLocationTests(unittest.TestCase):
                 },
             )
 
+    def test_pdf_ocr_replaces_weak_native_page_but_keeps_readable_page(self):
+        from pypdf import PdfWriter
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=200, height=200)
+            writer.add_blank_page(width=200, height=200)
+            with path.open("wb") as handle:
+                writer.write(handle)
+            readable = "采购合同 Buyer and Seller agree on payment terms. " * 4
+            pages = [
+                type("Page", (), {"extract_text": lambda self: readable})(),
+                type("Page", (), {"extract_text": lambda self: "页眉"})(),
+            ]
+            with patch("pypdf.PdfReader", return_value=type("Reader", (), {"pages": pages})()), \
+                 patch.object(DocumentExtractor, "_pdftotext_pages", return_value=([], None)), \
+                 patch.object(
+                     DocumentExtractor,
+                     "_ocr_pdf_pages",
+                     return_value=({2: ("第二页付款账期120天，合同金额人民币100万元。", 0.91, [])}, []),
+                 ) as ocr:
+                document = DocumentExtractor().extract(path)
+
+            ocr.assert_called_once_with(path.resolve(), [2])
+            self.assertIn("pypdf", document.extractor)
+            self.assertIn("tesseract", document.extractor)
+            self.assertEqual(document.fragments[0].text, readable)
+            self.assertTrue(document.fragments[1].location["ocr"])
+            self.assertIn("付款账期120天", document.fragments[1].text)
+
+    def test_pdf_uses_better_pdftotext_result_without_ocr(self):
+        from pypdf import PdfWriter
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "encoded.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=200, height=200)
+            with path.open("wb") as handle:
+                writer.write(handle)
+            native = "\ufffd\ufffd\ufffd"
+            poppler = "HỢP ĐỒNG MUA BÁN. Thanh toán trong vòng 90 ngày. " * 3
+            pages = [type("Page", (), {"extract_text": lambda self: native})()]
+            with patch("pypdf.PdfReader", return_value=type("Reader", (), {"pages": pages})()), \
+                 patch.object(DocumentExtractor, "_pdftotext_pages", return_value=([poppler], None)), \
+                 patch.object(DocumentExtractor, "_ocr_pdf_pages") as ocr:
+                document = DocumentExtractor().extract(path)
+
+            ocr.assert_not_called()
+            self.assertEqual(document.fragments[0].text, poppler)
+            self.assertIn("pdftotext", document.extractor)
+
     def test_ocr_normalization_keeps_latin_spaces_and_joins_cjk(self):
         text = DocumentExtractor._normalize_ocr_text(
             "合 同 金 额 : 人 民 币 100 万 元\nBuyer and Seller agree"

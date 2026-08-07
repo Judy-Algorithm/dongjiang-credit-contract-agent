@@ -299,78 +299,120 @@ class DocumentExtractor:
         path: Path,
     ) -> tuple[str, str, list[str], list[DocumentFragment]]:
         warnings: list[str] = []
+        pages: list[str] = []
+        native_extractors: set[str] = set()
         try:
             from pypdf import PdfReader  # type: ignore
+
             reader = PdfReader(str(path))
             pages = [page.extract_text() or "" for page in reader.pages]
-            empty_pages = [
-                number
-                for number, content in enumerate(pages, start=1)
-                if not content.strip()
-            ]
-            ocr_pages: dict[int, tuple[Any, ...]] = {}
-            if empty_pages:
-                ocr_pages, ocr_warnings = cls._ocr_pdf_pages(path, empty_pages)
-                warnings.extend(ocr_warnings)
-                for number, result in ocr_pages.items():
-                    content = str(result[0])
-                    pages[number - 1] = content
-            text = "\n".join(pages)
-            if text.strip():
-                fragments = [
-                    DocumentFragment(
-                        f"page-{number}",
-                        content,
-                        {
-                            "kind": "page",
-                            "page": number,
-                            "ocr": number in ocr_pages,
-                            "ocr_confidence": (
-                                ocr_pages[number][1] if number in ocr_pages else None
-                            ),
-                            **(
-                                {"ocr_regions": ocr_pages[number][2]}
-                                if number in ocr_pages
-                                and len(ocr_pages[number]) > 2
-                                and ocr_pages[number][2]
-                                else {}
-                            ),
-                        },
-                    )
-                    for number, content in enumerate(pages, start=1)
-                    if content.strip()
-                ]
-                extractor = "pypdf+tesseract" if ocr_pages else "pypdf"
-                return text, extractor, warnings, fragments
-            if empty_pages and not warnings:
-                warnings.append("扫描版 PDF 未识别出可用文本。")
+            native_extractors.add("pypdf")
         except ImportError:
-            pass
+            warnings.append("当前环境未安装 pypdf，已尝试其他 PDF 解析器。")
         except Exception as exc:
             warnings.append(f"pypdf 解析失败：{type(exc).__name__}")
+
+        poppler_pages, poppler_warning = cls._pdftotext_pages(path)
+        if poppler_warning:
+            warnings.append(poppler_warning)
+        if poppler_pages:
+            native_extractors.add("pdftotext")
+            page_count = max(len(pages), len(poppler_pages))
+            pages.extend([""] * (page_count - len(pages)))
+            poppler_pages.extend([""] * (page_count - len(poppler_pages)))
+            pages = [
+                max((pages[index], poppler_pages[index]), key=cls._pdf_text_score)
+                for index in range(page_count)
+            ]
+
+        weak_pages = [
+            number
+            for number, content in enumerate(pages, start=1)
+            if cls._pdf_text_score(content) < 40
+        ]
+        ocr_pages: dict[int, tuple[Any, ...]] = {}
+        if weak_pages:
+            ocr_pages, ocr_warnings = cls._ocr_pdf_pages(path, weak_pages)
+            warnings.extend(ocr_warnings)
+            for number, result in ocr_pages.items():
+                content = str(result[0])
+                if cls._pdf_text_score(content) > cls._pdf_text_score(pages[number - 1]):
+                    pages[number - 1] = content
+
+        text = "\n\f\n".join(pages)
+        if text.strip():
+            fragments = [
+                DocumentFragment(
+                    f"page-{number}",
+                    content,
+                    {
+                        "kind": "page",
+                        "page": number,
+                        "ocr": number in ocr_pages,
+                        "ocr_confidence": (
+                            ocr_pages[number][1] if number in ocr_pages else None
+                        ),
+                        **(
+                            {"ocr_regions": ocr_pages[number][2]}
+                            if number in ocr_pages
+                            and len(ocr_pages[number]) > 2
+                            and ocr_pages[number][2]
+                            else {}
+                        ),
+                    },
+                )
+                for number, content in enumerate(pages, start=1)
+                if content.strip()
+            ]
+            extractors = sorted(native_extractors)
+            if ocr_pages:
+                extractors.append("tesseract")
+            return text, "+".join(extractors) or "pdf-text", warnings, fragments
+
+        if not pages:
+            warnings.append("PDF 页面无法读取，请检查文件是否损坏或加密。")
+        else:
+            warnings.append("PDF 未识别出可用文字；请检查 OCR 引擎和语言包。")
+        return "", "none", list(dict.fromkeys(warnings)), []
+
+    @staticmethod
+    def _pdf_text_score(text: str) -> int:
+        """Prefer readable native/OCR text over headers, control bytes and glyph noise."""
+        content = str(text or "")
+        readable = len(
+            re.findall(r"[\w\u3400-\u9fff\u00c0-\u024f]", content, re.UNICODE)
+        )
+        replacement_penalty = content.count("\ufffd") * 8
+        control_penalty = len(
+            re.findall(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", content)
+        ) * 4
+        return max(0, readable - replacement_penalty - control_penalty)
+
+    @staticmethod
+    def _pdftotext_pages(path: Path) -> tuple[list[str], str | None]:
         binary = shutil.which("pdftotext")
-        if binary:
+        if not binary:
+            return [], "当前环境未安装 pdftotext，已跳过交叉提取。"
+        try:
             result = subprocess.run(
-                [binary, "-layout", str(path), "-"],
+                [binary, "-layout", "-enc", "UTF-8", str(path), "-"],
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                encoding="utf-8",
+                errors="replace",
+                timeout=90,
             )
-            if result.stdout.strip():
-                pages = result.stdout.split("\f")
-                fragments = [
-                    DocumentFragment(
-                        f"page-{number}",
-                        content,
-                        {"kind": "page", "page": number},
-                    )
-                    for number, content in enumerate(pages, start=1)
-                    if content.strip()
-                ]
-                return result.stdout, "pdftotext", warnings, fragments
-        warnings.append("PDF 无可提取文本，请安装 pypdf、pypdfium2 和 Tesseract OCR。")
-        return "", "none", warnings, []
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return [], f"pdftotext 解析失败：{type(exc).__name__}"
+        if result.returncode != 0:
+            return [], result.stderr.strip() or "pdftotext 解析失败。"
+        if not result.stdout.strip():
+            return [], None
+        pages = result.stdout.split("\f")
+        if pages and not pages[-1].strip():
+            pages.pop()
+        return pages, None
 
     @classmethod
     def _ocr_pdf_pages(

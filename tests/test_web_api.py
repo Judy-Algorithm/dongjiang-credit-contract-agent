@@ -2056,7 +2056,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260807-contract-package", html)
+        self.assertIn(b"20260807-pdf-translation", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -2076,7 +2076,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260807-contract-package"
+            "/js/app.js?v=20260807-pdf-translation"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
