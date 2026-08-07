@@ -150,6 +150,43 @@ class DocumentTextEnhancementWorkflowTests(unittest.TestCase):
             ))
             self.assertNotIn("multimodal", str(document).lower())
 
+    def test_semantic_failure_keeps_successful_local_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "可读信用资料.txt"
+            source.write_text(
+                "资产负债率45%，流动比率1.5，主体评级AA。" * 8,
+                encoding="utf-8",
+            )
+            with DongjiangWorkflowHarness(
+                checkpoint_path=root / "workflow.sqlite",
+                repository=CaseRepository(root / "cases"),
+                vault_dir=root / "vault",
+                inbox_dir=root / "inbox",
+                output_dir=root / "output",
+            ) as harness:
+                harness.nodes.credit_facts.enrich = lambda *args, **kwargs: (
+                    (_ for _ in ()).throw(RuntimeError("semantic extraction failed"))
+                )
+                run = harness.start(
+                    {
+                        "customer_name": "后处理失败测试客户",
+                        "customer_type": "new",
+                        "business_type": "TKP",
+                        "monthly_order_amount": 1_000_000,
+                        "current_ratio": 1.5,
+                        "external_rating": "AA",
+                    },
+                    file_paths=[str(source)],
+                    use_cached_credit=False,
+                )
+
+            document = run.state["source_documents"][0]
+            self.assertEqual(document["parse_status"], "parsed")
+            self.assertEqual(document["semantic_status"], "failed")
+            self.assertEqual(document["processing_error"], "semantic extraction failed")
+            self.assertTrue(document["fragments"])
+
 
 if __name__ == "__main__":
     unittest.main()

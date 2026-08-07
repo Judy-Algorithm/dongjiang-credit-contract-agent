@@ -263,15 +263,17 @@ function approvalTab(item) {
 function agentExecutionTab(item) {
   const execution = item.agent_execution || {}, plans = execution.plans || []
   const orchestration = execution.orchestration_plan || {}
+  const unscopedTools = execution.unscoped_tool_calls || []
   const candidates = item.agent_candidates || []
   const extractions = item.structured_extractions || []
   const extractionPermissions = item.structured_extraction_permissions || {}
   const canGenerateExtraction = extractionPermissions.can_generate_credit || extractionPermissions.can_generate_contract
-  if (!plans.length && !candidates.length && !extractions.length && !canGenerateExtraction) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
+  if (!plans.length && !unscopedTools.length && !candidates.length && !extractions.length && !canGenerateExtraction) return emptyState("暂无 Agent 运行记录", "新发起或重新执行的案件会在这里显示动态任务计划。")
   return `<div class="agent-execution">
     ${structuredExtractionPanel(item)}
     ${orchestration.plan_id ? orchestrationPlan(orchestration) : ""}
     ${plans.length ? `<div class="agent-flow-connector" aria-hidden="true"></div>${plans.map(agentPlan).join("")}` : ""}
+    ${unscopedTools.length ? unscopedToolCalls(unscopedTools) : ""}
     ${candidateReviews(candidates)}
     <div class="agent-security-note">${escapeHtml(execution.security_notice || "")}</div>
   </div>`
@@ -430,6 +432,10 @@ function agentToolCalls(tools) {
   return `<div class="agent-tools"><div class="agent-lane-label"><span>Toolhub 工具调用</span><small>${tools.length} 次</small></div><div class="agent-tool-list">${tools.map((tool) => `<div><span><b>${escapeHtml(tool.tool_label || tool.tool_name)}</b><small>${escapeHtml(tool.tool_name)} · ${escapeHtml(tool.provider || "local")}</small></span><span>${escapeHtml(tool.status === "completed" ? "完成" : tool.status || "未知")} · ${duration(tool.duration_ms)}</span><small>${escapeHtml(tool.output_summary || "结构化结果已返回")}</small></div>`).join("")}</div></div>`
 }
 
+function unscopedToolCalls(tools) {
+  return `<section class="agent-tools case-tools"><div class="agent-lane-label"><span>案件资料处理工具</span><small>${tools.length} 次</small></div><p class="field-hint">这些调用发生在信用/合同子 Agent 分配前，用于归档、解析、质量门禁和脱敏准备。</p><div class="agent-tool-list">${tools.map((tool) => `<div><span><b>${escapeHtml(tool.tool_label || tool.tool_name)}</b><small>${escapeHtml(tool.tool_name)} · ${escapeHtml(tool.provider || "local")}</small></span><span>${escapeHtml(tool.status === "completed" ? "完成" : tool.status || "未知")} · ${duration(tool.duration_ms)}</span><small>${escapeHtml(tool.output_summary || "结构化结果已返回")}</small></div>`).join("")}</div></section>`
+}
+
 function agentRuntimeSnapshot(snapshot) {
   const values = [
     ["信用规则", snapshot.credit_policy_version, snapshot.credit_policy_hash],
@@ -476,11 +482,12 @@ function duration(value) {
 
 function documentsTab(item) {
   const docs = item.source_documents || []
-  return docs.length ? `<div class="document-layout"><section class="document-list"><div class="section-heading"><h3>案件原件</h3><span>${docs.length} 份</span></div>${docs.map((doc, index) => `<button class="document-row" ${doc.document_id && doc.fragment_count ? `data-document-index="${index}"` : "disabled"}><span class="document-icon">${escapeHtml((doc.media_type || "FILE").slice(0,4).toUpperCase())}</span><span><b>${escapeHtml(doc.name)}</b><small>${doc.document_kind === "contract" ? "合同" : "信用资料"} · ${parseStatus(doc.parse_status)} · ${doc.document_id ? `${doc.fragment_count || 0} 个可定位片段` : "历史文件需重新解析"}</small>${documentFeatures(doc)}</span></button>`).join("")}</section><aside id="documentViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>资料预览</strong><p>选择左侧文件查看首个可解析片段。</p></div></aside></div>` : emptyState("暂无原始资料", "当前案件没有上传文件。")
+  return docs.length ? `<div class="documents-summary"><strong>文档解析结果</strong><span>已归档 ${docs.length} 份；点击左侧附件查看片段、页码、表格单元格或 OCR 区域。</span></div><div class="document-layout"><section class="document-list"><div class="section-heading"><h3>案件原件</h3><span>${docs.length} 份</span></div>${docs.map((doc, index) => `<button class="document-row" ${doc.document_id && doc.fragment_count ? `data-document-index="${index}"` : "disabled"}><span class="document-icon">${escapeHtml((doc.media_type || "FILE").slice(0,4).toUpperCase())}</span><span><b>${escapeHtml(doc.name)}</b><small>${doc.document_kind === "contract" ? "合同" : "信用资料"} · ${parseStatus(doc.parse_status)} · ${doc.document_id ? `${doc.fragment_count || 0} 个可定位片段` : "历史文件需重新解析"}</small>${documentFeatures(doc)}</span></button>`).join("")}</section><aside id="documentViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>资料预览</strong><p>选择左侧文件查看首个可解析片段。</p></div></aside></div>` : emptyState("暂无原始资料", "当前案件没有上传文件。")
 }
 
 function documentFeatures(doc) {
   const features = doc.features || {}, quality = doc.quality || {}, enhancement = doc.text_enhancement || {}, labels = []
+  if (doc.processing_error) labels.push("后续字段提取失败，已保留本地解析")
   if (features.ocr_page_count) labels.push(`OCR ${features.ocr_page_count} 页`)
   if (features.ocr_image_count) labels.push(`OCR 图片 ${features.ocr_image_count} 张`)
   if (features.word_table_cell_count) labels.push(`Word 表格 ${features.word_table_cell_count} 个单元格`)

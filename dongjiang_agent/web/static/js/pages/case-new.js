@@ -1,8 +1,22 @@
-import {api, encodeFiles} from "../api.js?v=20260807-request-templates"
-import {escapeHtml} from "../format.js?v=20260807-request-templates"
-import {navigate} from "../router.js?v=20260807-request-templates"
+import {api, encodeFiles} from "../api.js?v=20260807-document-upload"
+import {escapeHtml} from "../format.js?v=20260807-document-upload"
+import {navigate} from "../router.js?v=20260807-document-upload"
 
 const draftKey = "dongjiang:new-case-draft"
+
+function fileKey(file) {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+function renderSelectedFiles(root, files) {
+  const list = root.querySelector("#creditFileList")
+  if (!list) return
+  list.innerHTML = files.map((file, index) => `<span class="file-chip"><span>${escapeHtml(file.name)}</span><button type="button" class="file-chip-remove" data-file-index="${index}" aria-label="移除 ${escapeHtml(file.name)}">×</button></span>`).join("")
+  list.querySelectorAll("[data-file-index]").forEach((button) => button.addEventListener("click", () => {
+    files.splice(Number(button.dataset.fileIndex), 1)
+    renderSelectedFiles(root, files)
+  }))
+}
 
 export async function renderNewCasePage(root) {
   const draft = JSON.parse(sessionStorage.getItem(draftKey) || "{}")
@@ -130,7 +144,16 @@ export async function renderNewCasePage(root) {
   }
 
   root.querySelector("#creditFiles").addEventListener("change", (event) => {
-    root.querySelector("#creditFileList").innerHTML = Array.from(event.target.files).map((file) => `<span class="file-chip">${escapeHtml(file.name)}</span>`).join("")
+    const selected = root._selectedCreditFiles || (root._selectedCreditFiles = [])
+    const seen = new Set(selected.map(fileKey))
+    Array.from(event.target.files || []).forEach((file) => {
+      if (!seen.has(fileKey(file))) {
+        selected.push(file)
+        seen.add(fileKey(file))
+      }
+    })
+    event.target.value = ""
+    renderSelectedFiles(root, selected)
   })
   root.querySelector("#requestTemplate").addEventListener("change", () => updateTemplateDescription(root, templates))
   root.querySelector("#applyTemplate").addEventListener("click", () => {
@@ -174,7 +197,7 @@ export async function renderNewCasePage(root) {
     event.preventDefault()
     if (!validateBasics(root)) { showStep(1); return }
     const customer = collectForm(root)
-    const files = await encodeFiles(root.querySelector("#creditFiles").files)
+    const files = await encodeFiles(root._selectedCreditFiles || [])
     const data = await api.createCase({
       customer,
       files,
@@ -381,7 +404,7 @@ function renderReview(root, customer) {
     ["当前授信占用", `¥${Number((customer.outstanding_receivables_amount || 0) + (customer.open_order_amount || 0)).toLocaleString("zh-CN")}`],
     ["当前逾期", customer.current_overdue_days == null ? "未填写" : `${customer.current_overdue_days} 天`],
     ["已有授信复用", root.querySelector("#reuseEffectiveCredit").checked ? "启用，命中后跳过信用审批" : "关闭，本案重新信用审批"],
-    ["上传资料", `${root.querySelector("#creditFiles").files.length} 个文件`],
+    ["上传资料", `${(root._selectedCreditFiles || []).length} 个文件`],
   ]
   root.querySelector("#caseReview").innerHTML = labels.map(([label, item]) => `<div class="review-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(item)}</b></div>`).join("")
 }

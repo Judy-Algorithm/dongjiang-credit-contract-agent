@@ -1,6 +1,20 @@
-import {api, encodeFiles} from "../api.js?v=20260807-request-templates"
-import {escapeHtml, money} from "../format.js?v=20260807-request-templates"
-import {navigate} from "../router.js?v=20260807-request-templates"
+import {api, encodeFiles} from "../api.js?v=20260807-document-upload"
+import {escapeHtml, money} from "../format.js?v=20260807-document-upload"
+import {navigate} from "../router.js?v=20260807-document-upload"
+
+function fileKey(file) {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
+function renderActionFiles(root, files) {
+  const list = root.querySelector("#actionFileList")
+  if (!list) return
+  list.innerHTML = files.map((file, index) => `<span class="file-chip"><span>${escapeHtml(file.name)}</span><button type="button" class="file-chip-remove" data-file-index="${index}" aria-label="移除 ${escapeHtml(file.name)}">×</button></span>`).join("")
+  list.querySelectorAll("[data-file-index]").forEach((button) => button.addEventListener("click", () => {
+    files.splice(Number(button.dataset.fileIndex), 1)
+    renderActionFiles(root, files)
+  }))
+}
 
 export async function renderCaseActionPage(root, route) {
   const {case:item} = await api.getCase(route.caseId)
@@ -29,8 +43,17 @@ export async function renderCaseActionPage(root, route) {
 
   const form = root.querySelector("#actionForm")
   const files = root.querySelector("#actionFiles")
+  const selectedFiles = root._selectedActionFiles = []
   if (files) files.addEventListener("change", () => {
-    root.querySelector("#actionFileList").innerHTML = Array.from(files.files).map((file) => `<span class="file-chip">${escapeHtml(file.name)}</span>`).join("")
+    const seen = new Set(selectedFiles.map(fileKey))
+    Array.from(files.files || []).forEach((file) => {
+      if (!seen.has(fileKey(file))) {
+        selectedFiles.push(file)
+        seen.add(fileKey(file))
+      }
+    })
+    files.value = ""
+    renderActionFiles(root, selectedFiles)
   })
   if (type === "credit_approval") setupCreditApprovalMode(root)
 
@@ -47,7 +70,7 @@ export async function renderCaseActionPage(root, route) {
     }
     const candidateRequestId = root.querySelector("#adoptCandidate")?.checked ? candidateRequest?.review?.request_id || "" : ""
     if (candidateRequestId && action !== "approve") throw new Error("采纳Agent候选时请使用批准操作；调整后批准将保留人工调整值。")
-    const encoded = await encodeFiles(files?.files || [])
+    const encoded = await encodeFiles(selectedFiles)
     const contractText = root.querySelector("#contractText")?.value.trim() || ""
     let data
     if (type === "submit_revision" && action === "create_revision") {

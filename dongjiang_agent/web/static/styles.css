@@ -355,7 +355,9 @@ label input, label select, label textarea { margin-top: 7px; font-weight: 400; }
 .upload-zone input { display: none; }
 .upload-zone span { display: block; margin-top: 5px; color: var(--muted); font-weight: 400; }
 .file-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
-.file-chip { padding: 7px 11px; background: var(--surface-strong); border-radius: 999px; color: var(--body); font-size: 12px; }
+.file-chip { padding: 7px 9px 7px 11px; display: inline-flex; align-items: center; gap: 7px; background: var(--surface-strong); border-radius: 999px; color: var(--body); font-size: 12px; }
+.file-chip-remove { border: 0; padding: 0; width: 18px; height: 18px; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; line-height: 1; }
+.file-chip-remove:hover { background: var(--hairline); color: var(--ink); }
 .form-actions { margin-top: 28px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
 .form-actions .right { display: flex; gap: 9px; flex-wrap: wrap; }
 
@@ -743,6 +745,11 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
 .agent-audit-issues span { color: var(--red); font-size: 10px; overflow-wrap: anywhere; }
 .agent-audit-issues b { margin-right: 8px; }
 .agent-security-note { margin-top: 16px; padding: 13px 15px; color: var(--muted); font-size: 12px; background: var(--surface-soft); border-left: 3px solid var(--ink); }
+.case-tools { margin-top: 22px; }
+.case-tools .field-hint { margin: 8px 0 12px; }
+.documents-summary { margin-bottom: 14px; padding: 14px 16px; display: flex; gap: 12px; align-items: baseline; border: 1px solid var(--hairline); border-left: 3px solid var(--primary); background: var(--surface-soft); }
+.documents-summary strong { color: var(--ink); }
+.documents-summary span { color: var(--muted); font-size: 12px; }
 .candidate-reviews { margin-top: 24px; }
 .structured-extractions { margin-bottom: 24px; padding: 18px 20px; border: 1px solid var(--hairline); background: var(--surface-soft); }
 .structured-extraction-list { display: grid; gap: 10px; }

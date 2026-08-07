@@ -68,6 +68,7 @@ FIELD_LABELS = {
 }
 
 RECORD_LABELS = {
+    "document.processing_failed": "资料已解析，后续字段提取失败",
     "workflow.started": "案件已提交",
     "document.extracted": "资料已读取",
     "document.failed": "部分资料读取失败",
@@ -882,7 +883,23 @@ def case_view(
                 "sha256": item.get("sha256"),
                 "size_bytes": item.get("size_bytes"),
                 "archived_at": item.get("archived_at"),
-                "parse_status": item.get("parse_status"),
+                "parse_status": (
+                    "parsed"
+                    if item.get("parse_status") == "failed" and item.get("fragments")
+                    else item.get("parse_status")
+                ),
+                "processing_error": item.get("processing_error")
+                or (
+                    item.get("error")
+                    if item.get("parse_status") == "failed" and item.get("fragments")
+                    else None
+                ),
+                "semantic_status": item.get("semantic_status")
+                or (
+                    "failed"
+                    if item.get("parse_status") == "failed" and item.get("fragments")
+                    else None
+                ),
                 "media_type": item.get("media_type"),
                 "extractor": item.get("extractor"),
                 "warnings": list(item.get("warnings") or []),

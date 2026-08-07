@@ -355,9 +355,13 @@ class WorkflowNodes:
 
     @staticmethod
     def _text_model_enhancement_enabled() -> bool:
-        return str(
+        configured = str(
             os.getenv("DONGJIANG_DOCUMENT_TEXT_ENHANCEMENT_ENABLED", "false")
         ).lower() in {"1", "true", "yes", "on"}
+        assistance_enabled = str(
+            os.getenv("DONGJIANG_AI_ASSISTANCE_ENABLED", "false")
+        ).lower() in {"1", "true", "yes", "on"}
+        return configured or assistance_enabled
 
     @staticmethod
     def _apply_credit_text_enhancement(
@@ -676,6 +680,7 @@ class WorkflowNodes:
                         },
                         "fragments": redacted_fragments,
                 }
+                source_documents[archive_index or 0].update(document_record)
                 enhancement: dict[str, Any] = {
                     "status": "not_needed",
                     "mode": "text_only",
@@ -684,7 +689,9 @@ class WorkflowNodes:
                     "limitation": "文本模型不能读取图片像素或空白扫描页。",
                 }
                 quality_status = str(quality_payload.get("status") or "")
-                if quality_status == "needs_text_enhancement":
+                if quality_status in {"needs_text_enhancement", "manual_required"} and bool(
+                    quality_payload.get("can_use_text_model")
+                ):
                     if self._text_model_enhancement_enabled():
                         enhancement = dict(
                             self._call_tool(
@@ -739,7 +746,7 @@ class WorkflowNodes:
                     "manual_required" if quality_status == "manual_required" else "parsed"
                 )
                 source_documents[archive_index or 0].update(document_record)
-                if quality_status == "manual_required":
+                if quality_status == "manual_required" and not redacted_fragments:
                     raise ValueError(
                         "文档未形成可用文字；项目仅提供文本模型，无法读取图片像素，请人工检查或重新上传清晰可复制版本。"
                     )
@@ -847,12 +854,30 @@ class WorkflowNodes:
                     current_status = str(
                         source_documents[archive_index].get("parse_status") or ""
                     )
-                    source_documents[archive_index].update({"error": str(exc)})
-                    if current_status != "manual_required":
-                        source_documents[archive_index]["parse_status"] = "failed"
-                errors.append(
-                    trace("document.failed", f"{path.name} 解析失败。", error=str(exc))
+                    document_item = source_documents[archive_index]
+                    has_fragments = bool(document_item.get("fragments"))
+                    document_item.update({"error": str(exc)})
+                    if has_fragments and current_status in {"parsed", "manual_required"}:
+                        document_item.update(
+                            {
+                                "processing_error": str(exc),
+                                "semantic_status": "failed",
+                            }
+                        )
+                    elif current_status != "manual_required":
+                        document_item["parse_status"] = "failed"
+                failure_stage = (
+                    "document.processing_failed"
+                    if archive_index is not None
+                    and bool(source_documents[archive_index].get("fragments"))
+                    else "document.failed"
                 )
+                failure_message = (
+                    f"{path.name} 后续字段提取失败，已保留本地解析证据。"
+                    if failure_stage == "document.processing_failed"
+                    else f"{path.name} 解析失败。"
+                )
+                errors.append(trace(failure_stage, failure_message, error=str(exc)))
             finally:
                 try:
                     resolved = path.resolve()

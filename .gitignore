@@ -25,4 +25,5 @@ data/deployment-backups/
 data/benchmarks/
 data/operations/
 data/mock-enterprise/
+data/templates/
 output/
