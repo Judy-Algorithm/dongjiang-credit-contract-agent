@@ -264,6 +264,34 @@ class ContractReviewTests(unittest.TestCase):
         self.assertEqual(japanese.language, "ja")
         self.assertEqual(spanish.language, "es")
 
+    def test_english_and_vietnamese_amount_credit_term_and_bottom_line_are_detected(self):
+        extractor = ContractFactExtractor()
+        english = extractor.extract(
+            "Buyer and Seller supply products. Contract amount: USD 520,000. "
+            "Credit limit: USD 480,000. Payment term: Net 120 days. "
+            "Breach and damages. Intellectual property. Confidential information. "
+            "Termination. Governing law and dispute arbitration."
+        )
+        vietnamese = extractor.extract(
+            "Bên mua và Bên bán ký hợp đồng hàng hóa. Giá trị hợp đồng: "
+            "VND 8,000,000,000. Hạn mức tín dụng: VND 6,000,000,000. "
+            "Thời hạn thanh toán: 90 ngày. Trách nhiệm vi phạm và bồi thường. "
+            "Sở hữu trí tuệ. Bảo mật. Chấm dứt. Giải quyết tranh chấp. "
+            "Bên mua có thể hủy đơn hàng mà không chịu trách nhiệm hoặc bồi thường."
+        )
+
+        self.assertEqual(english.amount, 520_000)
+        self.assertEqual(english.requested_credit, 480_000)
+        self.assertEqual(english.payment_term_days, 120)
+        self.assertEqual(vietnamese.amount, 8_000_000_000)
+        self.assertEqual(vietnamese.requested_credit, 6_000_000_000)
+        self.assertEqual(vietnamese.payment_term_days, 90)
+        result = ContractReviewEngine().review(vietnamese, credit())
+        self.assertTrue(any(
+            item.rule_id == "DJ-CANCEL-WITHOUT-LIABILITY"
+            for item in result.findings
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

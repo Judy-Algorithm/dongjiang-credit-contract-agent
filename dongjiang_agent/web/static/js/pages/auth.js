@@ -1,7 +1,7 @@
-import {api} from "../api.js?v=20260807-login-fix"
-import {clearAuth, setAuthenticated} from "../auth.js?v=20260807-login-fix"
-import {navigate} from "../router.js?v=20260807-login-fix"
-import {escapeHtml} from "../format.js?v=20260807-login-fix"
+import {api} from "../api.js?v=20260807-contract-package"
+import {clearAuth, setAuthenticated} from "../auth.js?v=20260807-contract-package"
+import {navigate} from "../router.js?v=20260807-contract-package"
+import {escapeHtml} from "../format.js?v=20260807-contract-package"
 
 export function renderLoginPage(root) {
   root.innerHTML = authLayout("登录", "使用企业账号进入信审工作台", `

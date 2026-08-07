@@ -285,6 +285,7 @@ class DongjiangWorkflowHarness:
             "credit_control": {},
             "special_release": None,
             "exception_approval": None,
+            "contract_exception_approval": None,
             "contract_approval": None,
             "contract_reviews": [],
             "decision": None,

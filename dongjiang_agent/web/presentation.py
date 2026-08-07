@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from ..contract.revisions import suggested_replacement
@@ -106,6 +107,85 @@ RECORD_LABELS = {
     "agent.extraction.adopted": "AI结构化字段已人工采纳",
     "agent.extraction.rejected": "AI结构化字段候选已拒绝",
 }
+
+LANGUAGE_LABELS = {
+    "zh": "中文",
+    "en": "英文",
+    "vi": "越南语",
+    "ja": "日语",
+    "es": "西班牙语",
+}
+
+REDACTION_LABELS = {
+    "PARTY": "客户/供应商",
+    "PRICE": "价格",
+    "MONEY": "收付款金额",
+    "TECH": "技术参数",
+    "PHONE": "电话",
+    "EMAIL": "邮箱",
+    "BANK": "银行账号",
+    "ID": "证件号码",
+    "USCC": "统一社会信用代码",
+}
+
+RISK_PRIORITY = {"low": 1, "medium": 2, "high": 3, "blocker": 4}
+
+
+def _safe_contract_fragments(document: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in document.get("fragments") or []:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        rows.append(
+            {
+                "fragment_id": item.get("fragment_id"),
+                "text": text[:500],
+                "location": dict(item.get("location") or {}),
+                "location_label": location_label(item.get("location")),
+                "contains_redaction": "⟦" in text,
+            }
+        )
+        if len(rows) >= 6:
+            break
+    return rows
+
+
+def _redaction_view(document: dict[str, Any]) -> dict[str, Any]:
+    stored = dict(document.get("redaction") or {})
+    fragment_text = "\n".join(
+        str(item.get("text") or "") for item in document.get("fragments") or []
+    )
+    detected: dict[str, int] = {}
+    for category in re.findall(r"⟦([A-Z]+)_[0-9a-f]{10}⟧", fragment_text):
+        detected[category] = detected.get(category, 0) + 1
+    categories = dict(stored.get("categories") or detected)
+    return {
+        "status": stored.get("status") or "redacted",
+        "reversible": bool(stored.get("reversible", True)),
+        "external_payload": stored.get("external_payload") or "redacted_only",
+        "masked_occurrence_count": int(
+            stored.get("masked_occurrence_count")
+            if stored.get("masked_occurrence_count") is not None
+            else sum(categories.values())
+        ),
+        "masked_fragment_count": int(
+            stored.get("masked_fragment_count")
+            if stored.get("masked_fragment_count") is not None
+            else sum(
+                "⟦" in str(item.get("text") or "")
+                for item in document.get("fragments") or []
+            )
+        ),
+        "categories": [
+            {
+                "code": code,
+                "label": REDACTION_LABELS.get(code, code),
+                "count": int(count),
+            }
+            for code, count in sorted(categories.items())
+        ],
+    }
 
 LEGACY_ROLE_MAP = {
     "admin": "system_admin",
@@ -261,9 +341,9 @@ def _next_action(waiting_for: str | None) -> dict[str, Any] | None:
         },
         "manager_approval": {
             "type": "manager_review",
-            "label": "处理审批",
+            "label": "处理合同例外授权",
             "allowed_actions": [
-                {"type": "approve", "label": "批准"},
+                {"type": "approve", "label": "批准例外并转法务"},
                 {"type": "reject", "label": "驳回"},
             ],
         },
@@ -683,6 +763,65 @@ def case_view(
     documents = [
         Path(str(item)).name for item in case.get("source_files") or []
     ]
+    contract_by_document = {
+        str(item.get("document_id") or ""): item
+        for item in contracts
+        if item.get("document_id")
+    }
+    findings_by_document: dict[str, list[dict[str, Any]]] = {}
+    for finding in findings:
+        document_id = str(finding.get("document_id") or "")
+        if document_id:
+            findings_by_document.setdefault(document_id, []).append(finding)
+    ai_findings_by_document: dict[str, list[dict[str, Any]]] = {}
+    for group in ai_assistance:
+        for finding in group.get("findings") or []:
+            document_id = str(finding.get("document_id") or "")
+            if document_id:
+                ai_findings_by_document.setdefault(document_id, []).append(finding)
+    contract_package: list[dict[str, Any]] = []
+    for document in case.get("source_documents") or []:
+        if document.get("document_kind") != "contract":
+            continue
+        document_id = str(document.get("document_id") or "")
+        facts = dict(contract_by_document.get(document_id) or {})
+        rule_findings = findings_by_document.get(document_id, [])
+        model_findings = ai_findings_by_document.get(document_id, [])
+        levels = [
+            str(item.get("level") or "low")
+            for item in rule_findings + model_findings
+        ]
+        highest_risk = max(
+            levels or ["low"], key=lambda value: RISK_PRIORITY.get(value, 0)
+        )
+        contract_package.append(
+            {
+                "document_id": document_id,
+                "name": document.get("name"),
+                "media_type": document.get("media_type"),
+                "parse_status": document.get("parse_status"),
+                "extractor": document.get("extractor"),
+                "fragment_count": len(document.get("fragments") or []),
+                "language": facts.get("language") or "unknown",
+                "language_label": LANGUAGE_LABELS.get(
+                    str(facts.get("language") or ""), "待识别"
+                ),
+                "redaction": _redaction_view(document),
+                "safe_fragments": _safe_contract_fragments(document),
+                "rule_finding_count": len(rule_findings),
+                "ai_finding_count": len(model_findings),
+                "highest_risk": highest_risk,
+                "highest_risk_label": RISK_LABELS.get(highest_risk, "低风险"),
+                "decision": next(
+                    (
+                        review.get("decision")
+                        for review, raw_contract in zip(reviews, contracts)
+                        if raw_contract.get("document_id") == document_id
+                    ),
+                    None,
+                ),
+            }
+        )
     return {
         "case_id": case.get("case_id"),
         "customer": customer,
@@ -789,6 +928,9 @@ def case_view(
         "credit_control": dict(case.get("credit_control") or {}),
         "special_release": dict(case.get("special_release") or {}),
         "exception_approval": dict(case.get("exception_approval") or {}),
+        "contract_exception_approval": dict(
+            case.get("contract_exception_approval") or {}
+        ),
         "approval_evidence": [
             {
                 "purpose": item.get("purpose"),
@@ -828,6 +970,7 @@ def case_view(
         ],
         "findings": findings,
         "ai_assistance": ai_assistance,
+        "contract_package": contract_package,
         "contract_approval": dict(case.get("contract_approval") or {}),
         "agent_execution": _agent_execution(case),
         "agent_candidates": _agent_candidates(case, resolved_waiting, actor),

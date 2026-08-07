@@ -51,7 +51,7 @@ ENTRY_STAGES = {
     },
     "manager_approval": {"decision.routed"},
     "finance_legal_review": {"decision.routed"},
-    "contract_approval": {"decision.routed"},
+    "contract_approval": {"decision.routed", "manager.approved"},
 }
 
 

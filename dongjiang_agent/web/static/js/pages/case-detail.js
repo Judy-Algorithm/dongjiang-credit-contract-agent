@@ -1,9 +1,9 @@
-import {api} from "../api.js?v=20260807-login-fix"
-import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260807-login-fix"
+import {api} from "../api.js?v=20260807-contract-package"
+import {customerType, dateTime, escapeHtml, money, statusClass} from "../format.js?v=20260807-contract-package"
 
 const tabs = [
   ["overview","概览"],["credit","信用评估"],["contract","合同审查"],
-  ["agents","Agent运行"],["approval","审批记录"],["documents","原始资料"],["writeback","系统回写"],
+  ["agents","Agent运行"],["approval","审批记录"],["writeback","系统回写"],
 ]
 
 export async function renderCaseDetailPage(root, route) {
@@ -37,13 +37,13 @@ export async function renderCaseDetailPage(root, route) {
     root.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab))
     root.querySelector("#tabBody").innerHTML = ({
       overview:overviewTab(item), credit:creditTab(item), contract:contractTab(item),
-      agents:agentExecutionTab(item), approval:approvalTab(item), documents:documentsTab(item), writeback:writebackTab(item),
+      agents:agentExecutionTab(item), approval:approvalTab(item), writeback:writebackTab(item),
     })[tab]
     if (tab === "contract") {
+      installContractPackageActions(root, item)
       installEvidenceViewer(root, item)
       installTranslationActions(root, item, renderTab)
     }
-    if (tab === "documents") installDocumentViewer(root, item)
     if (tab === "writeback") installWritebackRetry(root, item, renderTab)
     if (tab === "agents") {
       installCandidateActions(root, item, renderTab)
@@ -78,9 +78,10 @@ function overviewTab(item) {
         ${info("业务类型", customer.business_type || "—")}
       </div>
       ${item.findings?.length ? `<div class="form-section"><div class="section-heading"><h3>风险摘要</h3><span>${item.findings.length} 项</span></div>${item.findings.slice(0,3).map(findingCard).join("")}</div>` : `<div class="empty-note">当前没有合同风险事项。</div>`}
+      ${documentProcessingSummary(item)}
     </section>
     <aside class="case-rail"><div class="section-heading"><h3>案件信息</h3></div>
-      ${rail("案件号", item.case_id)}${rail("创建时间", dateTime(item.created_at))}${rail("最近更新", dateTime(item.updated_at))}${item.sla?.due_at ? rail("当前待办截止", dateTime(item.sla.due_at)) : ""}${rail("原始资料", `${item.source_documents?.length || 0} 份`)}${rail("审批证据", `${item.approval_evidence?.length || 0} 份`)}
+      ${rail("案件号", item.case_id)}${rail("创建时间", dateTime(item.created_at))}${rail("最近更新", dateTime(item.updated_at))}${item.sla?.due_at ? rail("当前待办截止", dateTime(item.sla.due_at)) : ""}${rail("已解析资料", `${item.source_documents?.length || 0} 份`)}${rail("审批证据", `${item.approval_evidence?.length || 0} 份`)}
     </aside>
   </div>`
 }
@@ -92,15 +93,41 @@ function slaLine(sla) {
   return `<small class="sla-line ${escapeHtml(sla.state)}">${escapeHtml(timing)} · 截止 ${dateTime(sla.due_at)}</small>`
 }
 
+function documentProcessingSummary(item) {
+  const docs = item.source_documents || []
+  if (!docs.length) return `<div class="form-section document-processing-summary"><div class="section-heading"><h3>资料解析摘要</h3><span>0 份</span></div><div class="empty-note">当前案件没有上传资料。</div></div>`
+  return `<div class="form-section document-processing-summary"><div class="section-heading"><div><h3>资料解析摘要</h3><span class="section-subtitle">已接收 ${docs.length} 份资料</span></div><span>多格式解析</span></div><p class="document-processing-note">多格式文件已进入解析与评估流程；风险证据在合同审查中按需定位。</p><div class="document-processing-list">${docs.map((doc) => {
+    const status = parseStatus(doc.parse_status)
+    const statusTone = ({parsed:"approved", pending:"pending", failed:"blocked", manual_required:"pending"})[doc.parse_status] || "pending"
+    const fragments = Number(doc.fragment_count || 0)
+    return `<div class="document-processing-row"><span class="document-processing-format">${escapeHtml(documentFormat(doc))}</span><div class="document-processing-main"><strong>${escapeHtml(doc.name || "未命名文件")}</strong><small>${escapeHtml(documentKind(doc.document_kind))} · ${escapeHtml(status)} · ${fragments} 个结构化片段</small></div><span class="badge ${statusTone}">${escapeHtml(status)}</span></div>`
+  }).join("")}</div></div>`
+}
+
+function documentFormat(doc) {
+  const name = String(doc?.name || "")
+  const extension = name.includes(".") ? name.split(".").pop().toUpperCase() : "FILE"
+  const mediaType = String(doc?.media_type || "").toLowerCase()
+  if (mediaType.includes("pdf") || extension === "PDF") return "PDF"
+  if (mediaType.includes("word") || ["DOC", "DOCX"].includes(extension)) return "Word"
+  if (mediaType.includes("sheet") || mediaType.includes("excel") || ["XLS", "XLSX"].includes(extension)) return "Excel"
+  if (mediaType.includes("image") || ["PNG", "JPG", "JPEG"].includes(extension)) return "图片"
+  if (mediaType.includes("text") || extension === "TXT") return "TXT"
+  return extension
+}
+
+function documentKind(value) { return value === "contract" ? "合同" : value === "credit" ? "信用资料" : "案件资料" }
+
 function creditTab(item) {
   const credit = item.credit || {}, model = credit.model_result || {}, approved = credit.approved_result
   const selected = credit.rating_resolution?.selected
   const control = Object.keys(item.credit_control || {}).length ? item.credit_control : (approved || model)
+  const creditControlReleased = item.special_release?.action === "approve"
   return `<div class="section-heading"><h3>模型建议</h3><span>${credit.data_coverage_ratio == null ? "资料覆盖率 —" : `资料覆盖率 ${Math.round(Number(credit.data_coverage_ratio) * 100)}%`}</span></div>
     <div class="info-grid">${info("信用分", model.score == null ? "—" : Number(model.score).toFixed(1))}${info("风险等级", model.risk_label)}${info("建议额度", money(model.credit_limit))}${info("建议账期", model.term_days == null ? "—" : `${model.term_days} 天`)}${info("采用评级", selected ? `${selected.agency || ""} ${selected.rating || ""}`.trim() : "未取得有效评级")}${info("最长账期", model.hard_term_limit_days == null ? "—" : `${model.hard_term_limit_days} 天`)}</div>
     <div class="form-section"><div class="section-heading"><h3>正式授信与占用</h3><span>${approved ? "已生效" : "等待审批"}</span></div>
-      <div class="info-grid">${info("正式额度", money(approved?.credit_limit))}${info("正式账期", approved?.term_days == null ? "—" : `${approved.term_days} 天`)}${info("当前已占用", money(control.occupied_credit_amount))}${info("当前可用", money(control.available_credit_amount))}${info("有效期至", approved?.expires_at ? approved.expires_at.replace("T"," ").slice(0,10) : "—")}${info("信用控制", control.credit_locked ? "已锁定" : "正常")}</div>
-      ${control.credit_lock_reasons?.length ? notice("锁定原因", control.credit_lock_reasons) : ""}
+      <div class="info-grid">${info("正式额度", money(approved?.credit_limit))}${info("正式账期", approved?.term_days == null ? "—" : `${approved.term_days} 天`)}${info("当前已占用", money(control.occupied_credit_amount))}${info("当前可用", money(control.available_credit_amount))}${info("有效期至", approved?.expires_at ? approved.expires_at.replace("T"," ").slice(0,10) : "—")}${info("信用控制", creditControlReleased ? "本案已特别放行" : control.credit_locked ? "已锁定" : "正常")}</div>
+      ${!creditControlReleased && control.credit_lock_reasons?.length ? notice("锁定原因", control.credit_lock_reasons) : ""}
     </div>
     ${credit.requires_supplement ? notice("需要补充信用资料", credit.supplement_reasons || []) : ""}
     <div class="form-section"><div class="section-heading"><h3>评估依据</h3><span>缺失值不按0计算</span></div>
@@ -111,13 +138,52 @@ function creditTab(item) {
 
 function contractTab(item) {
   if (!item.credit?.effective) return emptyState("合同上传尚未开放", "信用审批生效后才能进入合同审查。")
-  if (!item.contracts?.length) return emptyState("尚未提交合同", "销售上传合同后，风险与原文证据会显示在这里。")
-  return `<div class="contract-review-layout">
-    <section class="finding-pane"><div class="section-heading"><h3>风险事项</h3><span>${item.findings.length} 项</span></div>
-      ${item.findings.length ? item.findings.map((finding, index) => findingCard(finding, index)).join("") : `<div class="empty-note">未发现需要处理的合同风险。</div>`}
-    </section>
-    <aside id="evidenceViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>原文证据</strong><p>点击风险事项中的“查看原文”，这里会显示对应页码、段落或单元格。</p></div></aside>
-  </div>${aiAssistance(item)}${revisionArchive(item)}${translationWorkbench(item)}`
+  const documents = item.contract_package || []
+  if (!item.contracts?.length || !documents.length) return emptyState("尚未提交合同", "销售上传合同后，格式、语种、脱敏结果与风险证据会显示在这里。")
+  const selectedId = documents[0].document_id
+  return `${contractPackage(item, selectedId)}<div class="contract-review-layout">
+    <section class="finding-pane">${contractRiskPanel(item, selectedId)}</section>
+    <aside id="evidenceViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>风险证据定位</strong><p>点击风险事项中的“查看证据”，这里会显示对应页码、段落或单元格的脱敏片段。</p></div></aside>
+  </div><div id="contractAiSlot">${aiAssistance(item, selectedId)}</div>${revisionArchive(item)}${translationWorkbench(item)}`
+}
+
+function contractPackage(item, selectedId) {
+  const documents = item.contract_package || []
+  return `<section class="contract-package form-section"><div class="section-heading"><div><h3>合同资料包</h3><span class="section-subtitle">多份附件统一解析，原件本地归档，Agent 仅接收脱敏文本</span></div><span>${documents.length} 份合同</span></div>
+    <div class="contract-package-layout"><nav class="contract-attachment-list" aria-label="合同附件">${documents.map((doc) => `<button type="button" class="contract-attachment ${doc.document_id === selectedId ? "active" : ""}" data-contract-document="${escapeHtml(doc.document_id)}"><span class="document-processing-format">${escapeHtml(documentFormat(doc))}</span><span><b>${escapeHtml(doc.name || "未命名合同")}</b><small>${escapeHtml(doc.language_label)} · ${doc.fragment_count || 0} 个片段 · ${doc.rule_finding_count || 0} 项制度风险</small></span><em class="badge ${escapeHtml(doc.highest_risk || "low")}">${escapeHtml(doc.highest_risk_label || "低风险")}</em></button>`).join("")}</nav>
+      <div id="contractDocumentPassport">${contractDocumentPassport(documents.find((doc) => doc.document_id === selectedId))}</div></div>
+  </section>`
+}
+
+function contractDocumentPassport(doc) {
+  if (!doc) return `<div class="empty-note">请选择合同附件。</div>`
+  const redaction = doc.redaction || {}, categories = redaction.categories || [], fragments = doc.safe_fragments || []
+  return `<article class="contract-passport"><header><div><small>合同解析护照</small><h3>${escapeHtml(doc.name || "未命名合同")}</h3></div><span class="badge approved">已安全处理</span></header>
+    <div class="contract-passport-metrics">${info("文件格式", documentFormat(doc))}${info("识别语种", doc.language_label || "待识别")}${info("解析引擎", doc.extractor || "—")}${info("结构化片段", `${doc.fragment_count || 0} 个`)}${info("制度风险", `${doc.rule_finding_count || 0} 项`)}${info("AI 辅助风险", `${doc.ai_finding_count || 0} 项`)}</div>
+    <div class="redaction-proof"><div class="section-heading"><div><h3>脱敏结果</h3><span class="section-subtitle">${redaction.reversible ? "本地可逆还原；外部模型只接收脱敏副本" : "脱敏副本"}</span></div><span>${redaction.masked_occurrence_count || 0} 处</span></div>
+      ${categories.length ? `<div class="redaction-categories">${categories.map((row) => `<span>${escapeHtml(row.label)} ${row.count}</span>`).join("")}</div>` : `<div class="empty-note">本附件未识别到预设敏感字段。</div>`}
+      ${fragments.length ? `<div class="safe-fragment-list">${fragments.map((fragment) => `<div><small>${escapeHtml(fragment.location_label || "合同片段")}${fragment.contains_redaction ? " · 已脱敏" : ""}</small><pre>${escapeHtml(fragment.text)}</pre></div>`).join("")}</div>` : `<div class="empty-note">未形成可展示的安全片段。</div>`}
+    </div>
+  </article>`
+}
+
+function contractRiskPanel(item, documentId) {
+  const rows = (item.findings || []).map((finding, index) => ({finding,index})).filter(({finding}) => finding.document_id === documentId)
+  return `<div class="section-heading"><div><h3>当前附件风险</h3><span class="section-subtitle">制度规则直接决定流程路由</span></div><span>${rows.length} 项</span></div>${rows.length ? rows.map(({finding,index}) => findingCard(finding, index)).join("") : `<div class="empty-note">该附件未发现需要处理的制度风险。</div>`}`
+}
+
+function installContractPackageActions(root, item) {
+  root.querySelector(".contract-attachment-list")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-contract-document]")
+    if (!button) return
+    const documentId = button.dataset.contractDocument
+    const doc = (item.contract_package || []).find((row) => row.document_id === documentId)
+    root.querySelectorAll(".contract-attachment").forEach((row) => row.classList.toggle("active", row === button))
+    root.querySelector("#contractDocumentPassport").innerHTML = contractDocumentPassport(doc)
+    root.querySelector(".finding-pane").innerHTML = contractRiskPanel(item, documentId)
+    root.querySelector("#contractAiSlot").innerHTML = aiAssistance(item, documentId)
+    root.querySelector("#evidenceViewer").innerHTML = `<div class="evidence-placeholder"><strong>风险证据定位</strong><p>点击当前附件风险中的“查看证据”。</p></div>`
+  })
 }
 
 function translationWorkbench(item) {
@@ -218,15 +284,16 @@ function showTranslationDialog(root, item, translation, renderTab) {
   })
 }
 
-function aiAssistance(item) {
+function aiAssistance(item, documentId = "") {
   const groups = item.ai_assistance || []
   if (!groups.length) return ""
-  const findings = groups.flatMap((group) => group.findings || [])
+  const allFindings = groups.flatMap((group) => group.findings || [])
+  const findings = allFindings.map((finding, index) => ({finding,index})).filter(({finding}) => !documentId || finding.document_id === documentId)
   const status = groups.some((group) => group.status === "succeeded") ? "succeeded" : groups[0].status
   const statusLabel = ({succeeded:"已完成", failed:"调用失败，已回退规则", not_configured:"未配置，当前使用规则审查", not_applicable:"不适用"})[status] || status
   return `<section class="ai-assistance form-section"><div class="section-heading"><div><h3>AI 辅助发现</h3><span class="ai-disclaimer">仅供辅助，不改变制度规则和审批结论</span></div><span class="badge ${status === "succeeded" ? "approved" : status === "failed" ? "high" : "pending"}">${escapeHtml(statusLabel)}</span></div>
     ${groups.map((group) => group.summary ? `<p class="ai-summary">${escapeHtml(group.summary)}</p>` : "").join("")}
-    ${findings.length ? `<div class="ai-finding-list">${findings.map((finding, index) => aiFindingCard(finding, index)).join("")}</div>` : `<div class="empty-note">当前没有额外的 AI 辅助发现。</div>`}
+    ${findings.length ? `<div class="ai-finding-list">${findings.map(({finding,index}) => aiFindingCard(finding, index)).join("")}</div>` : `<div class="empty-note">当前附件没有额外的 AI 辅助发现。</div>`}
   </section>`
 }
 
@@ -246,7 +313,7 @@ function revisionArchive(item) {
 function findingCard(finding, index = null) {
   const locatable = finding.document_id && finding.fragment_id
   return `<article class="finding ${escapeHtml(finding.level || "")}">
-    <div class="finding-head"><div><small>${escapeHtml(finding.rule_id || "风险规则")}</small><h3>${escapeHtml(finding.title)}</h3></div>${locatable ? `<button class="text-button evidence-link" data-finding-index="${index}">${escapeHtml(finding.location_label || "查看原文")}</button>` : ""}</div>
+    <div class="finding-head"><div><small>${escapeHtml(finding.rule_id || "风险规则")}</small><h3>${escapeHtml(finding.title)}</h3></div>${locatable ? `<button class="text-button evidence-link" data-finding-index="${index}">${escapeHtml(finding.location_label || "查看证据")}</button>` : ""}</div>
     <p>${escapeHtml(finding.message)}</p><div class="finding-suggestion"><b>建议</b><span>${escapeHtml(finding.suggestion)}</span></div>
   </article>`
 }
@@ -480,25 +547,6 @@ function duration(value) {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`
 }
 
-function documentsTab(item) {
-  const docs = item.source_documents || []
-  return docs.length ? `<div class="documents-summary"><strong>文档解析结果</strong><span>已归档 ${docs.length} 份；点击左侧附件查看片段、页码、表格单元格或 OCR 区域。</span></div><div class="document-layout"><section class="document-list"><div class="section-heading"><h3>案件原件</h3><span>${docs.length} 份</span></div>${docs.map((doc, index) => `<button class="document-row" ${doc.document_id && doc.fragment_count ? `data-document-index="${index}"` : "disabled"}><span class="document-icon">${escapeHtml((doc.media_type || "FILE").slice(0,4).toUpperCase())}</span><span><b>${escapeHtml(doc.name)}</b><small>${doc.document_kind === "contract" ? "合同" : "信用资料"} · ${parseStatus(doc.parse_status)} · ${doc.document_id ? `${doc.fragment_count || 0} 个可定位片段` : "历史文件需重新解析"}</small>${documentFeatures(doc)}</span></button>`).join("")}</section><aside id="documentViewer" class="evidence-viewer"><div class="evidence-placeholder"><strong>资料预览</strong><p>选择左侧文件查看首个可解析片段。</p></div></aside></div>` : emptyState("暂无原始资料", "当前案件没有上传文件。")
-}
-
-function documentFeatures(doc) {
-  const features = doc.features || {}, quality = doc.quality || {}, enhancement = doc.text_enhancement || {}, labels = []
-  if (doc.processing_error) labels.push("后续字段提取失败，已保留本地解析")
-  if (features.ocr_page_count) labels.push(`OCR ${features.ocr_page_count} 页`)
-  if (features.ocr_image_count) labels.push(`OCR 图片 ${features.ocr_image_count} 张`)
-  if (features.word_table_cell_count) labels.push(`Word 表格 ${features.word_table_cell_count} 个单元格`)
-  if (quality.status) labels.push(`质量 ${documentQualityLabel(quality.status)} ${Math.round(Number(quality.score || 0) * 100)}分`)
-  if (enhancement.status === "succeeded") labels.push(`文本模型增强 ${enhancement.candidate_count || 0} 个字段`)
-  if (enhancement.status === "not_applicable") labels.push("文本模型无法处理，需人工")
-  return labels.length ? `<small>${labels.map(escapeHtml).join(" · ")}</small>` : ""
-}
-
-function documentQualityLabel(value) { return ({passed:"通过",needs_text_enhancement:"需增强",manual_required:"需人工"})[value] || value }
-
 function writebackTab(item) {
   const writeback = item.writeback || {}, entries = Object.entries(writeback)
   return `<div class="section-heading"><div><h3>企业系统回写</h3><span>${entries.length ? "已记录调用结果" : "尚未执行"}</span></div>${item.permissions?.can_run_mock_approval ? `<button id="runMockApproval" class="secondary">运行 Mock OA 审批</button>` : ""}</div>
@@ -536,17 +584,10 @@ function installWritebackRetry(root, item, renderTab) {
 }
 
 async function loadEvidence(viewer, item, documentId, fragmentId, highlight = "") {
-  viewer.innerHTML = `<div class="evidence-loading">正在读取原件...</div>`
+  viewer.innerHTML = `<div class="evidence-loading">正在读取脱敏证据...</div>`
   try {
     const data = await api.getDocumentFragment(item.case_id, documentId, fragmentId, highlight)
-    const page = Number(data.selected_location?.page || 1)
-    const boxes = (data.highlight_regions || []).map((box) => `<span class="ocr-highlight" style="left:${Number(box.x)*100}%;top:${Number(box.y)*100}%;width:${Number(box.width)*100}%;height:${Number(box.height)*100}%"></span>`).join("")
-    const asset = data.asset_kind === "pdf"
-      ? `<div class="document-asset image"><a class="asset-open-link" href="${escapeHtml(data.asset_url)}#page=${page}" target="_blank" rel="noopener">打开原始 PDF</a><div class="ocr-image-stage"><img src="${escapeHtml(data.page_asset_url)}" alt="${escapeHtml(data.document.name)}第${page}页">${boxes}</div></div>`
-      : data.asset_kind === "image"
-        ? `<div class="document-asset image"><div class="ocr-image-stage"><img src="${escapeHtml(data.asset_url)}" alt="${escapeHtml(data.document.name)}原件">${boxes}</div></div>`
-        : ""
-    viewer.innerHTML = `<header><div><strong>${escapeHtml(data.document.name)}</strong><small>${escapeHtml(data.selected_location_label)}</small></div><span>${escapeHtml(data.document.media_type.toUpperCase())}</span></header>${asset}<div class="fragment-list">${data.fragments.map((fragment) => `<article class="document-fragment ${fragment.selected ? "selected" : ""}"><small>${escapeHtml(fragment.location_label)}</small><pre>${escapeHtml(fragment.text)}</pre></article>`).join("")}</div>${data.document.warnings?.length ? notice("解析提示", data.document.warnings) : ""}`
+    viewer.innerHTML = `<header><div><strong>${escapeHtml(data.document.name)}</strong><small>${escapeHtml(data.selected_location_label)} · 已脱敏证据</small></div><span>${escapeHtml(data.document.media_type.toUpperCase())}</span></header><div class="fragment-list">${data.fragments.map((fragment) => `<article class="document-fragment ${fragment.selected ? "selected" : ""}"><small>${escapeHtml(fragment.location_label)}</small><pre>${escapeHtml(fragment.text)}</pre></article>`).join("")}</div>${data.document.warnings?.length ? notice("解析提示", data.document.warnings) : ""}`
   } catch (reason) {
     viewer.innerHTML = `<div class="error-box">${escapeHtml(reason.message || reason)}</div>`
   }
@@ -560,7 +601,7 @@ function installEvidenceViewer(root, item) {
     if (finding) loadEvidence(root.querySelector("#evidenceViewer"), item, finding.document_id, finding.fragment_id, finding.evidence_query || finding.clause_excerpt || "")
   })
   const aiFindings = (item.ai_assistance || []).flatMap((group) => group.findings || [])
-  root.querySelector(".ai-assistance")?.addEventListener("click", (event) => {
+  root.querySelector("#contractAiSlot")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-ai-finding-index]")
     if (!button) return
     const finding = aiFindings[Number(button.dataset.aiFindingIndex)]
@@ -568,16 +609,6 @@ function installEvidenceViewer(root, item) {
     const viewer = root.querySelector("#evidenceViewer")
     loadEvidence(viewer, item, finding.document_id, finding.fragment_id, finding.evidence_query || finding.clause_excerpt || "")
     if (window.innerWidth <= 900) viewer.scrollIntoView({behavior:"smooth", block:"start"})
-  })
-}
-
-function installDocumentViewer(root, item) {
-  root.querySelector(".document-list")?.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-document-index]")
-    if (!button) return
-    const doc = item.source_documents[Number(button.dataset.documentIndex)]
-    root.querySelectorAll(".document-row").forEach((row) => row.classList.toggle("active", row === button))
-    loadEvidence(root.querySelector("#documentViewer"), item, doc.document_id, "")
   })
 }
 

@@ -609,8 +609,43 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
 .rail-row b { color: var(--ink); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
 .info-grid.compact { grid-template-columns: repeat(2, 1fr); }
 .empty-note { padding: 19px; background: var(--surface-soft); border-radius: 10px; color: var(--muted); }
+.section-subtitle { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.document-processing-note { margin: -3px 0 13px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.document-processing-list { display: grid; gap: 8px; }
+.document-processing-row { min-width: 0; padding: 11px 12px; display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.document-processing-format { min-height: 34px; padding: 5px; display: grid; place-items: center; background: var(--canvas); border: 1px solid var(--hairline); color: var(--ink); font-size: 10px; font-weight: 700; }
+.document-processing-main { min-width: 0; }
+.document-processing-main strong, .document-processing-main small { display: block; overflow-wrap: anywhere; }
+.document-processing-main strong { color: var(--ink); font-size: 13px; font-weight: 600; }
+.document-processing-main small { margin-top: 4px; color: var(--muted); font-size: 11px; }
 
-.contract-review-layout, .document-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 20px; align-items: start; }
+.contract-package { margin-bottom: 24px; }
+.contract-package-layout { display: grid; grid-template-columns: minmax(260px, .72fr) minmax(0, 1.28fr); gap: 16px; align-items: start; }
+.contract-attachment-list { display: grid; gap: 8px; }
+.contract-attachment { width: 100%; min-width: 0; padding: 12px; display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 10px; color: var(--body); background: var(--canvas); border: 1px solid var(--hairline); border-radius: 6px; cursor: pointer; text-align: left; }
+.contract-attachment:hover { border-color: var(--border-strong); }
+.contract-attachment.active { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--primary); background: var(--surface-soft); }
+.contract-attachment b, .contract-attachment small { display: block; overflow-wrap: anywhere; }
+.contract-attachment b { color: var(--ink); font-size: 13px; font-weight: 600; }
+.contract-attachment small { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.contract-attachment em { font-style: normal; white-space: nowrap; }
+.contract-passport { border: 1px solid var(--hairline); background: var(--canvas); }
+.contract-passport > header { padding: 15px 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--hairline-soft); }
+.contract-passport > header small { color: var(--muted); font-size: 10px; }
+.contract-passport > header h3 { margin: 4px 0 0; color: var(--ink); font-size: 15px; }
+.contract-passport-metrics { padding: 14px 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.contract-passport-metrics .info-item { min-width: 0; padding: 10px; }
+.redaction-proof { padding: 15px 16px; border-top: 1px solid var(--hairline-soft); background: var(--surface-soft); }
+.redaction-proof .section-heading { margin-bottom: 10px; }
+.redaction-proof .section-heading h3 { font-size: 14px; }
+.redaction-categories { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.redaction-categories span { padding: 4px 7px; color: var(--body); font-size: 10px; border: 1px solid var(--hairline); background: var(--canvas); }
+.safe-fragment-list { display: grid; gap: 7px; max-height: 260px; overflow: auto; }
+.safe-fragment-list > div { min-width: 0; padding: 9px 10px; border-left: 2px solid var(--primary); background: var(--canvas); }
+.safe-fragment-list small { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; }
+.safe-fragment-list pre { margin: 0; color: var(--body); font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.contract-review-layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 20px; align-items: start; }
 .finding-pane { min-width: 0; }
 .finding-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .finding-head small { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
@@ -648,15 +683,6 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
 .document-fragment.selected { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--primary); }
 .document-fragment small { display: block; margin-bottom: 8px; color: var(--primary-active); font-weight: 650; }
 .document-fragment pre { margin: 0; color: var(--body); font: 13px/1.7 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
-
-.document-list { display: grid; gap: 8px; }
-.document-row { width: 100%; padding: 13px; display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 12px; background: var(--canvas); border: 1px solid var(--hairline); border-radius: 10px; cursor: pointer; text-align: left; }
-.document-row:hover { border-color: var(--border-strong); }
-.document-row.active { border-color: var(--ink); background: var(--surface-soft); }
-.document-row b, .document-row small { display: block; overflow-wrap: anywhere; }
-.document-row b { font-weight: 600; }
-.document-row small { margin-top: 4px; color: var(--muted); }
-.document-icon { width: 44px; height: 40px; display: grid; place-items: center; background: var(--surface-strong); border-radius: 8px; color: var(--ink); font-size: 10px; font-weight: 700; }
 
 .approval-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
 .agent-execution { display: grid; gap: 0; }
@@ -749,9 +775,6 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
 .agent-security-note { margin-top: 16px; padding: 13px 15px; color: var(--muted); font-size: 12px; background: var(--surface-soft); border-left: 3px solid var(--ink); }
 .case-tools { margin-top: 22px; }
 .case-tools .field-hint { margin: 8px 0 12px; }
-.documents-summary { margin-bottom: 14px; padding: 14px 16px; display: flex; gap: 12px; align-items: baseline; border: 1px solid var(--hairline); border-left: 3px solid var(--primary); background: var(--surface-soft); }
-.documents-summary strong { color: var(--ink); }
-.documents-summary span { color: var(--muted); font-size: 12px; }
 .candidate-reviews { margin-top: 24px; }
 .structured-extractions { margin-bottom: 24px; padding: 18px 20px; border: 1px solid var(--hairline); background: var(--surface-soft); }
 .structured-extraction-list { display: grid; gap: 10px; }
@@ -943,7 +966,7 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
   .template-toolbar-copy { grid-column: 1 / -1; }
   .template-toolbar .text-button { grid-column: 1 / -1; }
   .rating-row { grid-template-columns: 1fr 1fr; }
-  .contract-review-layout, .document-layout, .overview-layout, .approval-layout { grid-template-columns: 1fr; }
+  .contract-package-layout, .contract-review-layout, .overview-layout, .approval-layout { grid-template-columns: 1fr; }
   .agent-lane { grid-template-columns: 1fr; }
   .operations-layout, .analytics-layout { grid-template-columns: minmax(0, 1fr); }
   .model-health-bar { grid-template-columns: repeat(3, 1fr); }
@@ -1019,7 +1042,11 @@ input[readonly] { background: var(--surface-soft); color: var(--muted); cursor: 
   .case-tabs .tab { min-height: 52px; padding: 14px 12px; }
   .finding-head { align-items: stretch; }
   .finding-head .evidence-link { align-self: flex-start; }
-  .document-layout { gap: 14px; }
+  .document-processing-row { grid-template-columns: 48px minmax(0, 1fr); }
+  .document-processing-row .badge { grid-column: 2; justify-self: start; }
+  .contract-attachment { grid-template-columns: 44px minmax(0, 1fr); }
+  .contract-attachment .badge { grid-column: 2; justify-self: start; }
+  .contract-passport-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .revision-finding > header { grid-template-columns: 1fr; }
   .revision-version { align-items: stretch; flex-direction: column; }
   .revision-actions > * { flex: 1; text-align: center; }

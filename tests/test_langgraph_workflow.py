@@ -435,7 +435,7 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     )
                 evidence = root / "市场总监批准.txt"
                 evidence.write_text("批准本次超额信用申请", encoding="utf-8")
-                final = harness.resume(
+                authorized = harness.resume(
                     run.case_id,
                     {
                         "action": "approve",
@@ -444,16 +444,33 @@ class LangGraphWorkflowTests(unittest.TestCase):
                     },
                     actor=ActorContext("director-1", ("director",), "oa"),
                 )
-                self.assertFalse(final.paused)
-                self.assertEqual(final.status, "approved_by_exception")
+                self.assertTrue(authorized.paused)
+                self.assertEqual(authorized.status, "pending_legal_approval")
+                self.assertEqual(authorized.waiting_for, "contract_approval")
                 self.assertEqual(
-                    final.state["exception_approval"]["approval_scope"],
+                    authorized.state["contract_exception_approval"]["approval_scope"],
                     f"仅限案件 {run.case_id} 的合同例外",
                 )
-                archived = final.state["approval_evidence"][0]
+                archived = authorized.state["approval_evidence"][0]
                 self.assertEqual(archived["actor_id"], "director-1")
                 self.assertTrue(Path(archived["archived_path"]).is_file())
                 self.assertEqual(len(archived["sha256"]), 64)
+                with self.assertRaises(PermissionError):
+                    harness.resume(
+                        run.case_id,
+                        {"action": "approve"},
+                        actor=ActorContext("director-1", ("director",), "oa"),
+                    )
+                final = harness.resume(
+                    run.case_id,
+                    {"action": "approve", "comment": "法务确认例外授权及合同条款"},
+                    actor=ActorContext("legal-1", ("legal",), "oa"),
+                )
+                self.assertFalse(final.paused)
+                self.assertEqual(final.status, "approved_by_exception")
+                self.assertTrue(
+                    final.state["contract_approval"]["exception_authorization_applied"]
+                )
 
     def test_current_overdue_requires_evidenced_special_release(self):
         with tempfile.TemporaryDirectory() as tmp:

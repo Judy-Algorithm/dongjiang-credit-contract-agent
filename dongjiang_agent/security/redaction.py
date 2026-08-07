@@ -12,6 +12,10 @@ from typing import Pattern
 class RedactionVault:
     _PATTERNS: tuple[tuple[str, Pattern[str]], ...] = (
         ("BANK", re.compile(r"(?<!\d)[1-9]\d{15,18}(?!\d)")),
+        (
+            "PHONE",
+            re.compile(r"(?<!\d)\+\d{1,3}[- ]?\d(?:[ -]?\d){7,11}(?!\d)"),
+        ),
         ("PHONE", re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")),
         (
             "EMAIL",
@@ -30,16 +34,55 @@ class RedactionVault:
                 r"(?![0-9A-HJ-NPQRTUWXY])"
             ),
         ),
-        ("MONEY", re.compile(r"(?:人民币|RMB|CNY|¥|￥)\s*[\d,]+(?:\.\d{1,2})?")),
+        (
+            "MONEY",
+            re.compile(
+                r"(?:人民币|RMB|CNY|USD|US\$|HKD|HK\$|VND|₫|¥|￥)\s*"
+                r"[\d,]+(?:\.\d{1,2})?|"
+                r"[\d,]+(?:\.\d{1,2})?\s*(?:元|万元|美元|港币|越南盾|"
+                r"RMB|CNY|USD|HKD|VND|₫)"
+            ),
+        ),
         (
             "PRICE",
             re.compile(
-                r"(?:单价|价格|价款|金额|信用额度|授信额度|赊销额度)"
-                r"\s*[：:为]?\s*[\d,]+(?:\.\d{1,2})?\s*(?:元|万元|美元)?"
+                r"(?:单价|价格|价款|金额|信用额度|授信额度|赊销额度|"
+                r"unit price|price|contract value|contract amount|credit limit|"
+                r"đơn giá|giá trị hợp đồng|hạn mức tín dụng)"
+                r"\s*[：:为]?\s*(?:RMB|CNY|USD|HKD|VND|US\$|HK\$|₫|¥|￥)?\s*"
+                r"[\d,]+(?:\.\d{1,2})?\s*(?:元|万元|美元|港币|越南盾|"
+                r"RMB|CNY|USD|HKD|VND|₫)?",
+                re.IGNORECASE,
             ),
         ),
-        ("TECH", re.compile(r"(?:技术参数|工艺参数|图纸编号)\s*[：:]\s*[^\n；;]{2,80}")),
-        ("PARTY", re.compile(r"(?:甲方|乙方|客户|供应商|买方|卖方)\s*[：:]\s*[^，,。\n；;]{2,60}")),
+        (
+            "TECH",
+            re.compile(
+                r"(?:技术参数|工艺参数|图纸编号|technical parameters?|"
+                r"drawing number|thông số kỹ thuật|mã bản vẽ)\s*[：:]\s*"
+                r"[^\n；;]{2,100}",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "PARTY",
+            re.compile(
+                r"(?:甲方|乙方|客户|供应商|买方|卖方|buyer|seller|customer|"
+                r"supplier|purchaser|bên mua|bên bán|khách hàng|nhà cung cấp)"
+                r"\s*[：:]\s*[^，,。\n；;]{2,80}",
+                re.IGNORECASE,
+            ),
+        ),
+        (
+            "PARTY",
+            re.compile(
+                r"(?:[\u4e00-\u9fffA-Za-z0-9（）()·& -]{2,70}"
+                r"(?:股份有限公司|有限责任公司|有限公司)|"
+                r"(?:Công ty|CÔNG TY)[^\n；;,.]{2,70}|"
+                r"[A-Z][A-Za-z0-9&'.,() -]{2,70}(?:Co\.,?\s*Ltd\.?|Ltd\.?|"
+                r"Limited|Inc\.?|Corporation))",
+            ),
+        ),
     )
 
     def __init__(self, case_id: str, vault_dir: str | Path | None = None) -> None:
@@ -87,8 +130,17 @@ class RedactionVault:
 
     def restore(self, text: str) -> str:
         restored = str(text or "")
-        for token, raw in sorted(self.mapping.items(), key=lambda item: len(item[0]), reverse=True):
-            restored = restored.replace(token, raw)
+        ordered = sorted(
+            self.mapping.items(), key=lambda item: len(item[0]), reverse=True
+        )
+        # A broad party token can contain phone/email tokens created earlier.
+        # Expand in bounded passes so nested local tokens are fully restored.
+        for _ in range(len(ordered) + 1):
+            before = restored
+            for token, raw in ordered:
+                restored = restored.replace(token, raw)
+            if restored == before:
+                break
         return restored
 
     def persist_local(self) -> Path | None:

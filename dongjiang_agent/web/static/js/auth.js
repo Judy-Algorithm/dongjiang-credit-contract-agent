@@ -1,4 +1,4 @@
-import {api, setCsrfToken} from "./api.js?v=20260807-login-fix"
+import {api, setCsrfToken} from "./api.js?v=20260807-contract-package"
 
 let state = {loaded:false, setupRequired:false, authenticated:false, user:null}
 

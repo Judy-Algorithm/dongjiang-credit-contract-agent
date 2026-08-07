@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any, Literal
 
@@ -639,6 +640,16 @@ class WorkflowNodes:
                     }
                     for fragment in document.fragments
                 ]
+                redacted_fragment_text = "\n".join(
+                    str(item.get("text") or "") for item in redacted_fragments
+                )
+                redaction_categories: dict[str, int] = {}
+                for category in re.findall(
+                    r"⟦([A-Z]+)_[0-9a-f]{10}⟧", redacted_fragment_text
+                ):
+                    redaction_categories[category] = (
+                        redaction_categories.get(category, 0) + 1
+                    )
                 quality_payload = self._call_tool(
                     "document.quality_gate",
                     {
@@ -677,6 +688,19 @@ class WorkflowNodes:
                                 fragment.location.get("kind") == "word_table_cell"
                                 for fragment in document.fragments
                             ),
+                        },
+                        "redaction": {
+                            "status": "redacted",
+                            "reversible": True,
+                            "external_payload": "redacted_only",
+                            "masked_occurrence_count": sum(
+                                redaction_categories.values()
+                            ),
+                            "masked_fragment_count": sum(
+                                "⟦" in str(item.get("text") or "")
+                                for item in redacted_fragments
+                            ),
+                            "categories": redaction_categories,
                         },
                         "fragments": redacted_fragments,
                 }
@@ -1789,6 +1813,7 @@ class WorkflowNodes:
             )
             release = {
                 "action": "approve",
+                "purpose": "credit_control_release",
                 "comment": str(response.get("comment") or ""),
                 "actor": dict(response.get("actor") or {}),
                 "approved_at": utc_now(),
@@ -2042,6 +2067,7 @@ class WorkflowNodes:
             )
             review = review_from_dict(dict(review_payload))
             for finding in review.findings:
+                finding.document_id = facts.document_id
                 if finding.fragment_id or not finding.clause_excerpt:
                     continue
                 matched = locate_excerpt(
@@ -2049,7 +2075,6 @@ class WorkflowNodes:
                     fragments,
                 )
                 if matched:
-                    finding.document_id = facts.document_id
                     finding.fragment_id = str(matched["fragment_id"])
                     finding.location = dict(matched["location"])
             payload = {"document_id": document_ref, "review": checkpoint_dict(review)}
@@ -2532,6 +2557,8 @@ class WorkflowNodes:
                 "contract_facts": [],
                 "contract_submission_number": int(state.get("contract_submission_number") or 0) + 1,
                 "contract_reviews": [],
+                "contract_exception_approval": None,
+                "exception_approval": state.get("special_release") or None,
                 "contract_approval": None,
                 "decision": None,
                 "approval_route": None,
@@ -2553,7 +2580,7 @@ class WorkflowNodes:
 
     def await_manager_approval(
         self, state: WorkflowState
-    ) -> Command[Literal["finalize", "await_sales_revision"]]:
+    ) -> Command[Literal["await_contract_approval", "await_sales_revision"]]:
         response = interrupt(
             {
                 "type": "manager_approval",
@@ -2580,31 +2607,32 @@ class WorkflowNodes:
                 default_scope=f'仅限案件 {state["case_id"]} 的合同例外',
             )
             decision = {**response_payload, **terms}
+            decision["purpose"] = "contract_exception"
             return Command(
                 update={
                     **candidate_update,
-                    "status": "approved_by_exception",
+                    "status": "pending_legal_approval",
                     "human_decision": decision,
                     "approval_evidence": list(state.get("approval_evidence") or []) + evidence,
+                    "contract_exception_approval": decision,
                     "exception_approval": decision,
-                    "waiting_for": None,
+                    "waiting_for": "contract_approval",
                     "orchestration_runs": [
-                        orchestration_run(
+                        orchestration_waiting_run(
                             dict(state.get("orchestration_plan") or {}),
                             "contract_human_review",
-                            status="completed",
-                            output_summary="授权审批人已批准合同例外并归档证据",
+                            output_summary="合同例外授权已通过，等待合同法务最终批准",
                         )
                     ] if state.get("orchestration_plan") else [],
                     "trace": ([candidate_trace] if candidate_trace else []) + [
                         trace(
                             "manager.approved",
-                            "管理层已批准本次例外并归档审批证据。",
+                            "管理层已批准本次合同例外并归档证据，转交合同法务最终批准。",
                             evidence_count=len(evidence),
                         )
                     ],
                 },
-                goto="finalize",
+                goto="await_contract_approval",
             )
         return Command(
             update={
@@ -2624,7 +2652,10 @@ class WorkflowNodes:
                 "type": "contract_approval",
                 **dict(state.get("approval_request") or {}),
                 "message": (
-                    "合同规则检查已通过，请合同法务结合制度结论、AI辅助风险和原文证据"
+                    "合同例外已获授权，请合同法务结合授权范围、制度结论、AI辅助风险"
+                    "和原文证据作出最终决定。AI辅助发现仅供参考，不会自动批准或否决合同。"
+                    if state.get("contract_exception_approval")
+                    else "合同规则检查已通过，请合同法务结合制度结论、AI辅助风险和原文证据"
                     "作出最终决定。AI辅助发现仅供参考，不会自动批准或否决合同。"
                 ),
                 "allowed_actions": ["approve", "request_revision"],
@@ -2634,6 +2665,7 @@ class WorkflowNodes:
         action = str(response_payload.get("action") or "")
         if action == "approve":
             actor = dict(response_payload.get("actor") or {})
+            approved_by_exception = bool(state.get("contract_exception_approval"))
             approval = {
                 **response_payload,
                 "approved_at": utc_now(),
@@ -2643,11 +2675,16 @@ class WorkflowNodes:
                     "source_system": str(actor.get("source_system") or ""),
                 },
                 "rule_decision": str(state.get("decision") or "pass"),
+                "exception_authorization_applied": approved_by_exception,
                 "ai_assistance_is_advisory": True,
             }
             return Command(
                 update={
-                    "status": "approved",
+                    "status": (
+                        "approved_by_exception"
+                        if approved_by_exception
+                        else "approved"
+                    ),
                     "contract_approval": approval,
                     "human_decision": response_payload,
                     "waiting_for": None,
@@ -2796,6 +2833,9 @@ class WorkflowNodes:
             "oa_evidence_id": approval.get("oa_evidence_id"),
             "approval_chain": list(final_state.get("approval_chain") or []),
             "contract_legal_approval": dict(final_state.get("contract_approval") or {}),
+            "contract_exception_approval": dict(
+                final_state.get("contract_exception_approval") or {}
+            ),
         }
         customer_id = str(
             customer.get("crm_customer_id")

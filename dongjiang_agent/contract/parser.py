@@ -45,17 +45,25 @@ def _detect_language(text: str, fallback: str) -> str:
 
 class ContractFactExtractor:
     _AMOUNT = re.compile(
-        r"(?:合同(?:总)?金额|总价|价款|含税金额)\s*[：:为]?\s*(?:人民币|RMB|CNY|¥|￥)?\s*"
-        r"(?P<value>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万元|万|元|美元|USD)?",
+        r"(?:合同(?:总)?金额|总价|价款|含税金额|contract (?:amount|value)|total price|"
+        r"value of (?:this )?contract|giá trị hợp đồng|tổng giá trị|tổng giá)"
+        r"(?:\s*\|)?\s*[：:为]?\s*(?:人民币|RMB|CNY|USD|US\$|HKD|HK\$|VND|₫|¥|￥)?\s*"
+        r"(?P<value>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<unit>万元|万|元|美元|港币|越南盾|RMB|CNY|USD|HKD|VND|₫)?",
         re.IGNORECASE,
     )
     _CREDIT = re.compile(
-        r"(?:授信(?:额度)?|信用额度|赊销额度)\s*[：:为]?\s*(?:人民币|RMB|CNY|¥|￥)?\s*"
-        r"(?P<value>\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万元|万|元)?",
+        r"(?:授信(?:额度)?|信用额度|赊销额度|credit limit|requested credit|"
+        r"credit requested|hạn mức tín dụng|hạn mức công nợ)"
+        r"(?:\s*\|)?\s*[：:为]?\s*(?:人民币|RMB|CNY|USD|US\$|HKD|HK\$|VND|₫|¥|￥)?\s*"
+        r"(?P<value>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<unit>万元|万|元|美元|港币|越南盾|RMB|CNY|USD|HKD|VND|₫)?",
         re.IGNORECASE,
     )
     _TERM = re.compile(
-        r"(?:账期|付款期限|月结)\s*[：:为]?\s*(?P<value>\d{1,3})\s*(?P<unit>天|日|个月|月)",
+        r"(?:账期|付款期限|月结|payment term|payment within|net|"
+        r"thời hạn thanh toán|thanh toán trong)(?:\s*\|)?\s*[：:为]?\s*"
+        r"(?P<value>\d{1,3})\s*(?P<unit>天|日|个月|月|days?|months?|ngày|tháng)",
         re.IGNORECASE,
     )
     _TAIL_RATIO = re.compile(
@@ -131,14 +139,14 @@ class ContractFactExtractor:
     )
 
     _CLAUSE_MARKERS = {
-        "has_parties": ("甲方", "乙方", "买方", "卖方", "客户", "供应商", "purchaser", "buyer", "seller", "supplier"),
-        "has_subject": ("合同标的", "产品", "货物", "服务内容", "模具", "技术要求", "product", "goods", "services", "tooling"),
-        "has_payment": ("付款", "支付", "价款", "账期", "月结", "payment", "price", "invoice"),
-        "has_breach": ("违约", "赔偿", "违约金", "breach", "damages", "penalty", "indemnif"),
-        "has_ip": ("知识产权", "专利", "著作权", "商标", "技术成果", "intellectual property", "patent", "copyright", "trademark"),
-        "has_confidentiality": ("保密", "商业秘密", "不得披露", "confidential", "non-disclosure", "trade secret"),
-        "has_termination": ("解除", "终止", "合同期限", "termination", "terminate", "term of this agreement"),
-        "has_dispute_resolution": ("争议解决", "仲裁", "人民法院", "适用法律", "governing law", "jurisdiction", "arbitration", "dispute"),
+        "has_parties": ("甲方", "乙方", "买方", "卖方", "客户", "供应商", "purchaser", "buyer", "seller", "supplier", "bên mua", "bên bán", "nhà cung cấp"),
+        "has_subject": ("合同标的", "产品", "货物", "服务内容", "模具", "技术要求", "product", "goods", "services", "tooling", "hàng hóa", "sản phẩm", "khuôn"),
+        "has_payment": ("付款", "支付", "价款", "账期", "月结", "payment", "price", "invoice", "thanh toán", "giá trị"),
+        "has_breach": ("违约", "赔偿", "违约金", "breach", "damages", "penalty", "indemnif", "vi phạm", "bồi thường", "trách nhiệm"),
+        "has_ip": ("知识产权", "专利", "著作权", "商标", "技术成果", "intellectual property", "patent", "copyright", "trademark", "sở hữu trí tuệ"),
+        "has_confidentiality": ("保密", "商业秘密", "不得披露", "confidential", "non-disclosure", "trade secret", "bảo mật", "bí mật kinh doanh"),
+        "has_termination": ("解除", "终止", "合同期限", "termination", "terminate", "term of this agreement", "chấm dứt", "thời hạn hợp đồng"),
+        "has_dispute_resolution": ("争议解决", "仲裁", "人民法院", "适用法律", "governing law", "jurisdiction", "arbitration", "dispute", "giải quyết tranh chấp", "trọng tài", "luật áp dụng"),
     }
 
     @staticmethod
@@ -178,7 +186,7 @@ class ContractFactExtractor:
         term = self._TERM.search(content)
         if term:
             value = int(term.group("value"))
-            if term.group("unit") in {"个月", "月"}:
+            if term.group("unit").lower() in {"个月", "月", "month", "months", "tháng"}:
                 value *= 30
             facts.payment_term_days = value
             facts.evidence.append(Evidence("contract", "payment_term_days", value, 0.9, _excerpt(content, *term.span())))

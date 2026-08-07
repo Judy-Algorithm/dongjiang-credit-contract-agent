@@ -160,6 +160,8 @@ def _entry_task(
         return "contract_upload"
     if stage == "decision.routed":
         return _decision_task(item, case)
+    if stage == "manager.approved":
+        return "contract_approval"
     if stage in {"manager.rejected", "manual.revision_requested", "contract_legal.revision_requested"}:
         return "sales_revision"
     return ""

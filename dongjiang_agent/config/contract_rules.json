@@ -40,7 +40,7 @@
     {
       "rule_id": "DJ-CANCEL-WITHOUT-LIABILITY",
       "title": "客户可无责任取消订单或预测",
-      "pattern": "(?:甲方|买方|客户).{0,40}(?:取消|解除).{0,40}(?:不承担|无须承担|无需承担|不负).{0,20}(?:责任|费用|赔偿)|purchaser.{0,80}cancel.{0,80}(?:no|without).{0,20}liability",
+      "pattern": "(?:甲方|买方|客户).{0,40}(?:取消|解除).{0,40}(?:不承担|无须承担|无需承担|不负).{0,20}(?:责任|费用|赔偿)|(?:purchaser|buyer|customer).{0,80}cancel.{0,80}(?:no|without).{0,20}(?:liability|compensation|cost)|bên mua.{0,80}(?:hủy|chấm dứt).{0,80}(?:không|mà không).{0,30}(?:chịu trách nhiệm|bồi thường|chi phí)",
       "level": "blocker",
       "route": "block",
       "suggestion": "约定取消通知期、已采购物料和在制品补偿及合理减损机制后重新提交。"
@@ -101,7 +101,7 @@
     {
       "rule_id": "LEGAL-FOREIGN-JURISDICTION",
       "title": "境外法律或管辖",
-      "pattern": "适用.*(?:美国|英国|新加坡|日本|越南).*法律|提交.*(?:境外|国际).*仲裁",
+      "pattern": "适用.*(?:美国|英国|新加坡|日本|越南).*法律|提交.*(?:境外|国际).*仲裁|governed by the laws? of (?:the )?(?:United States|United Kingdom|Singapore|Japan|Vietnam)|luật (?:của |nước )?Việt Nam|pháp luật Việt Nam",
       "level": "medium",
       "suggestion": "由法务评估境外法律成本，优先约定中国法及可执行的争议解决机构。"
     },

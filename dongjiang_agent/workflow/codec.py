@@ -37,6 +37,10 @@ def case_from_state(state: dict[str, Any]) -> AuditCase:
         credit_control=dict(state.get("credit_control") or {}),
         special_release=dict(state.get("special_release") or {}),
         exception_approval=dict(state.get("exception_approval") or {}),
+        contract_exception_approval=dict(
+            state.get("contract_exception_approval") or {}
+        ),
+        contract_approval=dict(state.get("contract_approval") or {}),
         writeback=dict(state.get("writeback") or {}),
         contract_reviews=[
             review_from_dict(item)

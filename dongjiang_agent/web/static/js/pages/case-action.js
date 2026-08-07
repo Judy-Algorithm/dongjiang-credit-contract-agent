@@ -1,6 +1,6 @@
-import {api, encodeFiles} from "../api.js?v=20260807-login-fix"
-import {escapeHtml, money} from "../format.js?v=20260807-login-fix"
-import {navigate} from "../router.js?v=20260807-login-fix"
+import {api, encodeFiles} from "../api.js?v=20260807-contract-package"
+import {escapeHtml, money} from "../format.js?v=20260807-contract-package"
+import {navigate} from "../router.js?v=20260807-contract-package"
 
 function fileKey(file) {
   return `${file.name}:${file.size}:${file.lastModified}`
@@ -163,6 +163,9 @@ function setupCreditApprovalMode(root) {
 }
 
 function context(item) {
+  const actionType = typeFor(item)
+  const isContractReviewStage = ["manual_review", "manager_review", "finance_legal_review", "contract_approval"].includes(actionType)
+  const creditControlReleased = item.special_release?.action === "approve"
   const credit = item.credit || {}
   const model = credit.model_result || {}
   const approved = credit.approved_result
@@ -178,10 +181,16 @@ function context(item) {
       <div><span>资料覆盖率</span><b>${coverage}</b></div>
     </div>
     ${credit.requires_supplement ? `<div class="supplement-notice"><strong>本次补件原因</strong><ul>${(credit.supplement_reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
-    ${item.credit_control?.credit_lock_reasons?.length ? `<div class="supplement-notice"><strong>信用控制锁定原因</strong><ul>${item.credit_control.credit_lock_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
-    ${item.findings?.length ? `<div class="form-section"><div class="form-section-title"><h3>制度规则结论</h3></div>${item.findings.map((finding) => `<article class="finding ${escapeHtml(finding.level || "")}"><h3>${escapeHtml(finding.title)}</h3><p>${escapeHtml(finding.message)}</p><small>${escapeHtml(finding.suggestion)}</small></article>`).join("")}</div>` : `<div class="supplement-notice"><strong>制度规则结论</strong><p>合同规则检查未发现需要阻断、特批或异常复核的事项，但仍需合同法务人工批准。</p></div>`}
-    ${typeFor(item) === "contract_approval" ? aiReviewContext(item) : ""}
+    ${!creditControlReleased && item.credit_control?.credit_lock_reasons?.length ? `<div class="supplement-notice"><strong>信用控制锁定原因</strong><ul>${item.credit_control.credit_lock_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul></div>` : ""}
+    ${actionType === "contract_approval" && item.contract_exception_approval?.action === "approve" ? contractExceptionContext(item.contract_exception_approval) : ""}
+    ${isContractReviewStage ? (item.findings?.length ? `<div class="form-section"><div class="form-section-title"><h3>制度规则结论</h3></div>${item.findings.map((finding) => `<article class="finding ${escapeHtml(finding.level || "")}"><h3>${escapeHtml(finding.title)}</h3><p>${escapeHtml(finding.message)}</p><small>${escapeHtml(finding.suggestion)}</small></article>`).join("")}</div>` : `<div class="supplement-notice"><strong>制度规则结论</strong><p>合同规则检查未发现需要阻断、特批或异常复核的事项，但仍需合同法务人工批准。</p></div>`) : ""}
+    ${actionType === "contract_approval" ? aiReviewContext(item) : ""}
   `
+}
+
+function contractExceptionContext(approval) {
+  const evidenceCount = approval.approval_evidence?.length || approval.evidence?.length || 0
+  return `<div class="supplement-notice approval-confirmed"><strong>合同例外授权已通过，等待法务最终批准</strong><ul><li>批准范围：${escapeHtml(approval.approval_scope || "本案件合同例外")}</li><li>有效期至：${escapeHtml((approval.expires_at || "—").replace("T", " ").slice(0, 19))}</li><li>已归档审批证据：${evidenceCount} 份</li></ul></div>`
 }
 
 function typeFor(item) { return item.next_action?.type || "" }
@@ -198,7 +207,7 @@ function message(type) {
     credit_supplement:"请补充财报、评级报告或历史合作资料。",
     upload_contract:"请上传合同文件，或者粘贴合同正文。",
     submit_revision:"请修改风险事项后，提交最新版本合同。",
-    manager_review:"请确认是否批准本次例外申请。",
+    manager_review:"请判断是否接受本次商业例外；批准后仍由合同法务作最终合同决定。",
     manual_review:"请确认审核结果，补充资料，或要求业务修改合同。",
     contract_approval:"请结合制度规则结论、AI辅助风险和原文证据，决定批准合同或要求修改。",
     special_release:"客户信用控制已锁定，请核验原因并上传特别放行证据。",

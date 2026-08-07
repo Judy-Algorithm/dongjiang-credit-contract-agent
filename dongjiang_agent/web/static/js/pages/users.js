@@ -1,5 +1,5 @@
-import {api} from "../api.js?v=20260807-login-fix"
-import {escapeHtml, dateTime} from "../format.js?v=20260807-login-fix"
+import {api} from "../api.js?v=20260807-contract-package"
+import {escapeHtml, dateTime} from "../format.js?v=20260807-contract-package"
 
 const roles = [
   ["case_submitter","业务经办人"],

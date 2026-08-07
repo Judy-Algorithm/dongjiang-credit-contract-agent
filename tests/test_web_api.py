@@ -2056,7 +2056,7 @@ class WebApiTests(unittest.TestCase):
     def test_benchmark_spa_route_and_static_module_exist(self):
         status, html, headers = self.download("/benchmarks")
         self.assertEqual(status, 200)
-        self.assertIn(b"20260807-csrf-delete", html)
+        self.assertIn(b"20260807-contract-package", html)
         self.assertIn("text/html", headers["Content-Type"])
 
         status, module, headers = self.download("/js/pages/benchmark.js")
@@ -2068,11 +2068,15 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"canGenerateExtraction", case_module)
         self.assertIn(b"structuredExtractionPanel", case_module)
+        self.assertIn(b"documentProcessingSummary", case_module)
+        self.assertIn("资料解析摘要".encode(), case_module)
+        self.assertNotIn("原始资料".encode(), case_module)
+        self.assertNotIn(b"installDocumentViewer", case_module)
         self.assertIn("javascript", headers["Content-Type"])
 
     def test_frontend_entrypoint_lazily_loads_route_modules_with_retry(self):
         status, module, headers = self.download(
-            "/js/app.js?v=20260807-csrf-delete"
+            "/js/app.js?v=20260807-contract-package"
         )
         self.assertEqual(status, 200)
         source = module.decode("utf-8")
@@ -2090,7 +2094,7 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
 
         status, api_module, headers = self.download(
-            "/js/api.js?v=20260807-csrf-delete"
+            "/js/api.js?v=20260807-contract-package"
         )
         self.assertEqual(status, 200)
         self.assertIn(b"responseCache", api_module)

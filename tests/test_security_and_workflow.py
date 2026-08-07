@@ -101,6 +101,27 @@ class SecurityAndWorkflowTests(unittest.TestCase):
         self.assertIn("⟦USCC_", safe)
         self.assertEqual(vault.restore(safe), raw)
 
+    def test_redaction_masks_multilingual_party_money_tech_and_contact_fields(self):
+        raw = (
+            "Atlas Mobility Systems Ltd. | Contract amount: USD 520,000 | "
+            "Technical parameters: PPS-GF40 | alice@example.com | +84 912345678 | "
+            "Công ty TNHH Sao Việt Mobility"
+        )
+        vault = RedactionVault("CASE-MULTILINGUAL")
+
+        safe = vault.redact(raw)
+
+        for value in (
+            "Atlas Mobility Systems Ltd.",
+            "USD 520,000",
+            "PPS-GF40",
+            "alice@example.com",
+            "+84 912345678",
+            "Công ty TNHH Sao Việt Mobility",
+        ):
+            self.assertNotIn(value, safe)
+        self.assertEqual(vault.restore(safe), raw)
+
     def test_redaction_vault_merges_existing_case_mapping(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

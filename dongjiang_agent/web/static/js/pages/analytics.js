@@ -1,6 +1,6 @@
-import {api} from "../api.js?v=20260807-login-fix"
-import {escapeHtml} from "../format.js?v=20260807-login-fix"
-import {navigate} from "../router.js?v=20260807-login-fix"
+import {api} from "../api.js?v=20260807-contract-package"
+import {escapeHtml} from "../format.js?v=20260807-contract-package"
+import {navigate} from "../router.js?v=20260807-contract-package"
 
 const rangeOptions = [[7,"近7天"],[30,"近30天"],[90,"近90天"],[0,"全部"]]
 

@@ -211,6 +211,8 @@ class AuditCase:
     credit_control: dict[str, Any] = field(default_factory=dict)
     special_release: dict[str, Any] = field(default_factory=dict)
     exception_approval: dict[str, Any] = field(default_factory=dict)
+    contract_exception_approval: dict[str, Any] = field(default_factory=dict)
+    contract_approval: dict[str, Any] = field(default_factory=dict)
     writeback: dict[str, Any] = field(default_factory=dict)
     contract_reviews: list[ContractReview] = field(default_factory=list)
     status: str = "created"
